@@ -47,32 +47,43 @@ class _State:
     # Displayed in the preferences UI when non-empty.
     autostart_error: str = ""
 
+    @classmethod
+    def startup_info_set(cls, error: str) -> None:
+        """
+        Store a startup error message to display in the preferences UI.
+        """
+        cls.autostart_error = error
 
-def _state_startup_info_set(error: str) -> None:
-    """
-    Store a startup error message to display in the preferences UI.
-    """
-    _State.autostart_error = error
+    @classmethod
+    def startup_info_set_from_exception(cls, ex: Exception) -> None:
+        """
+        Store a startup exception message to display in the preferences UI
+        and print the full traceback to stderr for debugging.
+        """
+        # NOTE: this is correct but reads like an unhandled exception.
+        # import traceback
+        # traceback.print_exception(ex)
+        cls.autostart_error = str(ex)
 
+    @classmethod
+    def startup_info_clear(cls) -> None:
+        """
+        Clear any startup error so it no longer appears in the preferences UI.
+        """
+        cls.autostart_error = ""
 
-def _state_startup_info_clear() -> None:
-    """
-    Clear any startup error so it no longer appears in the preferences UI.
-    """
-    _State.autostart_error = ""
-
-
-def _state_startup_online_ok_or_error() -> bool:
-    """
-    Return True when online access is permitted, otherwise store an error and return False.
-    """
-    if bpy.app.online_access:
-        return True
-    _state_startup_info_set(_state_offline_error_message)
-    if bpy.app.background:
-        print("Error: {:s}".format(_state_offline_error_message))
-        print("  Use --online-mode to enable online access from the command line")
-    return False
+    @classmethod
+    def startup_online_ok_or_error(cls) -> bool:
+        """
+        Return True when online access is permitted, otherwise store an error and return False.
+        """
+        if bpy.app.online_access:
+            return True
+        cls.startup_info_set(_state_offline_error_message)
+        if bpy.app.background:
+            print("Error: {:s}".format(_state_offline_error_message))
+            print("  Use --online-mode to enable online access from the command line")
+        return False
 
 
 class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
@@ -208,11 +219,11 @@ class _BLMCP_OT_server_start(bpy.types.Operator):  # type: ignore[misc]
         if bpy.app.background:
             self.report({"ERROR"}, "Use `--command blender_mcp` to start the MCP bridge server in background mode")
             return {"CANCELLED"}
-        if not _state_startup_online_ok_or_error():
+        if not _State.startup_online_ok_or_error():
             self.report({"ERROR"}, _state_offline_error_message)
             return {"CANCELLED"}
         # Clear any stale auto-start error so it does not persist in the UI.
-        _state_startup_info_clear()
+        _State.startup_info_clear()
         prefs = context.preferences.addons[__package__].preferences
         mcp_to_blender_server.timer_internal_vars_calc(
             active=prefs.timer_interval_active,
@@ -223,7 +234,7 @@ class _BLMCP_OT_server_start(bpy.types.Operator):  # type: ignore[misc]
         try:
             mcp_to_blender_server.start(prefs.host, prefs.port)
         except Exception as ex:  # pylint: disable=broad-exception-caught
-            _state_startup_info_set(str(ex))
+            _State.startup_info_set_from_exception(ex)
             self.report({"ERROR"}, str(ex))
             return {"CANCELLED"}
         bpy.app.timers.register(
@@ -244,7 +255,7 @@ class _BLMCP_OT_server_stop(bpy.types.Operator):  # type: ignore[misc]
         from . import execute_interactive
 
         # Clear any stale auto-start error so it does not persist in the UI.
-        _state_startup_info_clear()
+        _State.startup_info_clear()
         mcp_to_blender_server.stop()
         if bpy.app.timers.is_registered(execute_interactive.run):
             bpy.app.timers.unregister(execute_interactive.run)
@@ -259,7 +270,7 @@ def _autostart_timer() -> None:
     """
     from . import execute_interactive
 
-    if not _state_startup_online_ok_or_error():
+    if not _State.startup_online_ok_or_error():
         return
     prefs = bpy.context.preferences.addons[__package__].preferences
     mcp_to_blender_server.timer_internal_vars_calc(
@@ -280,7 +291,7 @@ def _autostart_timer() -> None:
     try:
         mcp_to_blender_server.start(prefs.host, prefs.port)
     except Exception as ex:  # pylint: disable=broad-exception-caught
-        _state_startup_info_set(str(ex))
+        _State.startup_info_set_from_exception(ex)
         return
 
     bpy.app.timers.register(
@@ -293,7 +304,7 @@ def _cli_execute_handler(argv: list[str]) -> int:
     """
     Callback for the CLI: ``blender -c blender_mcp``.
     """
-    if not _state_startup_online_ok_or_error():
+    if not _State.startup_online_ok_or_error():
         return 1
     from .cli import cli_execute
     return cli_execute(argv)
@@ -313,7 +324,7 @@ def register() -> None:
 
     # Defer auto-start so the server does not slow down Blender's startup.
     if not bpy.app.background:
-        if not _state_startup_online_ok_or_error():
+        if not _State.startup_online_ok_or_error():
             return
 
         prefs = bpy.context.preferences.addons[__package__].preferences
