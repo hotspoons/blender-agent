@@ -6,7 +6,7 @@ name = "MCP"
 tagline = "MCP server add-on for LLM interaction"
 maintainer = "Blender Lab"
 type = "add-on"
-website = "https://projects.blender.org/lab/blender_mcp"
+website = "https://www.blender.org/lab/mcp-server/"
 blender_version_min = "5.1.0"
 
 license = [
