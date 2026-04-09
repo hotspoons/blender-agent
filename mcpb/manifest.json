@@ -1,0 +1,36 @@
+{
+  "manifest_version": "0.3",
+  "name": "blender",
+  "version": "1.0.0",
+  "description": "Interact with a running Blender instance – inspecting scenes, executing Python code, rendering, and navigating the interface.",
+  "author": {
+    "name": "Blender Lab",
+    "url": "https://www.blender.org/lab/mcp-server/"
+  },
+  "homepage": "https://www.blender.org/lab/mcp-server/",
+  "server": {
+    "type": "python",
+    "entry_point": "../",
+    "mcp_config": {
+      "command": "python",
+      "args": [
+        "-m",
+        "blender-mcp"
+      ]
+    }
+  },
+  "license": "GPL-3.0-or-later",
+  "privacy_policies": [
+    "https://www.blender.org/privacy-policy/"
+  ],
+  "compatibility": {
+    "runtimes": {
+      "python": ">= 3.10"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://projects.blender.org/lab/blender_mcp"
+  }
+}
+
