@@ -1,0 +1,7 @@
+/addon/
+/chat_client/
+/_misc/
+/tests/
+/*.rst
+.venv
+__pycache__

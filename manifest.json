@@ -1,5 +1,5 @@
 {
-  "manifest_version": "0.3",
+  "manifest_version": "0.4",
   "name": "blender",
   "version": "1.0.0",
   "description": "Interact with a running Blender instance – inspecting scenes, executing Python code, rendering, and navigating the interface.",
@@ -9,12 +9,12 @@
   },
   "homepage": "https://www.blender.org/lab/mcp-server/",
   "server": {
-    "type": "python",
-    "entry_point": "../",
+    "type": "uv",
+    "entry_point": "mcp/blcmp/__init__.py",
     "mcp_config": {
-      "command": "python",
+      "command": "uv",
       "args": [
-        "-m",
+        "run",
         "blender-mcp"
       ]
     }
@@ -33,4 +33,3 @@
     "url": "https://projects.blender.org/lab/blender_mcp"
   }
 }
-
