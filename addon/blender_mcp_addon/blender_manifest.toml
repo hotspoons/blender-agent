@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "mcp"
-version = "0.1.0"
+version = "0.2.0"
 name = "MCP"
 tagline = "MCP server add-on for LLM interaction"
 maintainer = "Blender Lab"
