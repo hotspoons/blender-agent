@@ -23,7 +23,12 @@ _TOOL_CALL = toolcode_wrap_with_calling_convention(toolcode_load_from_filepath(_
 
 
 def register(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(
+        annotations={
+            "title": "Get Area Screenshot",
+            "readOnlyHint": True
+        }
+    )
     def get_screenshot_of_area_as_image(
         area_ui_type: AreaUIType,
         size_limit_in_bytes: int = 0,

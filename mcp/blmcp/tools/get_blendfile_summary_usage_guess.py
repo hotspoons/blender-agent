@@ -21,14 +21,24 @@ _TOOL_CALL = toolcode_wrap_with_calling_convention(toolcode_load_from_filepath(_
 
 
 def register(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(
+        annotations={
+            "title": "Get Blendfile Usage Summary",
+            "readOnlyHint": True
+        }
+    )
     def get_blendfile_summary_usage_guess() -> dict[str, object]:
         """
         Guess the primary use-cases of the current blend file (scored 0-100 with certainty).
         """
         return send_code(toolcode_format_call(_TOOL_CALL, None), strict_json=True)
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations={
+            "title": "Get Blendfile Usage Summary for Command-Line",
+            "readOnlyHint": True
+        }
+    )
     def get_blendfile_summary_usage_guess_for_cli(blend_file: str) -> dict[str, object]:
         """
         Guess use-cases by opening *blend_file* in background Blender.

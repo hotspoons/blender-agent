@@ -21,7 +21,12 @@ _TOOL_CALL = toolcode_wrap_with_calling_convention(toolcode_load_from_filepath(_
 
 
 def register(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(
+        annotations={
+            "title": "Switch to Workspace",
+            "destructiveHint": True
+        }
+    )
     def jump_to_tab_by_name(name: str) -> dict[str, object]:
         """
         Switch the active workspace tab to *name*.

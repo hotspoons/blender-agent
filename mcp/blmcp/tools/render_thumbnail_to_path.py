@@ -21,7 +21,12 @@ _TOOL_CALL = toolcode_wrap_with_calling_convention(toolcode_load_from_filepath(_
 
 
 def register(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(
+        annotations={
+            "title": "Render Thumbnail to Path",
+            "destructiveHint": True
+        }
+    )
     def render_thumbnail_to_path(output_path: str) -> dict[str, object]:
         """
         Render a small, low-quality thumbnail to *output_path* (temporarily overrides settings).

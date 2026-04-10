@@ -21,7 +21,12 @@ _TOOL_CALL = toolcode_wrap_with_calling_convention(toolcode_load_from_filepath(_
 
 
 def register(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(
+        annotations={
+            "title": "Focus on Object Data",
+            "destructiveHint": True
+        }
+    )
     def jump_to_view3d_object_data_by_name(
         name: str,
         allow_edits: bool = False,

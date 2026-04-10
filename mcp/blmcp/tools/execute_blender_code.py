@@ -14,7 +14,12 @@ from mcp.server.fastmcp import FastMCP  # pylint: disable=import-error,no-name-i
 
 
 def register(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(
+        annotations={
+            "title": "Execute Python Code",
+            "destructiveHint": True
+        }
+    )
     def execute_blender_code(code: str) -> dict[str, object]:
         """
         Execute Python code in the connected Blender instance.
@@ -28,7 +33,12 @@ def register(mcp: FastMCP) -> None:
         # (e.g. Blender objects). Use `repr` as a fallback instead of erroring.
         return send_code(code, strict_json=False)
 
-    @mcp.tool()
+    @mcp.tool(
+        annotations={
+            "title": "Execute Python Code for Command-Line",
+            "destructiveHint": True
+        }
+    )
     def execute_blender_code_for_cli(blend_file: str, code: str) -> dict[str, object]:
         """
         Execute Python code in a background Blender process.

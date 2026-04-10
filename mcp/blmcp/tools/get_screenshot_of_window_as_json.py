@@ -20,7 +20,12 @@ _TOOL_CALL = toolcode_wrap_with_calling_convention(toolcode_load_from_filepath(_
 
 
 def register(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(
+        annotations={
+            "title": "Get Screenshot as JSON",
+            "readOnlyHint": True
+        }
+    )
     def get_screenshot_of_window_as_json() -> dict[str, object]:
         """
         Return a JSON description of the Blender window layout, areas, active object, and selection.

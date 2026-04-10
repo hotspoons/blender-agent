@@ -21,7 +21,12 @@ _TOOL_CALL = toolcode_wrap_with_calling_convention(toolcode_load_from_filepath(_
 
 
 def register(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(
+        annotations={
+            "title": "Render Viewport to Path",
+            "readOnlyHint": True
+        }
+    )
     def render_viewport_to_path(output_path: str) -> dict[str, object]:
         """
         Render the current scene to *output_path* using current render settings.

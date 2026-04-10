@@ -21,7 +21,12 @@ _TOOL_CALL = toolcode_wrap_with_calling_convention(toolcode_load_from_filepath(_
 
 
 def register(mcp: FastMCP) -> None:
-    @mcp.tool()
+    @mcp.tool(
+        annotations={
+            "title": "Switch to Matching Workspace",
+            "destructiveHint": True
+        }
+    )
     def jump_to_tab_by_space_type(
         space_type: str,
         allow_edits: bool = False,
