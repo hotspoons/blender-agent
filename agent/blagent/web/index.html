@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Blender Agent</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#129302;</text></svg>">
+<link rel="stylesheet" href="/static/styles.css">
+<!--
+  Import map: bare specifiers for the vendored libraries. Zero build
+  step, zero Node at runtime - everything is ES modules served as-is.
+-->
+<script type="importmap">
+{
+  "imports": {
+    "lit": "/static/vendor/lit.js",
+    "@mlc-ai/web-llm": "/static/vendor/web-llm.js"
+  }
+}
+</script>
+<script type="module">
+  import { applyTheme } from "/static/core/theme.js";
+  applyTheme();
+  import("/static/app.js");
+</script>
+</head>
+<body>
+<ba-app></ba-app>
+<noscript>The Blender Agent UI requires JavaScript.</noscript>
+</body>
+</html>

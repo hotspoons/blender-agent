@@ -47,6 +47,14 @@ class _State:
     # Displayed in the preferences UI when non-empty.
     autostart_error: str = ""
 
+    # The bridge port actually bound (after auto-assignment when the
+    # preferred port is taken by another Blender instance). Zero when
+    # the server is stopped.
+    bridge_port_actual: int = 0
+
+    # Agent launch error shown in the preferences UI when non-empty.
+    agent_error: str = ""
+
     @classmethod
     def startup_info_set(cls, error: str) -> None:
         """
@@ -86,6 +94,42 @@ class _State:
         return False
 
 
+def _bridge_start_with_port_scan(host: str, port: int, port_auto: bool) -> int:
+    """
+    Start the bridge server, walking up from *port* to the next free
+    one when *port_auto* is set (multiple Blender instances). Returns
+    the port actually bound; raises on failure.
+    """
+    attempts = 20 if port_auto else 1
+    last_error: Exception | None = None
+    for candidate in range(port, min(port + attempts, _PORT_MAX + 1)):
+        try:
+            mcp_to_blender_server.start(host, candidate)
+            _State.bridge_port_actual = candidate
+            return candidate
+        except OSError as ex:
+            last_error = ex
+    raise OSError("no free bridge port in {:d}..{:d}: {:s}".format(
+        port, port + attempts - 1, str(last_error)))
+
+
+def _mcp_json_snippet(mcp_port: int) -> str:
+    """
+    The ``.mcp.json`` entry for connecting an MCP client to this
+    instance's HTTP MCP listener.
+    """
+    return (
+        '{\n'
+        '  "mcpServers": {\n'
+        '    "blender-session-%d": {\n'
+        '      "type": "http",\n'
+        '      "url": "http://127.0.0.1:%d"\n'
+        '    }\n'
+        '  }\n'
+        '}' % (mcp_port, mcp_port)
+    )
+
+
 class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     bl_idname = __package__
 
@@ -98,6 +142,14 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default=mcp_to_blender_server.DEFAULT_PORT,
         min=_PORT_MIN,
         max=_PORT_MAX,
+    )
+    use_port_auto: BoolProperty(  # type: ignore[valid-type]
+        name="Auto-Assign Ports",
+        description=(
+            "When a preferred port is taken (e.g. by another Blender instance), "
+            "walk up to the next free port instead of failing"
+        ),
+        default=True,
     )
     use_autostart: BoolProperty(  # type: ignore[valid-type]
         name="Auto Start",
@@ -183,27 +235,108 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         update=_update_timer_interval_idle_delay,
     )
 
+    use_agent: BoolProperty(  # type: ignore[valid-type]
+        name="Enable Agent",
+        description=(
+            "Enable the built-in web agent: a browser UI driving this Blender "
+            "instance through the MCP tool surface.\n"
+            "Adds a launcher entry to the Window menu"
+        ),
+        default=False,
+    )
+    agent_port: IntProperty(  # type: ignore[valid-type]
+        name="Agent Port",
+        description="Preferred port for the agent web UI (auto-assigned upward when taken)",
+        default=10102,
+        min=_PORT_MIN,
+        max=_PORT_MAX,
+    )
+    agent_use_mcp: BoolProperty(  # type: ignore[valid-type]
+        name="Serve MCP over HTTP",
+        description=(
+            "Also expose the tools as a streamable-HTTP MCP server, so external "
+            "MCP clients (e.g. Claude Code) can connect with the .mcp.json shown below"
+        ),
+        default=False,
+    )
+    agent_mcp_port: IntProperty(  # type: ignore[valid-type]
+        name="MCP Port",
+        description="Preferred port for MCP over HTTP (auto-assigned upward when taken)",
+        default=10101,
+        min=_PORT_MIN,
+        max=_PORT_MAX,
+    )
+    agent_open_browser: BoolProperty(  # type: ignore[valid-type]
+        name="Open Browser",
+        description="Open the agent web UI in a browser when the agent starts",
+        default=True,
+    )
+
     def draw(self, context: bpy.types.Context) -> None:
         del context
         layout = self.layout
-        layout.prop(self, "host")
-        layout.prop(self, "port")
-        layout.prop(self, "use_autostart")
-        layout.prop(self, "autostart_delay")
-        layout.prop(self, "timer_interval_active")
-        layout.prop(self, "timer_interval_idle")
-        layout.prop(self, "timer_interval_idle_delay")
-        layout.prop(self, "use_log")
+
+        box = layout.box()
+        box.label(text="MCP Bridge", icon="PLUGIN")
+        box.prop(self, "host")
+        box.prop(self, "port")
+        box.prop(self, "use_port_auto")
+        box.prop(self, "use_autostart")
+        box.prop(self, "autostart_delay")
+        box.prop(self, "timer_interval_active")
+        box.prop(self, "timer_interval_idle")
+        box.prop(self, "timer_interval_idle_delay")
+        box.prop(self, "use_log")
 
         if mcp_to_blender_server.is_running():
-            layout.operator("blmcp.server_stop", icon="CANCEL")
-            layout.label(text="Server is running", icon="CHECKMARK")
+            box.operator("blmcp.server_stop", icon="CANCEL")
+            text = "Server is running on port {:d}".format(_State.bridge_port_actual or self.port)
+            box.label(text=text, icon="CHECKMARK")
         else:
-            layout.operator("blmcp.server_start", icon="PLAY")
-            layout.label(text="Server is stopped", icon="X")
+            box.operator("blmcp.server_start", icon="PLAY")
+            box.label(text="Server is stopped", icon="X")
 
         if _State.autostart_error:
-            layout.label(text=_State.autostart_error, icon="ERROR")
+            box.label(text=_State.autostart_error, icon="ERROR")
+
+        # -------------------------------------------------------------
+        # Web agent (optional).
+
+        from . import agent_launch
+
+        box = layout.box()
+        box.label(text="Web Agent", icon="WORLD")
+        box.prop(self, "use_agent")
+        if self.use_agent:
+            row = box.row()
+            row.prop(self, "agent_port")
+            row.prop(self, "agent_open_browser")
+            box.prop(self, "agent_use_mcp")
+            if self.agent_use_mcp:
+                box.prop(self, "agent_mcp_port")
+
+            if agent_launch.is_running():
+                agent_port, mcp_port = agent_launch.running_ports()
+                box.operator("blmcp.agent_stop", icon="CANCEL")
+                box.operator("blmcp.agent_open", icon="URL")
+                box.label(
+                    text="Agent running at http://127.0.0.1:{:d}/".format(agent_port),
+                    icon="CHECKMARK")
+                if mcp_port:
+                    box.label(text="MCP over HTTP on port {:d} - .mcp.json for your client:".format(mcp_port))
+                    for line in _mcp_json_snippet(mcp_port).splitlines():
+                        box.label(text=line)
+                    box.operator("blmcp.agent_copy_mcp_json", icon="COPYDOWN")
+            else:
+                available, how = agent_launch.is_available()
+                if available:
+                    box.operator("blmcp.agent_start", icon="PLAY")
+                    box.label(text="Launch mode: {:s}".format(how))
+                else:
+                    box.label(text=how, icon="ERROR")
+
+            if _State.agent_error:
+                box.label(text=_State.agent_error, icon="ERROR")
 
 
 class _BLMCP_OT_server_start(bpy.types.Operator):  # type: ignore[misc]
@@ -232,7 +365,7 @@ class _BLMCP_OT_server_start(bpy.types.Operator):  # type: ignore[misc]
         )
         mcp_to_blender_server.use_log = prefs.use_log
         try:
-            mcp_to_blender_server.start(prefs.host, prefs.port)
+            port = _bridge_start_with_port_scan(prefs.host, prefs.port, prefs.use_port_auto)
         except Exception as ex:  # pylint: disable=broad-exception-caught
             _State.startup_info_set_from_exception(ex)
             self.report({"ERROR"}, str(ex))
@@ -241,7 +374,7 @@ class _BLMCP_OT_server_start(bpy.types.Operator):  # type: ignore[misc]
             execute_interactive.run,
             first_interval=mcp_to_blender_server.TIMER_INTERVAL_ACTIVE,
             persistent=True)
-        self.report({"INFO"}, "MCP server started on {:s}:{:d}".format(prefs.host, prefs.port))
+        self.report({"INFO"}, "MCP server started on {:s}:{:d}".format(prefs.host, port))
         return {"FINISHED"}
 
 
@@ -256,11 +389,123 @@ class _BLMCP_OT_server_stop(bpy.types.Operator):  # type: ignore[misc]
 
         # Clear any stale auto-start error so it does not persist in the UI.
         _State.startup_info_clear()
+        _State.bridge_port_actual = 0
         mcp_to_blender_server.stop()
         if bpy.app.timers.is_registered(execute_interactive.run):
             bpy.app.timers.unregister(execute_interactive.run)
         self.report({"INFO"}, "MCP bridge server stopped")
         return {"FINISHED"}
+
+
+class _BLMCP_OT_agent_start(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "blmcp.agent_start"
+    bl_label = "Start Agent"
+    bl_description = "Start the web agent server for this Blender instance"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        from . import agent_launch
+
+        prefs = context.preferences.addons[__package__].preferences
+        _State.agent_error = ""
+
+        # The agent's tools execute through the TCP bridge - make sure
+        # it is up first (same path as the user clicking Start).
+        if not mcp_to_blender_server.is_running():
+            try:
+                bpy.ops.blmcp.server_start()
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+            if not mcp_to_blender_server.is_running():
+                self.report({"ERROR"}, "The MCP bridge server must be running first")
+                return {"CANCELLED"}
+
+        try:
+            kind = agent_launch.start(
+                host="127.0.0.1",
+                port=prefs.agent_port,
+                mcp_port=prefs.agent_mcp_port if prefs.agent_use_mcp else None,
+                bridge_host=prefs.host,
+                bridge_port=_State.bridge_port_actual or prefs.port,
+            )
+        except RuntimeError as ex:
+            _State.agent_error = str(ex)
+            self.report({"ERROR"}, str(ex))
+            return {"CANCELLED"}
+
+        agent_port, _mcp_port = agent_launch.running_ports()
+        if prefs.agent_open_browser:
+            # Give the server a moment to bind before the browser hits it.
+            url = "http://127.0.0.1:{:d}/".format(agent_port)
+            bpy.app.timers.register(
+                lambda: bpy.ops.wm.url_open(url=url) and None,
+                first_interval=1.0,
+            )
+        self.report({"INFO"}, "Agent started ({:s}) on port {:d}".format(kind, agent_port))
+        return {"FINISHED"}
+
+
+class _BLMCP_OT_agent_stop(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "blmcp.agent_stop"
+    bl_label = "Stop Agent"
+    bl_description = "Stop the web agent server"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        del context
+        from . import agent_launch
+
+        agent_launch.stop()
+        _State.agent_error = ""
+        self.report({"INFO"}, "Agent stopped")
+        return {"FINISHED"}
+
+
+class _BLMCP_OT_agent_open(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "blmcp.agent_open"
+    bl_label = "Open Blender Agent"
+    bl_description = "Open the web agent UI in a browser (starting the agent if needed)"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        from . import agent_launch
+
+        if not agent_launch.is_running():
+            result = bpy.ops.blmcp.agent_start()
+            if "FINISHED" not in result:
+                return {"CANCELLED"}
+            # agent_start already opens the browser when configured.
+            prefs = context.preferences.addons[__package__].preferences
+            if prefs.agent_open_browser:
+                return {"FINISHED"}
+        agent_port, _mcp_port = agent_launch.running_ports()
+        bpy.ops.wm.url_open(url="http://127.0.0.1:{:d}/".format(agent_port))
+        return {"FINISHED"}
+
+
+class _BLMCP_OT_agent_copy_mcp_json(bpy.types.Operator):  # type: ignore[misc]
+    bl_idname = "blmcp.agent_copy_mcp_json"
+    bl_label = "Copy .mcp.json"
+    bl_description = "Copy the .mcp.json client configuration for this instance to the clipboard"
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        from . import agent_launch
+
+        _agent_port, mcp_port = agent_launch.running_ports()
+        if not mcp_port:
+            prefs = context.preferences.addons[__package__].preferences
+            mcp_port = prefs.agent_mcp_port
+        context.window_manager.clipboard = _mcp_json_snippet(mcp_port)
+        self.report({"INFO"}, "Copied .mcp.json for port {:d}".format(mcp_port))
+        return {"FINISHED"}
+
+
+def _agent_menu_draw(self: bpy.types.Menu, context: bpy.types.Context) -> None:
+    """
+    Window menu entry for launching the agent (shown when enabled).
+    """
+    prefs = context.preferences.addons[__package__].preferences
+    if not prefs.use_agent:
+        return
+    self.layout.separator()
+    self.layout.operator("blmcp.agent_open", icon="WORLD")
 
 
 def _autostart_timer() -> None:
@@ -289,7 +534,7 @@ def _autostart_timer() -> None:
         return
 
     try:
-        mcp_to_blender_server.start(prefs.host, prefs.port)
+        _bridge_start_with_port_scan(prefs.host, prefs.port, prefs.use_port_auto)
     except Exception as ex:  # pylint: disable=broad-exception-caught
         _State.startup_info_set_from_exception(ex)
         return
@@ -314,6 +559,10 @@ _classes = (
     _BlenderMCPPreferences,
     _BLMCP_OT_server_start,
     _BLMCP_OT_server_stop,
+    _BLMCP_OT_agent_start,
+    _BLMCP_OT_agent_stop,
+    _BLMCP_OT_agent_open,
+    _BLMCP_OT_agent_copy_mcp_json,
 )
 
 
@@ -321,6 +570,7 @@ def register() -> None:
     for cls in _classes:
         bpy.utils.register_class(cls)
     _cli_commands.append(bpy.utils.register_cli_command("blender_mcp", _cli_execute_handler))
+    bpy.types.TOPBAR_MT_window.append(_agent_menu_draw)
 
     # Defer auto-start so the server does not slow down Blender's startup.
     if not bpy.app.background:
@@ -337,7 +587,10 @@ def register() -> None:
 
 
 def unregister() -> None:
+    from . import agent_launch
     from . import execute_interactive
+
+    bpy.types.TOPBAR_MT_window.remove(_agent_menu_draw)
 
     for cmd in _cli_commands:
         bpy.utils.unregister_cli_command(cmd)
@@ -346,6 +599,7 @@ def unregister() -> None:
     if bpy.app.timers.is_registered(_autostart_timer):
         bpy.app.timers.unregister(_autostart_timer)
 
+    agent_launch.stop()
     mcp_to_blender_server.stop()
     if bpy.app.timers.is_registered(execute_interactive.run):
         bpy.app.timers.unregister(execute_interactive.run)

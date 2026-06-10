@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blender-mcp-agent"
+version = "0.1.0"
+description = "Web-based agent harness for Blender, built on the blender-mcp tools"
+requires-python = ">=3.10"
+dependencies = [
+    "blender-mcp>=1.0.0",
+    # Starlette >= 1.2.1 required: includes the fix for the 2026 RCE advisory.
+    "starlette>=1.2.1",
+    "uvicorn>=0.30",
+    "websockets>=12",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+blender-agent = "blagent:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["blagent*"]
+
+[tool.setuptools.package-data]
+"blagent" = [
+    "data/system_prompt.md",
+    "data/skills/*.md",
+    "web/**/*",
+]
+
+[tool.mypy]
+strict = true
+
+[[tool.mypy.overrides]]
+module = [
+    "mcp", "mcp.*",
+    "blmcp", "blmcp.*",
+    "uvicorn", "uvicorn.*",
+]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 120
+
+[tool.pylint.format]
+max-line-length = 120

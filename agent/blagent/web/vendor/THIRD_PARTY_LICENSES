@@ -1,0 +1,40 @@
+Third-Party Licenses
+====================
+
+zip-ties is dual-licensed under the Apache License 2.0 and the MIT License.
+This file documents third-party dependencies with notable licensing terms.
+
+
+Python Dependencies
+-------------------
+
+psycopg / psycopg-binary
+  License: LGPL-3.0-only (GNU Lesser General Public License v3.0)
+  URL: https://github.com/psycopg/psycopg
+  Usage: PostgreSQL database adapter, used as an unmodified library dependency.
+  Note: LGPL-3.0 permits use as a library without copyleft obligations
+        propagating to the application, provided the library is not modified
+        and users can replace it (satisfied by standard pip installation).
+
+text-unidecode
+  License: Artistic License (chosen from dual Artistic License / GPLv2+)
+  URL: https://github.com/kmike/text-unidecode
+  Usage: Unicode transliteration, transitive dependency via python-slugify.
+  Note: This package is dual-licensed. We use it under the Artistic License,
+        which is a permissive open-source license compatible with both
+        Apache 2.0 and MIT.
+
+docutils
+  License: BSD (chosen from triple Public Domain / BSD / GPL)
+  URL: https://docutils.sourceforge.io/
+  Usage: reStructuredText processing, transitive dependency.
+  Note: This package is triple-licensed. We use it under the BSD license.
+
+
+All Other Dependencies
+----------------------
+
+All other Python and Go dependencies use permissive licenses (MIT, BSD-2-Clause,
+BSD-3-Clause, Apache-2.0, ISC, PSF-2.0, MPL-2.0, Unlicense, or CC0) that are
+fully compatible with Apache 2.0 / MIT dual licensing without additional
+conditions.

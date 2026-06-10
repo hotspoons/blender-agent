@@ -730,13 +730,49 @@ class TestMainConfiguration(unittest.TestCase):
                 (
                     FakeCORSMiddleware,
                     {
-                        "allow_origins": ["*"],
+                        "allow_origin_regex": blmcp._CORS_ALLOW_ORIGIN_REGEX,
                         "allow_methods": ["*"],
                         "allow_headers": ["*"],
                     },
                 ),
             ],
         )
+
+    def test_cors_origin_regex_matches_only_local_origins(self) -> None:
+        """
+        Checks that the CORS origin pattern accepts browser clients served
+        from this machine and rejects everything else (a wildcard here
+        would let any website drive Blender through the server).
+        """
+        import re
+
+        blmcp = _import_blmcp_module()
+        regex = re.compile(blmcp._CORS_ALLOW_ORIGIN_REGEX)
+        # Starlette matches origins with `re.fullmatch`.
+        for origin in (
+            "http://127.0.0.1",
+            "http://127.0.0.1:8080",
+            "https://127.0.0.1:8080",
+            "http://localhost",
+            "http://localhost:8080",
+            "http://[::1]:8080",
+        ):
+            self.assertIsNotNone(
+                regex.fullmatch(origin),
+                "Local origin rejected: {:s}".format(origin),
+            )
+        for origin in (
+            "http://evil.example.com",
+            "http://localhost.evil.example.com",
+            "http://localhost.evil.example.com:8080",
+            "http://127.0.0.1.evil.example.com",
+            "null",
+            "http://192.168.1.10:8080",
+        ):
+            self.assertIsNone(
+                regex.fullmatch(origin),
+                "Non-local origin accepted: {:s}".format(origin),
+            )
 
 
 class TestGetPythonAPIDocs(unittest.TestCase):

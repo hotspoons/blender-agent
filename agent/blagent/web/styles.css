@@ -1,0 +1,49 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* Theme variables - [data-theme] scopes on <html>, set by core/theme.js. */
+
+:root, html[data-theme="dark"] {
+  --bg: #16181d;
+  --bg-panel: #1d2026;
+  --bg-raised: #262a32;
+  --bg-input: #14161a;
+  --border: #32363f;
+  --text: #e8eaee;
+  --text-dim: #9aa1ad;
+  --accent: #e87d0d;        /* Blender orange */
+  --accent-soft: rgba(232, 125, 13, 0.16);
+  --user-bubble: #2c3340;
+  --ok: #4caf72;
+  --warn: #e0a437;
+  --err: #e05c5c;
+  color-scheme: dark;
+}
+
+html[data-theme="light"] {
+  --bg: #f4f5f7;
+  --bg-panel: #ffffff;
+  --bg-raised: #eceef1;
+  --bg-input: #ffffff;
+  --border: #d4d8df;
+  --text: #1c1f24;
+  --text-dim: #5d6570;
+  --accent: #d96b00;
+  --accent-soft: rgba(217, 107, 0, 0.12);
+  --user-bubble: #e4e9f1;
+  --ok: #2e8b57;
+  --warn: #a8741a;
+  --err: #c43c3c;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+}
+
+ba-app { display: block; height: 100%; }

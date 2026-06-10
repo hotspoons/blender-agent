@@ -245,6 +245,31 @@ def _wait_for_port(
     )
 
 
+def _addon_source_with_relaxed_version_min(addon_src: str, tmpdir: str) -> str:
+    """
+    Copy the add-on source into *tmpdir* with ``blender_version_min``
+    relaxed, so the extension installs on older Blender versions when
+    ``BLENDER_MCP_TEST_IGNORE_VERSION`` is set (see
+    ``test_blender_version``). The shipped manifest is not modified.
+    """
+    import re
+    import shutil
+
+    dst = os.path.join(tmpdir, "addon_src_relaxed")
+    shutil.copytree(addon_src, dst)
+    manifest_path = os.path.join(dst, "blender_manifest.toml")
+    with open(manifest_path, encoding="utf-8") as fh:
+        text = fh.read()
+    text = re.sub(
+        r'blender_version_min\s*=\s*"[^"]+"',
+        'blender_version_min = "4.2.0"',
+        text,
+    )
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    return dst
+
+
 class _TestServerMixin:
     """
     Shared setup, cleanup, helpers and test methods for both background
@@ -270,6 +295,8 @@ class _TestServerMixin:
 
         # Build the extension zip.
         addon_src = os.path.join(_REPO_DIR, "addon", "blender_mcp_addon")
+        if os.environ.get("BLENDER_MCP_TEST_IGNORE_VERSION"):
+            addon_src = _addon_source_with_relaxed_version_min(addon_src, tmpdir)
         _run_blender(
             [
                 blender_bin, "--command", "extension", "build",
@@ -1114,9 +1141,20 @@ def test_blender_version() -> bool:
         return False
     version = (int(match.group(1)), int(match.group(2)))
     if version < BLENDER_VERSION_MIN:
-        print("ERROR: Blender {:d}.{:d} found, {:d}.{:d} or newer required".format(
-            *version, *BLENDER_VERSION_MIN,
-        ))
+        # Escape hatch for platforms without a recent-enough Blender
+        # (e.g. Linux ARM64 dev-containers, where the newest native
+        # build is Debian experimental's). Tests may fail on version-
+        # sensitive behavior; useful for smoke testing only.
+        if os.environ.get("BLENDER_MCP_TEST_IGNORE_VERSION"):
+            print("WARNING: Blender {:d}.{:d} found, {:d}.{:d} or newer expected "
+                  "(continuing, BLENDER_MCP_TEST_IGNORE_VERSION is set)".format(
+                      *version, *BLENDER_VERSION_MIN,
+                  ))
+            return True
+        print("ERROR: Blender {:d}.{:d} found, {:d}.{:d} or newer required "
+              "(set BLENDER_MCP_TEST_IGNORE_VERSION=1 to run anyway)".format(
+                  *version, *BLENDER_VERSION_MIN,
+              ))
         return False
     return True
 

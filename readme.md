@@ -59,6 +59,59 @@ An MCP client launches this process and communicates with it over
 stdio. The server connects to the add-on's TCP socket to relay
 requests to Blender.
 
+### Transports
+
+By default the server uses **stdio**: the MCP client launches one
+``blender-mcp`` process per session and talks to it over its
+standard input/output. No further configuration is needed.
+
+The server can also run as a long-lived **HTTP** service
+(MCP streamable-HTTP), shared by any number of MCP clients:
+
+```
+blender-mcp --transport http --port 10101
+```
+
+The data flow then becomes:
+```
+MCP Client  ⇐ MCP/http ⇒  blender-mcp (127.0.0.1:10101)  ⇐ TCP socket ⇒  Blender Add-on
+```
+
+Clients configured with a ``.mcp.json`` (e.g. Claude Code) connect with:
+
+```json
+{
+  "mcpServers": {
+    "blender": {
+      "type": "http",
+      "url": "http://127.0.0.1:10101"
+    }
+  }
+}
+```
+
+Notes:
+
+- The server binds to the loop-back interface by default and the
+  HTTP endpoint is stateless, so clients may connect, disconnect
+  and reconnect freely.
+- Browser-based clients (e.g. the llama.cpp web UI) are allowed by
+  CORS only when served from this machine (``localhost`` origins).
+- Anything that can reach the port can execute Python code in
+  Blender. Only change ``--host`` from the default on a trusted
+  network.
+
+
+## Web Agent (Optional)
+
+Located in ``agent/``, installed as the optional ``blender-mcp-agent``
+package. A web-based agent UI that drives Blender through the same
+tool surface, with conversation sessions, a searchable skills library,
+media artifacts, an in-browser WebGPU LLM option, and any
+OpenAI-compatible endpoint. It can be launched from the add-on
+preferences (Web Agent section) or standalone via ``blender-agent``.
+See [agent/readme.md](agent/readme.md).
+
 ``mcp/blmcp/data/``
    Data files bundled with the package.
 

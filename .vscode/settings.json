@@ -1,0 +1,35 @@
+{
+	"python.defaultInterpreterPath": "/usr/local/bin/python",
+	// Resolve the repo's multi-rooted packages (mcp/blmcp, agent/blagent,
+	// addon/blender_mcp_addon) directly from source - Pylance does not
+	// reliably follow PEP 660 editable-install finders.
+	"python.analysis.extraPaths": [
+		"mcp",
+		"agent",
+		"addon"
+	],
+	// bpy type stubs for the editor only (generated into
+	// .devcontainer/typings by post-create from fake-bpy-module).
+	// Deliberately NOT pip-installed: as a PEP 561 package the stubs
+	// would also be picked up by mypy, whose strict run then trips
+	// over signature mismatches in the community stubs.
+	"python.analysis.stubPath": ".devcontainer/typings",
+	// mypy --strict (make check_mypy) is this repo's authoritative type
+	// checker; Pylance's checker disagrees with mypy on narrowing in a
+	// few places (e.g. callable() narrowing in mcp_to_blender_server.py),
+	// so keep it to import/syntax diagnostics only.
+	"python.analysis.typeCheckingMode": "off",
+	// The mypy extension's bundled mypy runs in its own environment and
+	// cannot resolve the project's installed packages (httpx, mcp, ...)
+	// - use the selected interpreter's mypy instead. Missing-import
+	// noise (bpy exists only inside Blender) is suppressed to match the
+	// per-package mypy configs; make check_mypy stays authoritative.
+	"mypy-type-checker.importStrategy": "fromEnvironment",
+	"mypy-type-checker.reportingScope": "file",
+	"mypy-type-checker.args": [
+		"--ignore-missing-imports"
+	],
+	"[python]": {
+		"editor.defaultFormatter": "charliermarsh.ruff"
+	}
+}

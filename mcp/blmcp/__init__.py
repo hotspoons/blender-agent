@@ -29,6 +29,12 @@ _USE_HTTP_SUPPORT = True
 
 _TRANSPORTS = ("stdio", *(("http",) if _USE_HTTP_SUPPORT else ()))
 
+# Origins allowed by CORS in HTTP mode: browser clients served from this
+# machine only (e.g. the llama.cpp web UI). A wildcard would let scripts on
+# any website a user visits drive Blender through this server.
+# Non-browser MCP clients send no `Origin` header and are unaffected.
+_CORS_ALLOW_ORIGIN_REGEX = r"https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?"
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="MCP server for Blender.")
@@ -94,7 +100,7 @@ def main() -> int:
             app = _orig()
             app.add_middleware(
                 CORSMiddleware,
-                allow_origins=["*"],
+                allow_origin_regex=_CORS_ALLOW_ORIGIN_REGEX,
                 allow_methods=["*"],
                 allow_headers=["*"],
             )
