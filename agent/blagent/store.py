@@ -24,10 +24,12 @@ builtin/drop-folder/git-repo/extension collections, and legacy flat
 __all__ = (
     "AgentConfig",
     "AgentStore",
+    "SessionBusyError",
     "Skill",
     "search_skills",
 )
 
+import contextlib
 import dataclasses
 import json
 import os
@@ -35,7 +37,83 @@ import re
 import time
 import uuid
 
-from typing import Any
+from typing import Any, Iterator
+
+# Advisory file locking, cross-platform: flock on POSIX, byte-range
+# locking on Windows. When neither is available the locks degrade to
+# no-ops (single-window behavior, exactly what the code did before).
+try:
+    import fcntl
+
+    def _lock_fd(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _unlock_fd(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+except ImportError:  # pragma: no cover - Windows
+    try:
+        import msvcrt
+
+        def _lock_fd(fd: int) -> None:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+
+        def _unlock_fd(fd: int) -> None:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    except ImportError:
+        def _lock_fd(fd: int) -> None:
+            pass
+
+        def _unlock_fd(fd: int) -> None:
+            pass
+
+
+class SessionBusyError(RuntimeError):
+    """
+    Another process holds this session's lock (a second agent window
+    on the same session). The caller should surface this rather than
+    corrupt the transcript.
+    """
+
+
+class _SessionLock:
+    """
+    Advisory lock on ``sessions/<id>/.lock``. The lock file is separate
+    from the transcript so transcript replaces/deletes never drop a
+    held lock. flock is per file description, so this object also
+    carries a depth counter for same-process re-entrancy (managed by
+    ``AgentStore.session_lock``).
+    """
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self.depth = 0
+        self._fd: int | None = None
+
+    def acquire(self, timeout: float) -> None:
+        fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o644)
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                _lock_fd(fd)
+                self._fd = fd
+                return
+            except OSError:
+                if time.monotonic() >= deadline:
+                    os.close(fd)
+                    raise SessionBusyError(
+                        "session is locked by another agent window") from None
+                time.sleep(0.05)
+
+    def release(self) -> None:
+        if self._fd is not None:
+            try:
+                _unlock_fd(self._fd)
+            except OSError:
+                pass
+            os.close(self._fd)
+            self._fd = None
 
 
 
@@ -59,6 +137,11 @@ class AgentConfig:
     # Use the in-browser (Transformers.js) model when no endpoint is configured.
     use_local_llm: bool = True
     max_rounds: int = 16
+    # Context budget (tokens) for the conversation sent to the model;
+    # the engine trims old exchanges to fit. Matters doubly for local
+    # models: ORT-web decode slows with sequence length, so a tight
+    # budget is also a throughput knob.
+    context_tokens: int = 16_384
 
     @classmethod
     def load(cls, path: str) -> "AgentConfig":
@@ -96,6 +179,7 @@ class AgentConfig:
             "autonomy": self.autonomy,
             "use_local_llm": self.use_local_llm,
             "max_rounds": self.max_rounds,
+            "context_tokens": self.context_tokens,
         }
 
 
@@ -166,6 +250,9 @@ class AgentStore:
         os.makedirs(self.data_dir, exist_ok=True)
         self._config_path = os.path.join(self.data_dir, "config.json")
         self.config = AgentConfig.load(self._config_path)
+        # Held session locks, for same-process re-entrancy (one store
+        # per process; everything runs on the asyncio loop thread).
+        self._session_locks: dict[str, _SessionLock] = {}
         self._migrate_legacy_skills()
         self._register_skills_source()
 
@@ -329,14 +416,77 @@ class AgentStore:
         sessions.sort(key=lambda s: -float(str(s["modified"])))
         return sessions
 
-    def append_record(self, session_id: str, record: dict[str, Any]) -> None:
+    @contextlib.contextmanager
+    def session_lock(self, session_id: str, timeout: float = 15.0) -> Iterator[None]:
+        """
+        Hold the session's cross-process advisory lock. Re-entrant
+        within this store, so locked code can call ``append_record`` /
+        ``load_records`` freely. Use for multi-step critical sections -
+        compaction holds it across its summarization request so the
+        ``covers_count`` it computes cannot be invalidated by another
+        window appending mid-flight. Raises :class:`SessionBusyError`
+        when the lock cannot be acquired in *timeout* seconds.
+        """
+        sid = os.path.basename(session_id)
+        held = self._session_locks.get(sid)
+        if held is not None:
+            held.depth += 1
+            try:
+                yield
+            finally:
+                held.depth -= 1
+            return
+        directory = self.session_dir(sid)
+        os.makedirs(directory, exist_ok=True)
+        lock = _SessionLock(os.path.join(directory, ".lock"))
+        lock.acquire(timeout)
+        lock.depth = 1
+        self._session_locks[sid] = lock
+        try:
+            yield
+        finally:
+            self._session_locks.pop(sid, None)
+            lock.release()
+
+    def append_record(
+            self,
+            session_id: str,
+            record: dict[str, Any],
+            timeout: float = 15.0,
+    ) -> list[dict[str, Any]]:
+        """
+        Append under the session lock and return the freshly re-read
+        transcript: with several windows on one session, the on-disk
+        file is the merge point, so every write op hands back the true
+        record list for the engine to adopt. Raises
+        :class:`SessionBusyError` when another window holds the lock
+        past *timeout* (e.g. its long compaction step).
+        """
         directory = self.session_dir(session_id)
         os.makedirs(directory, exist_ok=True)
-        with open(os.path.join(directory, "transcript.jsonl"), "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record) + "\n")
+        path = os.path.join(directory, "transcript.jsonl")
+        with self.session_lock(session_id, timeout=timeout):
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record) + "\n")
+                fh.flush()
+            return self._read_transcript(path)
 
     def load_records(self, session_id: str) -> list[dict[str, Any]]:
         path = os.path.join(self.session_dir(session_id), "transcript.jsonl")
+        if not os.path.isfile(path):
+            return []
+        try:
+            with self.session_lock(session_id, timeout=1.0):
+                return self._read_transcript(path)
+        except SessionBusyError:
+            # Viewing must never block on a window that is writing (or
+            # holding the long compaction lock). Append-only JSONL
+            # tolerates lockless reads: a torn tail line just fails
+            # json.loads and is skipped.
+            return self._read_transcript(path)
+
+    @staticmethod
+    def _read_transcript(path: str) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
         if not os.path.isfile(path):
             return records

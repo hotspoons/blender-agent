@@ -19,6 +19,7 @@ export class BaSettingsModal extends LitElement {
     _model: { state: true },
     _apiKey: { state: true },      // staged key; empty = keep saved
     _autonomy: { state: true },
+    _contextTokens: { state: true },
     _models: { state: true },
   };
 
@@ -30,6 +31,7 @@ export class BaSettingsModal extends LitElement {
     this._model = config.model || "";
     this._apiKey = "";
     this._autonomy = config.autonomy || "ask";
+    this._contextTokens = config.context_tokens || 16384;
     this._models = store.state.models;
     this._fetchTimer = null;
   }
@@ -137,6 +139,7 @@ export class BaSettingsModal extends LitElement {
       endpoint: this._endpoint.trim(),
       model: this._model.trim(),
       autonomy: this._autonomy,
+      context_tokens: Math.max(2048, parseInt(this._contextTokens, 10) || 16384),
     };
     if (this._apiKey) updates.api_key = this._apiKey;
     store.setConfig(updates);
@@ -206,6 +209,13 @@ export class BaSettingsModal extends LitElement {
             <div class="sub">Off: destructive tool calls pause for an Allow/Deny confirmation.</div>
           </span>
         </div>
+
+        <label>Context window (tokens)</label>
+        <input class="text" type="number" min="2048" step="1024"
+          .value=${String(this._contextTokens)}
+          @input=${(e) => { this._contextTokens = e.target.value; }}>
+        <div class="hint">Older exchanges are trimmed to fit this budget. Lower values keep
+          long sessions fast - in-browser models especially slow down as the context grows.</div>
 
         <div slot="footer" style="display: flex; gap: 8px;">
           <button class="btn cancel" @click=${() => this.dispatchEvent(new CustomEvent("close"))}>Cancel</button>

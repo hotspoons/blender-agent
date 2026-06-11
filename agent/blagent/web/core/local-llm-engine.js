@@ -7,15 +7,25 @@
 // bundle is imported by URL because import maps do not apply inside
 // workers.
 //
-// Message protocol (postMessage-shaped both ways):
+// Message protocol (postMessage-shaped both ways; webllm-host.js
+// implements the same protocol over MLC/WebLLM):
 // in:  {type: "load", modelId, dtype?}
-//      {type: "generate", id, messages, temperature?, max_tokens?}
+//      {type: "generate", id, messages, tools?, keep_special?,
+//       temperature?, max_tokens?, prefill_chunk?}
 //      {type: "abort"} | {type: "unload"}
 // out: {type: "device", device, dtype, note?}
-//      {type: "progress", file, progress, loaded, total}
+//      {type: "progress", file, progress, loaded, total, text?}
 //      {type: "ready", device, dtype} | {type: "load_error", message}
-//      {id, type: "delta", text} | {id, type: "done"}
+//      {id, type: "delta", text} | {id, type: "stats", stats}
+//      {id, type: "done"}
 //      {id, type: "error", message} | {type: "unloaded"}
+//
+// `tools` (OpenAI specs) are passed through to the chat template -
+// modern templates (Qwen3.5, Gemma 4) render native tool declarations
+// the model was actually trained on; the panel parses the matching
+// output grammar (core/llm-output-parser.js). `keep_special` keeps
+// special tokens in the stream so family markers (<think>,
+// <|tool_call>, ...) survive for that parser.
 
 export class LocalLlmEngine {
   /** @param emit callback receiving every outbound protocol message. */
@@ -163,9 +173,9 @@ export class LocalLlmEngine {
    * the KV cache, and return inputs for generate() holding only the
    * final token.
    *
-   * Why: ONNX decoder exports emit logits for EVERY input position
-   * (none of the current onnx-community exports take
-   * num_logits_to_keep), so a single-pass prefill allocates
+   * Why: most ONNX decoder exports emit logits for EVERY input
+   * position (Gemma 4 takes num_logits_to_keep and is exempted below;
+   * Qwen3.5 and gpt-oss do not), so a single-pass prefill allocates
    * prompt_tokens x vocab x 2-4 bytes - with ~250k vocabs an
    * agent-sized prompt is a multi-GB GPU buffer that crashes Dawn
    * ("Failed to allocate memory for buffer mapping") and freezes the
@@ -173,11 +183,22 @@ export class LocalLlmEngine {
    * this problem (MLC materializes last-token logits only); this is
    * the price of ORT-web generality.
    */
+  /** Input names of the decoder ONNX session (empty when unknown). */
+  _decoderInputNames() {
+    const sessions = this._model?.sessions || {};
+    const session = sessions.model || sessions.decoder_model_merged || Object.values(sessions)[0];
+    return session?.inputNames || [];
+  }
+
   async _prefillInChunks(inputs, chunkSize) {
     const ids = inputs.input_ids;
     const mask = inputs.attention_mask;
     const total = ids.dims.at(-1);
     if (!mask || total <= chunkSize * 2) return inputs;
+    // Exports that take num_logits_to_keep (e.g. Gemma 4) materialize
+    // only the requested logit rows - single-pass prefill never builds
+    // the prompt x vocab buffer, so chunking would be pure overhead.
+    if (this._decoderInputNames().includes("num_logits_to_keep")) return inputs;
 
     let past = null;
     let prevTensors = null;
@@ -238,19 +259,11 @@ export class LocalLlmEngine {
       return;
     }
     try {
-      let inputs;
-      try {
-        inputs = this._tokenizer.apply_chat_template(msg.messages, {
-          add_generation_prompt: true,
-          return_dict: true,
-        });
-      } catch {
-        // Base models without a chat template: plain role-tagged prompt.
-        const prompt = msg.messages.map((m) => `${m.role}: ${m.content}`).join("\n\n") + "\n\nassistant:";
-        inputs = this._tokenizer(prompt);
-      }
-      const chunkSize = msg.prefill_chunk ?? 256;
+      const inputs = this._templateInputs(msg);
+      const promptTokens = inputs.input_ids?.dims?.at(-1) ?? 0;
+      const chunkSize = msg.prefill_chunk ?? 512;
       this.lastPrefillChunks = 0;
+      const tStart = performance.now();
       let prepared = inputs;
       try {
         prepared = await this._prefillInChunks(inputs, chunkSize);
@@ -259,11 +272,22 @@ export class LocalLlmEngine {
         prepared = inputs;
       }
       const chunked = prepared !== inputs;
+      // Decode throughput is measured from the first generated token,
+      // the way the WebML demos do; everything before it is prefill.
+      let firstTokenAt = 0;
+      let tokenCount = 0;
       const streamer = new this._tf.TextStreamer(this._tokenizer, {
         skip_prompt: true,
-        skip_special_tokens: true,
+        // Family markers (<think>, <tool_call>, <|tool_call>...) are
+        // special tokens in these vocabularies; stripping them here is
+        // what used to blend tool calls and reasoning into the prose.
+        skip_special_tokens: !msg.keep_special,
         callback_function: (text) => {
           if (text) this._emit({ id: msg.id, type: "delta", text });
+        },
+        token_callback_function: () => {
+          tokenCount += 1;
+          if (tokenCount === 1) firstTokenAt = performance.now();
         },
       });
       this._stopper.reset();
@@ -282,10 +306,77 @@ export class LocalLlmEngine {
       if (chunked) {
         try { await result?.past_key_values?.dispose?.(); } catch {}
       }
+      const tEnd = performance.now();
+      const prefillMs = (firstTokenAt || tEnd) - tStart;
+      const decodeMs = firstTokenAt ? tEnd - firstTokenAt : 0;
+      const stats = {
+        engine: "transformers.js",
+        prompt_tokens: promptTokens,
+        prefill_ms: Math.round(prefillMs),
+        prefill_tps: prefillMs > 0 ? +(promptTokens / (prefillMs / 1000)).toFixed(1) : 0,
+        prefill_chunks: this.lastPrefillChunks,
+        decode_tokens: Math.max(0, tokenCount - 1),
+        decode_ms: Math.round(decodeMs),
+        decode_tps: decodeMs > 0 ? +((tokenCount - 1) / (decodeMs / 1000)).toFixed(1) : 0,
+      };
+      console.log("local-llm stats:", stats);
+      this._emit({ id: msg.id, type: "stats", stats });
       this._emit({ id: msg.id, type: "done" });
     } catch (err) {
       this._emit({ id: msg.id, type: "error", message: err?.message || String(err) });
     }
+  }
+
+  /**
+   * Tokenize via the chat template, preferring native tool
+   * declarations (the rendering the model was trained on). Fallback
+   * ladder: template with tools -> template without tools (structured
+   * records flattened to text) -> plain role-tagged prompt for base
+   * models without any template.
+   */
+  _templateInputs(msg) {
+    const attempts = [];
+    if (msg.tools?.length) attempts.push({ messages: msg.messages, tools: msg.tools });
+    attempts.push({ messages: msg.messages });
+    attempts.push({ messages: LocalLlmEngine.flattenForTemplate(msg.messages) });
+    let lastErr = null;
+    for (const attempt of attempts) {
+      try {
+        return this._tokenizer.apply_chat_template(attempt.messages, {
+          add_generation_prompt: true,
+          return_dict: true,
+          ...(attempt.tools ? { tools: attempt.tools } : {}),
+        });
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    console.warn("local-llm: chat template failed, using plain prompt:", lastErr);
+    const prompt = msg.messages
+      .map((m) => `${m.role}: ${typeof m.content === "string" ? m.content : ""}`)
+      .join("\n\n") + "\n\nassistant:";
+    return this._tokenizer(prompt);
+  }
+
+  /** Rewrite tool records/calls as plain text for templates that only
+   *  know system/user/assistant string content. */
+  static flattenForTemplate(messages) {
+    return (messages || []).map((m) => {
+      if (m.role === "assistant" && m.tool_calls) {
+        const calls = m.tool_calls.map((tc) => {
+          const fn = tc.function || {};
+          const args = typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments || {});
+          return `[Called ${fn.name}(${args})]`;
+        }).join("\n");
+        const { tool_calls, ...rest } = m;
+        return { ...rest, content: `${rest.content || ""}\n${calls}`.trim() };
+      }
+      if (m.role === "tool") {
+        const label = m.name || m.tool_call_id || "tool";
+        return { role: "user", content: `[Tool result: ${label}]\n${m.content}` };
+      }
+      return m;
+    });
   }
 }
 

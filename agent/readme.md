@@ -9,8 +9,9 @@ A web-based agent for Blender, built directly on the
 - the **web UI** (zero-build Lit ES modules, served as static files -
   no Node or bundler at runtime),
 - the **local-model reverse tunnel** (the browser can host the LLM
-  itself via Transformers.js - WebGPU with a WASM fallback - and serve
-  it to the backend over a WebSocket; protocol ported from zip-ties),
+  itself - Transformers.js/ONNX or WebLLM/MLC, both on WebGPU - and
+  serve it to the backend over a WebSocket; protocol ported from
+  zip-ties),
 - optionally, an **MCP streamable-HTTP listener** exposing the same
   tools to external MCP clients.
 
@@ -136,10 +137,12 @@ blagent/
   local_llm.py     reverse-tunnel bridge (zip-ties protocol)
   blender_tools.py blmcp tools invoked in-process (shared FastMCP registry)
   agent_tools.py   skills / media recall / continue_working tools
-  store.py         config, JSONL session transcripts, skills, memory
+  store.py         config, JSONL transcripts (flock-guarded for multi-window), skills, memory
   media.py         short-id media library (i1, i2, ...)
   app.py           starlette app: /ws, /ws/local-llm, /media, static UI
-  web/             zero-build Lit frontend (vendored lit/marked/highlight/transformers.js)
+  web/             zero-build Lit frontend (vendored lit/marked/highlight/
+                   transformers.js/web-llm; family-aware output parser in
+                   core/llm-output-parser.js)
   data/            system prompt + seeded skills
 ```
 

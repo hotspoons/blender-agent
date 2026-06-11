@@ -21,13 +21,13 @@ function unsafeHtml(htmlText) {
 
 /**
  * Split model output into ordered parts: {type: "think"|"text", body,
- * open} - handles complete <think>...</think> blocks and an
- * unterminated <think> tail while streaming (open: true). Empty think
- * blocks (Qwen /no_think mode) are dropped.
+ * open} - handles complete <think>...</think> (and <thinking>) blocks
+ * and an unterminated tail while streaming (open: true). Empty think
+ * blocks are dropped.
  */
 export function splitThinking(text) {
   const parts = [];
-  const re = /<think>([\s\S]*?)(<\/think>|$)/g;
+  const re = /<think(?:ing)?>([\s\S]*?)(<\/think(?:ing)?>|$)/g;
   let cursor = 0;
   let match;
   while ((match = re.exec(text)) !== null) {
@@ -56,6 +56,7 @@ export class BaChatStage extends LitElement {
     _busy: { state: true },
     _expanded: { state: true },
     _openThinks: { state: true },
+    _closedThinks: { state: true },
     _lightbox: { state: true },
   };
 
@@ -69,6 +70,7 @@ export class BaChatStage extends LitElement {
     this._busy = false;
     this._expanded = new Set();
     this._openThinks = new Set();
+    this._closedThinks = new Set();
     this._lightbox = null;
   }
 
@@ -160,7 +162,20 @@ export class BaChatStage extends LitElement {
       font-weight: 500;
     }
     .think-head:hover { color: var(--text); }
-    .think-head .pulse { color: var(--accent-2); }
+    .think-head .live { color: var(--accent-2); }
+    /* Activity notice while a collapsed block is still streaming. */
+    .think-head .activity { color: var(--text-muted); font-weight: 400; font-size: 12px; }
+    .think-head .ellipsis::after {
+      content: "...";
+      display: inline-block;
+      overflow: hidden;
+      vertical-align: bottom;
+      animation: thinkdots 1.2s steps(4, end) infinite;
+    }
+    @keyframes thinkdots {
+      from { width: 0; }
+      to { width: 1.1em; }
+    }
     .think-body {
       padding: 0 12px 10px;
       color: var(--text-muted);
@@ -283,6 +298,21 @@ export class BaChatStage extends LitElement {
     .empty h2 { color: var(--text); font-weight: 600; letter-spacing: 0.01em; }
     .empty .word { color: var(--brand); }
     .empty .mark { width: 48px; height: 48px; margin: 0 auto 12px; }
+    .compacted {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--text-muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      user-select: none;
+    }
+    .compacted::before, .compacted::after {
+      content: "";
+      flex: 1;
+      border-top: 1px solid var(--border);
+    }
     .media-strip { display: flex; gap: 6px; flex-wrap: wrap; }
     .media-strip img {
       max-height: 120px;
@@ -305,13 +335,21 @@ export class BaChatStage extends LitElement {
         return html`<div class="msg assistant">${unsafeHtml(renderMarkdown(part.body))}</div>`;
       }
       const key = `${keyPrefix}:${index}`;
-      const open = part.open || this._openThinks.has(key);
+      // A live (still-streaming) block starts expanded and can be
+      // collapsed; collapsed, it keeps signalling activity. A finished
+      // block starts collapsed and can be expanded.
+      const live = part.open;
+      const open = live ? !this._closedThinks.has(key) : this._openThinks.has(key);
+      const words = live ? part.body.trim().split(/\s+/).filter(Boolean).length : 0;
       return html`
         <div class="think">
-          <div class="think-head" @click=${() => this._toggleSet("_openThinks", key)}>
-            ${part.open
-              ? html`<span class="pulse">${icon("sparkles")}</span> Thinking...`
-              : html`${icon(open ? "chevron-down" : "chevron-right")} Thought for a moment`}
+          <div class="think-head"
+            @click=${() => this._toggleSet(live ? "_closedThinks" : "_openThinks", key)}>
+            ${icon(open ? "chevron-down" : "chevron-right")}
+            ${live
+              ? html`<span class="live ellipsis">Thinking</span>
+                  ${open ? nothing : html`<span class="activity">${words} words so far</span>`}`
+              : "Thought for a moment"}
           </div>
           ${open ? html`<div class="think-body">${part.body}</div>` : nothing}
         </div>`;
@@ -358,6 +396,7 @@ export class BaChatStage extends LitElement {
 
   render() {
     const records = this._records.filter((r) => !r.synthetic && r.role !== "tool");
+    // (compaction "summary" records render as a divider, see _renderRecord)
     const showEmpty = records.length === 0 && !this._streaming && !this._busy;
     return html`
       <div class="scroll">
@@ -396,6 +435,11 @@ export class BaChatStage extends LitElement {
   }
 
   _renderRecord(r, recordIndex) {
+    if (r.role === "summary") {
+      // Compaction marker: older history above this point was folded
+      // into a summary for the model; the transcript itself is intact.
+      return html`<div class="compacted" title=${r.content}>context compacted</div>`;
+    }
     if (r.role === "user") {
       return html`<div class="msg user"><span class="txt">${r.content}</span>${r.media_ids?.length ? html`
             <div class="media-strip" style="margin-top: 6px;">

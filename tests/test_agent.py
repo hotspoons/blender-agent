@@ -294,6 +294,241 @@ class TestAgentTurn(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
+class TestContextBudget(unittest.TestCase):
+    """
+    The context_tokens budget trims old tool results first, then whole
+    exchanges (keeping tool replies attached to their assistant call),
+    and never drops the system prompt or the latest user message.
+    """
+
+    def _engine(self) -> Any:
+        _import_blagent()
+        from blagent.engine import AgentEngine
+        from blagent.media import MediaLibrary
+        from blagent.tools import ToolRegistry
+
+        async def emit(_event: Any) -> None:
+            pass
+
+        return AgentEngine(
+            registry=ToolRegistry([]),
+            media=MediaLibrary(tempfile.mkdtemp(prefix="blagent-ctx-")),
+            system_prompt="system prompt",
+            emit=emit,
+            append_record=lambda record: None,
+        )
+
+    def test_trims_old_tool_results_then_drops_exchanges(self) -> None:
+        engine = self._engine()
+        big = "x" * 8_000
+        for index in range(6):
+            engine.records.append({"role": "user", "content": "question {:d}".format(index)})
+            engine.records.append({
+                "role": "assistant", "content": "",
+                "tool_calls": [{"id": "c{:d}".format(index), "name": "t", "arguments": "{}"}],
+            })
+            engine.records.append({"role": "tool", "tool_call_id": "c{:d}".format(index), "content": big})
+            engine.records.append({"role": "assistant", "content": "answer {:d}".format(index)})
+
+        messages = engine._llm_messages(4_096)  # pylint: disable=protected-access
+        # System prompt and the newest exchange survive.
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertIn("answer 5", json.dumps(messages))
+        # A trim notice is present exactly once.
+        joined = json.dumps(messages)
+        self.assertEqual(joined.count("trimmed to fit the context window."), 1)
+        # No orphaned tool message: every tool message follows an
+        # assistant message that carries tool_calls.
+        for index, message in enumerate(messages):
+            if message.get("role") == "tool":
+                prev = messages[index - 1]
+                self.assertTrue(
+                    prev.get("tool_calls") or prev.get("role") == "tool",
+                    "orphaned tool message at {:d}".format(index))
+        # Budget roughly respected.
+        estimate = engine._estimate_tokens(messages)  # pylint: disable=protected-access
+        self.assertLessEqual(estimate, 4_096)
+
+    def test_small_history_untouched(self) -> None:
+        engine = self._engine()
+        engine.records.append({"role": "user", "content": "hi"})
+        engine.records.append({"role": "assistant", "content": "hello"})
+        messages = engine._llm_messages(16_384)  # pylint: disable=protected-access
+        self.assertNotIn("trimmed", json.dumps(messages))
+        self.assertEqual(len(messages), 3)
+
+    def test_thinking_stripped_from_projection(self) -> None:
+        """
+        <think>/<thinking> blocks stay in the transcript (the UI shows
+        them as collapsible cards) but never go back to the model -
+        templates expect old reasoning dropped and it wastes budget.
+        An unterminated block (aborted generation) is removed too.
+        """
+        engine = self._engine()
+        engine.records.append({"role": "user", "content": "hi"})
+        engine.records.append({
+            "role": "assistant",
+            "content": "<think>secret plan</think>Done.<thinking>more</thinking>",
+        })
+        engine.records.append({"role": "user", "content": "again"})
+        engine.records.append({"role": "assistant", "content": "<think>aborted mid-think"})
+        messages = engine._llm_messages(16_384)  # pylint: disable=protected-access
+        joined = json.dumps(messages)
+        self.assertNotIn("secret plan", joined)
+        self.assertNotIn("aborted mid-think", joined)
+        self.assertIn("Done.", joined)
+        # The transcript itself is untouched.
+        self.assertIn("secret plan", engine.records[1]["content"])
+
+    def test_volatile_results_age_before_others(self) -> None:
+        """
+        Read-only (volatile) scene-query results shrink to stubs before
+        ordinary tool results are touched.
+        """
+        from blagent.tools import Tool
+
+        class VolatileTool(Tool):
+            name = "scene_query"
+            volatile = True
+
+        engine = self._engine_with_tools([VolatileTool()])
+        big = "v" * 6_000
+        for index in range(3):
+            engine.records.append({"role": "user", "content": "q{:d}".format(index)})
+            engine.records.append({
+                "role": "assistant", "content": "",
+                "tool_calls": [{"id": "v{:d}".format(index), "name": "scene_query", "arguments": "{}"}],
+            })
+            engine.records.append({
+                "role": "tool", "tool_call_id": "v{:d}".format(index),
+                "name": "scene_query", "content": big})
+            engine.records.append({
+                "role": "assistant", "content": "",
+                "tool_calls": [{"id": "w{:d}".format(index), "name": "worker", "arguments": "{}"}],
+            })
+            engine.records.append({
+                "role": "tool", "tool_call_id": "w{:d}".format(index),
+                "name": "worker", "content": big})
+            engine.records.append({"role": "assistant", "content": "done"})
+
+        messages = engine._llm_messages(8_192)  # pylint: disable=protected-access
+        joined = json.dumps(messages)
+        self.assertIn("stale scene-query result trimmed", joined)
+        # The newest volatile result stays verbatim.
+        volatile = [m for m in messages if m.get("role") == "tool" and m["tool_call_id"].startswith("v")]
+        self.assertNotIn("stale scene-query", volatile[-1]["content"])
+
+    def test_old_images_demoted_to_placeholders(self) -> None:
+        engine = self._engine()
+        from blagent.media import MediaLibrary  # noqa: F401  (engine already has one)
+
+        ids = [engine._media.register_bytes(b"\x89PNG fake", mime="image/png", label="p")
+               for _ in range(5)]
+        for media_id in ids:
+            engine.records.append({"role": "user", "content": "look", "media_ids": [media_id]})
+            engine.records.append({"role": "assistant", "content": "ok"})
+        messages = engine._llm_messages()  # pylint: disable=protected-access
+        image_parts = sum(
+            1 for m in messages if isinstance(m.get("content"), list)
+            for p in m["content"] if p.get("type") == "image_url")
+        placeholders = sum(
+            1 for m in messages if isinstance(m.get("content"), list)
+            for p in m["content"] if p.get("type") == "text" and "older image was omitted" in p["text"])
+        self.assertEqual(image_parts, 3)
+        self.assertEqual(placeholders, 2)
+
+    def _engine_with_tools(self, tools: "list[Any]") -> Any:
+        from blagent.engine import AgentEngine
+        from blagent.media import MediaLibrary
+        from blagent.tools import ToolRegistry
+
+        async def emit(_event: Any) -> None:
+            pass
+
+        return AgentEngine(
+            registry=ToolRegistry(tools),
+            media=MediaLibrary(tempfile.mkdtemp(prefix="blagent-ctx-")),
+            system_prompt="system prompt",
+            emit=emit,
+            append_record=lambda record: None,
+        )
+
+
+@unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
+class TestCompaction(unittest.TestCase):
+    """
+    Summarization compaction: a summary record supersedes the records
+    it covers in the LLM projection; the transcript keeps everything.
+    """
+
+    def _engine(self) -> Any:
+        _import_blagent()
+        from blagent.engine import AgentEngine
+        from blagent.media import MediaLibrary
+        from blagent.tools import ToolRegistry
+
+        async def emit(_event: Any) -> None:
+            pass
+
+        return AgentEngine(
+            registry=ToolRegistry([]),
+            media=MediaLibrary(tempfile.mkdtemp(prefix="blagent-cmp-")),
+            system_prompt="system prompt",
+            emit=emit,
+            append_record=lambda record: None,
+        )
+
+    def test_compacts_and_projection_uses_summary(self) -> None:
+        from blagent.llm import LlmChunk, LlmClient
+
+        class Summarizer(LlmClient):
+            def __init__(self) -> None:
+                self.requests: list[dict[str, Any]] = []
+
+            async def stream(self, request: dict[str, Any]) -> Any:
+                self.requests.append(request)
+                yield LlmChunk(content="SUMMARY: cube exists, user prefers metric.")
+
+        engine = self._engine()
+        for index in range(10):
+            engine.records.append({"role": "user", "content": "msg {:d} ".format(index) + "x" * 3_000})
+            engine.records.append({"role": "assistant", "content": "reply {:d} ".format(index) + "y" * 3_000})
+
+        llm = Summarizer()
+        compacted = asyncio.run(engine.maybe_compact(llm, "m", 8_192))
+        self.assertTrue(compacted)
+        # Summary record persisted with coverage.
+        summary = engine.records[-1]
+        self.assertEqual(summary["role"], "summary")
+        self.assertGreater(summary["covers_count"], 0)
+        # The summarizer saw the old history.
+        self.assertIn("msg 0", json.dumps(llm.requests[0]["messages"]))
+        # Projection: summary present, covered content absent, tail intact.
+        messages = engine._llm_messages()  # pylint: disable=protected-access
+        joined = json.dumps(messages)
+        self.assertIn("SUMMARY: cube exists", joined)
+        self.assertNotIn("msg 0", joined)
+        self.assertIn("reply 9", joined)
+        # Below threshold afterwards: no second compaction.
+        self.assertFalse(asyncio.run(engine.maybe_compact(llm, "m", 8_192)))
+
+    def test_no_compaction_under_threshold(self) -> None:
+        from blagent.llm import LlmClient
+
+        class Exploder(LlmClient):
+            async def stream(self, request: dict[str, Any]) -> Any:
+                raise AssertionError("must not be called")
+                yield  # pylint: disable=unreachable
+
+        engine = self._engine()
+        engine.records.append({"role": "user", "content": "hi"})
+        engine.records.append({"role": "assistant", "content": "hello"})
+        engine.records.append({"role": "user", "content": "more"})
+        engine.records.append({"role": "assistant", "content": "sure"})
+        self.assertFalse(asyncio.run(engine.maybe_compact(Exploder(), "m", 16_384)))
+
+
+@unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
 class TestInstanceTitle(unittest.TestCase):
     """
     Instance labeling for multi-Blender setups: the title rides the
@@ -394,6 +629,85 @@ class TestVisionFallback(unittest.TestCase):
         self.assertTrue(any("image input" in m["message"] or "text placeholders" in m["message"]
                             for m in messages))
         self.assertEqual(events[-1]["type"], "turn_done")
+
+
+class TestSessionLocking(unittest.TestCase):
+    """
+    Cross-process advisory locks on session transcripts: appends merge
+    through the on-disk file, the lock is re-entrant within one store,
+    and a loser that cannot acquire the lock gets SessionBusyError
+    instead of corrupting anything. Two AgentStore instances stand in
+    for two processes (flock contends per file description).
+    """
+
+    def _stores(self) -> Any:
+        _import_blagent()
+        from blagent.store import AgentStore
+
+        data_dir = tempfile.mkdtemp(prefix="blagent-lock-")
+        return AgentStore(data_dir), AgentStore(data_dir)
+
+    def test_append_returns_merged_view(self) -> None:
+        store_a, store_b = self._stores()
+        sid = "20260611-000000-aaaaaa"
+        store_a.append_record(sid, {"role": "user", "content": "from a"})
+        store_b.append_record(sid, {"role": "assistant", "content": "from b"})
+        merged = store_a.append_record(sid, {"role": "user", "content": "a again"})
+        self.assertEqual(
+            [r["content"] for r in merged],
+            ["from a", "from b", "a again"])
+        # Both stores converge on the same on-disk truth.
+        self.assertEqual(merged, store_b.load_records(sid))
+
+    def test_lock_is_reentrant_within_store(self) -> None:
+        store_a, _ = self._stores()
+        sid = "20260611-000000-bbbbbb"
+        with store_a.session_lock(sid, timeout=1.0):
+            with store_a.session_lock(sid, timeout=1.0):
+                store_a.append_record(sid, {"role": "user", "content": "nested"})
+            records = store_a.load_records(sid)
+        self.assertEqual(records[0]["content"], "nested")
+
+    def test_loser_gets_busy_error_and_reads_still_work(self) -> None:
+        _import_blagent()
+        from blagent.store import SessionBusyError
+
+        store_a, store_b = self._stores()
+        sid = "20260611-000000-cccccc"
+        store_a.append_record(sid, {"role": "user", "content": "first"})
+        with store_a.session_lock(sid, timeout=1.0):
+            # A second window cannot write while the lock is held...
+            with self.assertRaises(SessionBusyError):
+                store_b.append_record(sid, {"role": "user", "content": "loser"}, timeout=0.2)
+            # ...but viewing falls back to a lockless read.
+            records = store_b.load_records(sid)
+        self.assertEqual([r["content"] for r in records], ["first"])
+        # After release the loser can write again.
+        merged = store_b.append_record(sid, {"role": "user", "content": "second"})
+        self.assertEqual([r["content"] for r in merged], ["first", "second"])
+
+
+class TestLlmOutputParser(unittest.TestCase):
+    """
+    Wrapper around the node-based unit tests for the browser-side
+    streaming output parser (tool-call grammars + think tags). The
+    parser is plain ESM with no dependencies, so `node --test` runs it
+    directly; skipped when node is not installed.
+    """
+
+    def test_node_suite(self) -> None:
+        import shutil
+        import subprocess
+
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node not on PATH")
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        proc = subprocess.run(
+            [node, "--test", os.path.join(repo, "tests", "test_llm_output_parser.mjs")],
+            capture_output=True, text=True, timeout=120, check=False,
+        )
+        self.assertEqual(proc.returncode, 0, "node tests failed:\n" + proc.stdout + proc.stderr)
 
 
 if __name__ == "__main__":

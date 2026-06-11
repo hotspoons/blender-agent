@@ -8,6 +8,9 @@
 import { LitElement, html, css, nothing } from "lit";
 import { store } from "/static/core/store.js";
 import { icon } from "/static/core/icons.js";
+import { localLlm } from "/static/core/local-llm-controller.js";
+
+const HEIGHT_KEY = "blender-agent.composer-height";
 
 export class BaComposer extends LitElement {
   static properties = {
@@ -15,6 +18,7 @@ export class BaComposer extends LitElement {
     _connected: { state: true },
     _attachments: { state: true },   // [{id, sessionId, uploading}]
     _dragOver: { state: true },
+    _autoload: { state: true },      // loading a local model before send
   };
 
   constructor() {
@@ -23,6 +27,8 @@ export class BaComposer extends LitElement {
     this._connected = store.state.connected;
     this._attachments = [];
     this._dragOver = false;
+    this._autoload = false;
+    this._onLlmChange = () => this._onLocalLlmState();
   }
 
   connectedCallback() {
@@ -37,11 +43,43 @@ export class BaComposer extends LitElement {
           (a) => a.sessionId === store.state.sessionId);
       }
     });
+    localLlm.addEventListener("change", this._onLlmChange);
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     this._unsub?.();
+    localLlm.removeEventListener("change", this._onLlmChange);
+  }
+
+  firstUpdated() {
+    // Restore the last manually-chosen composer height.
+    const saved = parseInt(localStorage.getItem(HEIGHT_KEY) || "", 10);
+    if (saved > 24) {
+      const ta = this.renderRoot.querySelector("textarea");
+      ta.style.height = Math.min(window.innerHeight * 0.5, saved) + "px";
+      this._manualHeight = true;
+    }
+  }
+
+  /** True when the configured model is in-browser and not yet ready. */
+  _localNotReady() {
+    return !!store.state.config?.use_local_llm && localLlm.status !== "ready";
+  }
+
+  /** Drive the deferred send once an auto-load finishes (or fails). */
+  _onLocalLlmState() {
+    if (!this._autoload) return;
+    if (localLlm.status === "ready") {
+      this._autoload = false;
+      // The bridge needs a beat to register over the tunnel; the turn
+      // itself tolerates a not-quite-ready bridge by erroring, so a
+      // short settle keeps the common path clean.
+      setTimeout(() => this._send(), 150);
+    } else if (localLlm.status === "error" || localLlm.status === "idle") {
+      this._autoload = false;
+    }
+    this.requestUpdate();
   }
 
   async _addFiles(files) {
@@ -89,9 +127,10 @@ export class BaComposer extends LitElement {
     try { grip.setPointerCapture(e.pointerId); } catch {}
     grip.classList.add("active");
     const maxHeight = window.innerHeight * 0.5;
+    let height = startHeight;
     const onMove = (ev) => {
-      const next = Math.min(maxHeight, Math.max(24, startHeight + (startY - ev.clientY)));
-      ta.style.height = next + "px";
+      height = Math.min(maxHeight, Math.max(24, startHeight + (startY - ev.clientY)));
+      ta.style.height = height + "px";
       this._manualHeight = true;
     };
     const onUp = (ev) => {
@@ -99,6 +138,8 @@ export class BaComposer extends LitElement {
       grip.classList.remove("active");
       grip.removeEventListener("pointermove", onMove);
       grip.removeEventListener("pointerup", onUp);
+      // Remember the chosen size across reloads.
+      localStorage.setItem(HEIGHT_KEY, String(Math.round(height)));
     };
     grip.addEventListener("pointermove", onMove);
     grip.addEventListener("pointerup", onUp);
@@ -194,6 +235,8 @@ export class BaComposer extends LitElement {
     }
     button.act:disabled { opacity: 0.45; cursor: default; }
     button.act.abort { background: var(--danger); }
+    button.act .spin { display: inline-flex; animation: spin 1.4s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     button.attach {
       display: inline-flex;
       border: none;
@@ -213,11 +256,28 @@ export class BaComposer extends LitElement {
     const ready = this._attachments.filter((a) => !a.uploading).map((a) => a.id);
     if ((!text && !ready.length) || this._busy || !this._connected) return;
     if (this._attachments.some((a) => a.uploading)) return;
+    // Local model not loaded yet: kick off the load and defer the send
+    // until it is ready (the Send button shows a spinner meanwhile).
+    // The message text stays in the box until then.
+    if (this._localNotReady()) {
+      if (localLlm.status !== "loading") localLlm.load();
+      this._autoload = true;
+      this.requestUpdate();
+      return;
+    }
+    this._autoload = false;
     store.chat(text || "(see attached image)", ready);
     this._attachments = [];
     ta.value = "";
-    ta.style.height = "auto";
-    this._manualHeight = false;
+    // A manually-chosen height is the user's preference - keep it after
+    // sending instead of snapping back to one row; otherwise auto-fit.
+    const saved = parseInt(localStorage.getItem(HEIGHT_KEY) || "", 10);
+    if (this._manualHeight && saved > 24) {
+      ta.style.height = Math.min(window.innerHeight * 0.5, saved) + "px";
+    } else {
+      ta.style.height = "auto";
+      this._manualHeight = false;
+    }
   }
 
   render() {
@@ -258,8 +318,11 @@ export class BaComposer extends LitElement {
             }}></textarea>
           ${this._busy
             ? html`<button class="act abort" @click=${() => store.abort()}>${icon("stop")} Stop</button>`
-            : html`<button class="act" ?disabled=${!this._connected} @click=${() => this._send()}>
-                ${icon("paper-airplane")} Send</button>`}
+            : this._autoload
+              ? html`<button class="act" disabled title=${localLlm.progress?.text || "Loading model..."}>
+                  <span class="spin">${icon("arrow-path")}</span> Loading...</button>`
+              : html`<button class="act" ?disabled=${!this._connected} @click=${() => this._send()}>
+                  ${icon("paper-airplane")} Send</button>`}
         </div>
       </div>
     `;

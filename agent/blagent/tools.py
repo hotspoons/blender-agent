@@ -87,6 +87,10 @@ class Tool:
     name: str = ""
     description: str = ""
     destructive: bool = False
+    # Read-only queries whose results go stale as the scene changes;
+    # the engine ages these out of the context harder (they are cheap
+    # to re-run).
+    volatile: bool = False
 
     def input_schema(self) -> dict[str, Any]:
         raise NotImplementedError

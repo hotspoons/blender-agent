@@ -26,6 +26,7 @@ __all__ = (
 import asyncio
 import json
 import logging
+import re
 import time
 
 from typing import Any, Awaitable, Callable
@@ -42,6 +43,64 @@ _CONTEXT_RECORD_LIMIT = 80
 _TOOL_RESULT_CHAR_LIMIT = 24_000
 # Seconds to wait on the ask-mode confirmation gate before giving up.
 _CONFIRM_TIMEOUT = 600.0
+# Rough chars-per-token for budget estimation (no tokenizer here; the
+# point is the order of magnitude, not exactness).
+_CHARS_PER_TOKEN = 4
+# Estimated token cost of one inline image attachment.
+_IMAGE_TOKEN_ESTIMATE = 800
+# Tokens reserved for the model's own output within the budget.
+_GENERATION_HEADROOM_TOKENS = 1_024
+# When trimming an old tool result, this much of its head survives.
+_TRIMMED_TOOL_RESULT_CHARS = 600
+# Volatile (read-only scene query) results go stale the moment the
+# scene changes and are cheap to re-run; old ones keep only this much.
+_TRIMMED_VOLATILE_RESULT_CHARS = 300
+# Newest images kept inline in the LLM projection; older ones demote
+# to text placeholders (images are the most expensive content).
+_MAX_CONTEXT_IMAGES = 3
+# Summarization compaction: trigger when the projection exceeds this
+# share of the context budget; the kept tail targets the keep share.
+_COMPACT_TRIGGER_RATIO = 0.7
+_COMPACT_KEEP_RATIO = 0.35
+# Cap on the history text handed to the summarizer request.
+_COMPACT_INPUT_CHAR_LIMIT = 60_000
+
+_TRIM_NOTICE = "[Note: earlier conversation was trimmed to fit the context window.]"
+
+# Model reasoning embedded in assistant content as <think>/<thinking>
+# blocks (the local-model pipeline normalizes everything to <think>;
+# remote endpoints such as LM Studio pass the tags through verbatim).
+# An unterminated block (aborted generation) runs to end of text.
+_THINK_RE = re.compile(r"<think(?:ing)?>.*?(?:</think(?:ing)?>|\Z)", re.DOTALL)
+
+
+def _strip_thinking(text: str) -> str:
+    """
+    Remove reasoning blocks before content goes back to a model.
+    Chat templates expect previous-turn thinking to be dropped (Qwen's
+    own template strips it), and it is pure context-budget waste. The
+    transcript keeps the full text; the chat UI renders the blocks as
+    collapsible cards.
+    """
+    if "<think" not in text:
+        return text
+    return _THINK_RE.sub("", text).strip()
+
+_SUMMARY_SYSTEM_PROMPT = (
+    "You compress conversation history for a Blender assistant agent. "
+    "Produce a compact briefing the agent can rely on IN PLACE of the "
+    "original messages. Be specific: object/material/collection names, "
+    "values, file paths. No preamble."
+)
+
+_SUMMARY_USER_PROMPT = (
+    "Summarize this conversation history in at most 400 words, structured as:\n"
+    "## Scene state (what exists in the .blend NOW)\n"
+    "## Decisions & user preferences\n"
+    "## Completed work\n"
+    "## Open items\n\n"
+    "History:\n{:s}"
+)
 
 EngineEvents = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -96,6 +155,9 @@ class AgentEngine:
         self._system_prompt = system_prompt
         self._emit = emit
         self._append_record = append_record
+        # Read-only scene queries: results go stale and age out harder.
+        self._volatile_tools = {
+            tool.name for tool in registry if getattr(tool, "volatile", False)}
         self.records: list[dict[str, Any]] = []
         # call_id -> Future resolved by the runtime on user confirm/deny.
         self.pending_confirms: dict[str, asyncio.Future[bool]] = {}
@@ -112,13 +174,38 @@ class AgentEngine:
         self.records.append(record)
         self._append_record(record)
 
-    def _llm_messages(self) -> list[dict[str, Any]]:
+    def _latest_summary(self) -> dict[str, Any] | None:
         """
-        Project the transcript into OpenAI chat messages.
+        The most recent compaction summary record, if any. It
+        supersedes the first ``covers_count`` transcript records in the
+        LLM projection (the on-disk transcript is never rewritten).
+        """
+        for record in reversed(self.records):
+            if record.get("role") == "summary":
+                return record
+        return None
+
+    def _llm_messages(self, context_tokens: int = 0) -> list[dict[str, Any]]:
+        """
+        Project the transcript into OpenAI chat messages. A compaction
+        summary, when present, stands in for the records it covers.
+        When *context_tokens* is positive, the result is trimmed to fit
+        that budget (see ``_fit_context``).
         """
         messages: list[dict[str, Any]] = [{"role": "system", "content": self._system_prompt}]
-        for record in self.records[-_CONTEXT_RECORD_LIMIT:]:
+        start = 0
+        summary = self._latest_summary()
+        if summary is not None:
+            start = int(summary.get("covers_count", 0))
+            messages.append({
+                "role": "user",
+                "content": "[Conversation summary - earlier messages were compacted]\n"
+                           + str(summary.get("content", "")),
+            })
+        for record in self.records[start:][-_CONTEXT_RECORD_LIMIT:]:
             role = record.get("role")
+            if role == "summary":
+                continue
             if role == "user":
                 media_ids = record.get("media_ids") or []
                 text = str(record.get("content", ""))
@@ -136,7 +223,10 @@ class AgentEngine:
                 content = self._content_with_images(text, media_ids)
                 messages.append({"role": "user", "content": content})
             elif role == "assistant":
-                message: dict[str, Any] = {"role": "assistant", "content": record.get("content", "")}
+                message: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": _strip_thinking(str(record.get("content", ""))),
+                }
                 tool_calls = record.get("tool_calls") or []
                 if tool_calls:
                     message["tool_calls"] = [
@@ -153,8 +243,212 @@ class AgentEngine:
                     "role": "tool",
                     "tool_call_id": record.get("tool_call_id", ""),
                     "content": str(record.get("content", "")),
+                    # Used by the retention passes, and kept on the
+                    # wire: the local-model path needs tool names to
+                    # render Gemma/Harmony tool-response blocks, and
+                    # OpenAI-style endpoints accept the field.
+                    "name": str(record.get("name", "")),
                 })
+        self._demote_old_images(messages)
+        if context_tokens > 0:
+            self._fit_context(messages, context_tokens)
         return messages
+
+    def _demote_old_images(self, messages: list[dict[str, Any]]) -> None:
+        """
+        Keep only the newest ``_MAX_CONTEXT_IMAGES`` images inline;
+        older ones become text placeholders (recallable via the media
+        tool). Images dominate token cost on vision endpoints.
+        """
+        seen = 0
+        for message in reversed(messages):
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for index, part in enumerate(content):
+                if not (isinstance(part, dict) and part.get("type") == "image_url"):
+                    continue
+                seen += 1
+                if seen > _MAX_CONTEXT_IMAGES:
+                    content[index] = {
+                        "type": "text",
+                        "text": "[an older image was omitted here - "
+                                "use the media tool to view it again]",
+                    }
+
+    @staticmethod
+    def _estimate_tokens(messages: list[dict[str, Any]]) -> int:
+        """
+        Order-of-magnitude token estimate (chars/4 + flat image cost).
+        Deliberately tokenizer-free: the budget is a guard rail, not an
+        exact accounting.
+        """
+        total = 0
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, str):
+                total += len(content) // _CHARS_PER_TOKEN
+            elif isinstance(content, list):
+                for part in content:
+                    if part.get("type") == "text":
+                        total += len(part.get("text", "")) // _CHARS_PER_TOKEN
+                    else:
+                        total += _IMAGE_TOKEN_ESTIMATE
+            for call in message.get("tool_calls") or []:
+                total += len(str(call.get("function", {}).get("arguments", ""))) // _CHARS_PER_TOKEN
+            total += 8  # role/framing overhead
+        return total
+
+    def _fit_context(self, messages: list[dict[str, Any]], context_tokens: int) -> None:
+        """
+        Trim *messages* in place to roughly fit *context_tokens* (minus
+        generation headroom). Cheap deterministic passes, oldest first:
+
+        1. truncate old tool results to their head,
+        2. drop whole old exchanges (keeping tool replies attached to
+           the assistant message that called them, which OpenAI-style
+           endpoints require), inserting one trim notice.
+
+        The system prompt and the latest exchange always survive. This
+        is the guard rail; smarter compaction (summarization) is a
+        planned layer on top - see agent/docs/context-compaction.md.
+        """
+        budget = max(context_tokens - _GENERATION_HEADROOM_TOKENS, 1_024)
+
+        # Pass 0: volatile (read-only scene query) results age out hard
+        # - they are stale the moment the scene changes and cheap to
+        # re-run. All but the newest one shrink to a stub.
+        tool_indexes = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+        volatile_indexes = [
+            i for i in tool_indexes if messages[i].get("name") in self._volatile_tools]
+        for index in volatile_indexes[:-1]:
+            if self._estimate_tokens(messages) <= budget:
+                return
+            content = messages[index].get("content", "")
+            if isinstance(content, str) and len(content) > _TRIMMED_VOLATILE_RESULT_CHARS * 2:
+                messages[index]["content"] = (
+                    content[:_TRIMMED_VOLATILE_RESULT_CHARS]
+                    + "\n[... stale scene-query result trimmed - re-run the tool for current state]")
+
+        # Pass 1: truncate old tool results (newest two stay intact -
+        # the model usually still needs those verbatim).
+        for index in tool_indexes[:-2]:
+            if self._estimate_tokens(messages) <= budget:
+                return
+            content = messages[index].get("content", "")
+            if isinstance(content, str) and len(content) > _TRIMMED_TOOL_RESULT_CHARS * 2:
+                messages[index]["content"] = (
+                    content[:_TRIMMED_TOOL_RESULT_CHARS]
+                    + "\n[... tool result trimmed to fit the context window]")
+
+        # Pass 2: drop whole exchanges from the front (index 1 onward;
+        # 0 is the system prompt). An assistant message takes its tool
+        # replies with it. Keep at least the final user message.
+        dropped = False
+        while self._estimate_tokens(messages) > budget:
+            start = 2 if dropped else 1  # skip the notice once inserted
+            if start >= len(messages) - 1:
+                break
+            end = start + 1
+            if messages[start].get("tool_calls"):
+                while end < len(messages) - 1 and messages[end].get("role") == "tool":
+                    end += 1
+            del messages[start:end]
+            if not dropped:
+                messages.insert(1, {"role": "user", "content": _TRIM_NOTICE})
+                dropped = True
+        if dropped:
+            _log.info("context trimmed to ~%d tokens (budget %d)",
+                      self._estimate_tokens(messages), budget)
+
+    # ------------------------------------------------------------------
+    # Summarization compaction (run by the runtime between turns).
+
+    async def maybe_compact(self, llm: LlmClient, model: str, context_tokens: int) -> bool:
+        """
+        When the projection has outgrown ``_COMPACT_TRIGGER_RATIO`` of
+        the budget, ask *llm* to summarize the older part of the
+        transcript and append a ``summary`` record superseding it in
+        future projections. The on-disk transcript keeps everything;
+        the UI keeps showing everything. Returns True when a summary
+        was produced. One bounded LLM request, between turns only.
+        """
+        if context_tokens <= 0 or len(self.records) < 4:
+            return False
+        if self._estimate_tokens(self._llm_messages()) <= context_tokens * _COMPACT_TRIGGER_RATIO:
+            return False
+
+        previous = self._latest_summary()
+        previous_covers = int(previous.get("covers_count", 0)) if previous else 0
+
+        # Keep a verbatim tail of roughly the keep share of the budget;
+        # everything older gets summarized.
+        keep_budget_chars = int(context_tokens * _COMPACT_KEEP_RATIO) * _CHARS_PER_TOKEN
+        accumulated = 0
+        covers = 0
+        for index in range(len(self.records) - 1, -1, -1):
+            accumulated += len(str(self.records[index].get("content", ""))) + 32
+            if accumulated > keep_budget_chars:
+                covers = index + 1
+                break
+        # Tool replies must stay with their assistant call: grow the
+        # summarized side until the kept tail starts cleanly.
+        while covers < len(self.records) and self.records[covers].get("role") == "tool":
+            covers += 1
+        if covers <= previous_covers or covers >= len(self.records):
+            return False
+
+        history = self._render_history_for_summary(previous, previous_covers, covers)
+        request = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
+                {"role": "user", "content": _SUMMARY_USER_PROMPT.format(history)},
+            ],
+        }
+        parts: list[str] = []
+        async for chunk in llm.stream(request):
+            if chunk.content:
+                parts.append(chunk.content)
+        summary = "".join(parts).strip()
+        if not summary:
+            return False
+        self.push_record({"role": "summary", "content": summary, "covers_count": covers})
+        _log.info("compacted session history: %d records -> summary (%d chars)", covers, len(summary))
+        return True
+
+    def _render_history_for_summary(
+            self,
+            previous: dict[str, Any] | None,
+            previous_covers: int,
+            covers: int,
+    ) -> str:
+        """
+        Plain-text rendering of the records a new summary will replace.
+        Includes the previous summary so nothing it carried is lost.
+        """
+        lines: list[str] = []
+        if previous is not None:
+            lines.append("EARLIER SUMMARY:\n{:s}\n".format(str(previous.get("content", ""))))
+        for record in self.records[previous_covers:covers]:
+            role = record.get("role")
+            if role == "summary":
+                continue
+            content = str(record.get("content", ""))
+            if role == "tool":
+                lines.append("TOOL {:s}: {:s}".format(
+                    str(record.get("name", "")), content[:1_200]))
+            elif role == "assistant":
+                calls = "".join(
+                    " [called {:s}({:s})]".format(c.get("name", ""), str(c.get("arguments", ""))[:200])
+                    for c in record.get("tool_calls") or [])
+                lines.append("ASSISTANT: {:s}{:s}".format(_strip_thinking(content), calls))
+            else:
+                lines.append("USER: {:s}".format(content))
+        text = "\n".join(lines)
+        if len(text) > _COMPACT_INPUT_CHAR_LIMIT:
+            text = text[-_COMPACT_INPUT_CHAR_LIMIT:]
+        return text
 
     def _content_with_images(self, text: str, media_ids: list[str]) -> object:
         if not media_ids:
@@ -183,6 +477,7 @@ class AgentEngine:
             autonomy: str,
             max_rounds: int,
             media_ids: list[str] | None = None,
+            context_tokens: int = 0,
     ) -> None:
         """
         Run one full turn. Events are emitted through the runtime's
@@ -224,7 +519,7 @@ class AgentEngine:
 
             request: dict[str, Any] = {
                 "model": model,
-                "messages": self._llm_messages(),
+                "messages": self._llm_messages(context_tokens),
                 "tools": self._registry.specs(),
             }
 
@@ -244,7 +539,7 @@ class AgentEngine:
                         "message": "Model rejected image input (text-only model?) - "
                                    "continuing with text placeholders for media.",
                     })
-                    request["messages"] = self._llm_messages()
+                    request["messages"] = self._llm_messages(context_tokens)
                     content, tool_calls = await self._stream_round(session_id, request, llm)
                 else:
                     _log.error("LLM round failed: %s", ex)
@@ -296,7 +591,7 @@ class AgentEngine:
                     # A declined call ends the batch: record the rest as
                     # skipped so the model sees an honest transcript.
                     message = "skipped: an earlier tool call in this batch was declined by the user"
-                    self._push_tool_record(call["id"], {"status": "skipped", "message": message})
+                    self._push_tool_record(call["id"], {"status": "skipped", "message": message}, call["name"])
                     await self._emit({
                         "type": "tool_status",
                         "session_id": session_id,
@@ -393,7 +688,7 @@ class AgentEngine:
         if tool is None:
             message = "unknown tool: {:s}".format(name)
             await status("error", summary=message)
-            self._push_tool_record(call_id, {"status": "error", "message": message})
+            self._push_tool_record(call_id, {"status": "error", "message": message}, name)
             return [], False
 
         try:
@@ -401,7 +696,7 @@ class AgentEngine:
         except ValueError as ex:
             message = "tool arguments are not valid JSON: {:s}".format(str(ex))
             await status("error", summary=message)
-            self._push_tool_record(call_id, {"status": "error", "message": message})
+            self._push_tool_record(call_id, {"status": "error", "message": message}, name)
             return [], False
 
         # Autonomy gate: destructive tools pause in ask mode.
@@ -418,7 +713,7 @@ class AgentEngine:
             if not approved:
                 message = "user declined this tool call"
                 await status("rejected", summary=message)
-                self._push_tool_record(call_id, {"status": "rejected", "message": message})
+                self._push_tool_record(call_id, {"status": "rejected", "message": message}, name)
                 return [], True
 
         await status("running")
@@ -427,18 +722,18 @@ class AgentEngine:
             result = await tool.call(ctx, args)
         except ToolError as ex:
             await status("error", summary=str(ex))
-            self._push_tool_record(call_id, {"status": "error", "message": str(ex)})
+            self._push_tool_record(call_id, {"status": "error", "message": str(ex)}, name)
             return [], False
         except Exception as ex:  # pylint: disable=broad-exception-caught
             message = "{:s}: {:s}".format(type(ex).__name__, str(ex))
             await status("error", summary=message)
-            self._push_tool_record(call_id, {"status": "error", "message": message})
+            self._push_tool_record(call_id, {"status": "error", "message": message}, name)
             return [], False
 
         payload: dict[str, Any] = {"status": "ok", "result": result.data}
         if result.media_ids:
             payload["media_ids"] = result.media_ids
-        self._push_tool_record(call_id, payload)
+        self._push_tool_record(call_id, payload, name)
         await status(
             "done",
             summary=result.summary,
@@ -447,11 +742,11 @@ class AgentEngine:
         )
         return result.media_ids, False
 
-    def _push_tool_record(self, call_id: str, payload: dict[str, Any]) -> None:
+    def _push_tool_record(self, call_id: str, payload: dict[str, Any], name: str = "") -> None:
         text = json.dumps(payload)
         if len(text) > _TOOL_RESULT_CHAR_LIMIT:
             text = text[:_TOOL_RESULT_CHAR_LIMIT] + "... [truncated]"
-        self.push_record({"role": "tool", "tool_call_id": call_id, "content": text})
+        self.push_record({"role": "tool", "tool_call_id": call_id, "name": name, "content": text})
 
     # ------------------------------------------------------------------
     # Confirm gate plumbing (called by the runtime).

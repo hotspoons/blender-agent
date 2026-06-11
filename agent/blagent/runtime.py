@@ -24,7 +24,7 @@ from .agent_tools import ContinueWorkingTool, MediaTool, SkillsTool
 from .engine import AgentEngine
 from .llm import LlmClient, LlmError, LocalLlmBridgeClient, OpenAiHttpClient
 from .media import MediaLibrary
-from .store import AgentStore
+from .store import AgentStore, SessionBusyError
 from .tools import Tool, ToolRegistry
 from .local_llm import LocalLlmBridge
 
@@ -108,7 +108,11 @@ class AgentRuntime:
         media = MediaLibrary(os.path.join(self.store.session_dir(session_id), "media"))
 
         def _append_record(record: dict[str, Any], _sid: str = session_id) -> None:
-            self.store.append_record(_sid, record)
+            # append_record returns the re-read transcript: with two
+            # agent windows on one session (multiple Blender instances
+            # sharing a data dir), the on-disk file is the merge point.
+            # Adopting it after every write folds in foreign appends.
+            engine.records[:] = self.store.append_record(_sid, record)
 
         engine = AgentEngine(
             registry=self.registry,
@@ -131,7 +135,13 @@ class AgentRuntime:
         return self.store.list_sessions()
 
     def session_records(self, session_id: str) -> list[dict[str, Any]]:
-        return self._get_or_load_session(session_id).engine.records
+        session = self._get_or_load_session(session_id)
+        # Re-sync from disk when idle so a second window's appends show
+        # up; a running turn keeps its in-memory view (it converges on
+        # its own next write).
+        if not session.busy:
+            session.engine.records[:] = self.store.load_records(session_id)
+        return session.engine.records
 
     def session_media(self, session_id: str) -> list[dict[str, object]]:
         return self._get_or_load_session(session_id).media.list_public()
@@ -200,10 +210,44 @@ class AgentRuntime:
                     autonomy=turn_autonomy,
                     max_rounds=config.max_rounds,
                     media_ids=media_ids,
+                    context_tokens=config.context_tokens,
                 )
+                # Between-turns compaction: one bounded request that
+                # summarizes the older history when the projection has
+                # outgrown the budget. Failures only mean the guard-rail
+                # trimming carries the load next turn.
+                #
+                # The session lock is held for the whole step (it spans
+                # an LLM request): the summary's covers_count indexes
+                # into the transcript, so a foreign window appending
+                # mid-summarization would corrupt the coverage. A short
+                # timeout means we simply skip compaction when another
+                # window is active - never block its turn.
+                try:
+                    with self.store.session_lock(session_id, timeout=1.0):
+                        session.engine.records[:] = self.store.load_records(session_id)
+                        if await session.engine.maybe_compact(llm, model, config.context_tokens):
+                            await self.emit({"type": "compacted", "session_id": session_id})
+                except SessionBusyError:
+                    _log.info("compaction skipped session=%s: held by another window", session_id)
+                except Exception as ex:  # pylint: disable=broad-exception-caught
+                    _log.warning("compaction failed session=%s: %s", session_id, ex)
             except asyncio.CancelledError:
                 await self.emit({"type": "turn_done", "session_id": session_id, "aborted": True})
                 raise
+            except SessionBusyError as ex:
+                # Lost a lock race against another window on the same
+                # session (e.g. it was holding the long compaction
+                # lock). Nothing is corrupted - the record that could
+                # not be appended is dropped with an explicit error.
+                _log.warning("session lock contention session=%s: %s", session_id, ex)
+                await self.emit({
+                    "type": "error",
+                    "session_id": session_id,
+                    "message": "another agent window is writing to this session - "
+                               "please retry in a moment",
+                })
+                await self.emit({"type": "turn_done", "session_id": session_id})
             except LlmError as ex:
                 _log.error("turn failed session=%s: %s", session_id, ex)
                 await self.emit({"type": "error", "session_id": session_id, "message": str(ex)})
@@ -249,5 +293,7 @@ class AgentRuntime:
             config.use_local_llm = bool(updates["use_local_llm"])
         if "max_rounds" in updates:
             config.max_rounds = max(1, int(updates["max_rounds"]))
+        if "context_tokens" in updates:
+            config.context_tokens = max(2_048, int(updates["context_tokens"]))
         self.store.save_config()
         return config.as_public()
