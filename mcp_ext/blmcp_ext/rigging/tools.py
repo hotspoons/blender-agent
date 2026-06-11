@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-``rigging_*`` MCP tools. Each composes Python that runs inside the
-connected Blender (where ``blrig`` does the geometry); the server side
-only validates inputs and ships code over the bridge.
+The single polymorphic ``rig`` MCP tool: one entry point, verb-dispatched,
+so the rigging domain costs ONE tool definition in the model's context
+instead of five. The server side validates inputs and ships code over the
+bridge; ``blrig`` (inside Blender) does the geometry.
 """
 
 __all__ = (
@@ -19,14 +20,17 @@ from mcp.types import ToolAnnotations  # pylint: disable=import-error,no-name-in
 from . import BLRIG_PARENT_DIR
 
 _SKILLS = (
+    "rig_chain",
+    "rig_rigid_assembly",
     "rig_hinge",
     "rig_piston",
     "rig_wheel",
     "rig_turret",
-    "rig_rigid_assembly",
     "rig_biped_rigify",
     "rig_quadruped_rigify",
 )
+
+_VERBS = ("inspect", "diagnose", "run", "verify", "validate")
 
 _BOOTSTRAP = (
     "import sys\n"
@@ -35,152 +39,104 @@ _BOOTSTRAP = (
 ).format(path=BLRIG_PARENT_DIR)
 
 
-def _skill_call(stage: str, skill: str, ctx: dict, params: dict | None) -> dict[str, object]:
-    if skill not in _SKILLS:
-        return {"error": "unknown skill {!r}; valid: {!r}".format(skill, list(_SKILLS))}
-    if stage == "verify":
-        call = "_mod.verify(_ctx)"
-    else:
-        call = "_mod.{:s}(_ctx, {!r})".format(stage, params)
-    code = _BOOTSTRAP + (
-        "from blrig import skills as _skills\n"
-        "_mod = _skills.get_skill({skill!r})\n"
-        "_ctx = {ctx!r}\n"
-        "result = {{'report': {call:s}, 'ctx': _ctx}}\n"
-    ).format(skill=skill, ctx=ctx, call=call)
-    return send_code(code, strict_json=False)
+def _error(message: str) -> dict[str, object]:
+    return {"error": message}
+
+
+def _code_for(verb: str, args: dict) -> dict[str, object] | str:
+    """
+    Validate (verb, args) and compose the in-Blender code, or return an
+    error dict the model can act on.
+    """
+    objects = args.get("objects")
+    skill = args.get("skill")
+    params = args.get("params")
+
+    if verb == "inspect":
+        if not isinstance(objects, list) or not objects:
+            return _error("inspect needs args={'objects': [mesh names]}")
+        return _BOOTSTRAP + (
+            "from blrig.skills import inspect_scene as _i\n"
+            "result = _i.inspect({objects!r}, contact_tolerance={tol!r})\n"
+        ).format(objects=objects, tol=args.get("contact_tolerance"))
+
+    if verb == "validate":
+        armature = args.get("armature")
+        if not armature:
+            return _error("validate needs args={'armature': name}")
+        return _BOOTSTRAP + (
+            "import bpy\n"
+            "from blrig import standard as _std\n"
+            "result = _std.validate_rig(bpy.data.objects.get({armature!r}))\n"
+        ).format(armature=armature)
+
+    if verb in ("diagnose", "run"):
+        if skill not in _SKILLS:
+            return _error("unknown skill {!r}; valid: {!r}".format(skill, list(_SKILLS)))
+        if not isinstance(objects, list) or not objects:
+            return _error("{:s} needs args={{'skill', 'objects': [names], 'params'?}}".format(verb))
+        ctx = {"objects": objects}
+        return _BOOTSTRAP + (
+            "from blrig import skills as _skills\n"
+            "_mod = _skills.get_skill({skill!r})\n"
+            "_ctx = {ctx!r}\n"
+            "result = {{'report': _mod.{verb:s}(_ctx, {params!r}), 'ctx': _ctx}}\n"
+        ).format(skill=skill, ctx=ctx, verb=verb, params=params)
+
+    if verb == "verify":
+        if skill not in _SKILLS:
+            return _error("unknown skill {!r}; valid: {!r}".format(skill, list(_SKILLS)))
+        armature = args.get("armature")
+        if not armature:
+            return _error("verify needs args={'skill', 'armature', 'objects'?}")
+        ctx = {"objects": objects or [], "armature": armature}
+        return _BOOTSTRAP + (
+            "from blrig import skills as _skills\n"
+            "_mod = _skills.get_skill({skill!r})\n"
+            "_ctx = {ctx!r}\n"
+            "result = {{'report': _mod.verify(_ctx), 'ctx': _ctx}}\n"
+        ).format(skill=skill, ctx=ctx)
+
+    return _error("unknown verb {!r}; valid: {!r}".format(verb, list(_VERBS)))
 
 
 def register(mcp: FastMCP) -> None:
     @mcp.tool(
         annotations=ToolAnnotations(
-            title="Rigging: Inspect Geometry",
-            readOnlyHint=True,
-        )
-    )
-    def rigging_inspect(objects: list[str]) -> dict[str, object]:
-        """
-        Geometric perception over the named mesh objects, read-only: mesh
-        health (gates every rigging skill), loose-part decomposition,
-        bilateral-symmetry estimate per object, and the contact graph
-        between them. Use this FIRST to pick a rigging skill: elongated
-        two-part contact -> rig_hinge; disc-like part -> rig_wheel; coaxial
-        rods -> rig_piston; base/platform/member stack -> rig_turret; many
-        parts / unknown -> rig_rigid_assembly; symmetric organic ->
-        rig_biped_rigify / rig_quadruped_rigify.
-
-        Read the `rigging-overview` skill (skills_read) for the decision
-        table and failure codes. Run `welcome` first if you have not.
-        """
-        code = _BOOTSTRAP + (
-            "import bpy\n"
-            "from blrig import perception as _p\n"
-            "_objs = {objects!r}\n"
-            "_out = {{'objects': {{}}, 'contact_graph': None, 'missing': []}}\n"
-            "_found = []\n"
-            "for _name in _objs:\n"
-            "    _o = bpy.data.objects.get(_name)\n"
-            "    if _o is None or _o.type != 'MESH':\n"
-            "        _out['missing'].append(_name)\n"
-            "        continue\n"
-            "    _found.append(_o)\n"
-            "    _parts = _p.loose_parts(_o)\n"
-            "    for _part in _parts:\n"
-            "        del _part['vert_indices']\n"
-            "    _sym = _p.symmetry_plane(_o)\n"
-            "    _sym.pop('candidates', None)\n"
-            "    _out['objects'][_name] = {{\n"
-            "        'health': _p.mesh_health(_o),\n"
-            "        'obb': _p.part_obb(_o),\n"
-            "        'loose_parts': _parts,\n"
-            "        'symmetry': _sym,\n"
-            "    }}\n"
-            "if len(_found) > 1:\n"
-            "    _out['contact_graph'] = _p.contact_graph(_found)\n"
-            "result = _out\n"
-        ).format(objects=objects)
-        return send_code(code, strict_json=False)
-
-    @mcp.tool(
-        annotations=ToolAnnotations(
-            title="Rigging: Diagnose (precondition check)",
-            readOnlyHint=True,
-        )
-    )
-    def rigging_diagnose(skill: str, objects: list[str],
-                         params: dict | None = None) -> dict[str, object]:
-        """
-        Dry-run precondition check for a rigging skill — never mutates the
-        scene. Returns the deterministic plan (axes, pivots, part roles) on
-        success, or a structured failure with a machine-readable code and a
-        `suggest` field (e.g. unhealthy_mesh, no_contact, ambiguous_axis,
-        not_a_wheel, asymmetric). ALWAYS act on `suggest` rather than
-        forcing parameters.
-
-        Skills: rig_hinge, rig_piston, rig_wheel, rig_turret,
-        rig_rigid_assembly, rig_biped_rigify, rig_quadruped_rigify.
-        Params are semantic only (see the rigging skills via skills_read).
-        """
-        return _skill_call("diagnose", skill, {"objects": objects}, params)
-
-    @mcp.tool(
-        annotations=ToolAnnotations(
-            title="Rigging: Run Skill",
+            title="Rig (deterministic rigging toolset)",
             destructiveHint=True,
         )
     )
-    def rigging_run(skill: str, objects: list[str],
-                    params: dict | None = None) -> dict[str, object]:
+    def rig(verb: str, args: dict) -> dict[str, object]:
         """
-        Execute a rigging skill: builds the armature, constraints and
-        skinning for the named objects. Rolls back cleanly on failure (a
-        failed run never corrupts the scene). The returned ctx carries the
-        created armature name — pass it to rigging_verify, ALWAYS, before
-        reporting success.
+        Deterministic rigging for ANY model — creatures, vehicles, robots,
+        props. You pick a verb and a skill; coordinate-level decisions
+        (axes, pivots, weights) are computed from the geometry. One tool,
+        verb-dispatched:
 
-        Run rigging_diagnose first when unsure; run() re-checks the same
-        preconditions and fails with the same structured codes.
-        """
-        return _skill_call("run", skill, {"objects": objects}, params)
+        - rig("inspect", {objects: [names]}) — READ-ONLY first step:
+          health, parts, symmetry, contacts, disconnected groups with
+          their gaps, and `suggested` skills WITH ready-to-use params.
+        - rig("diagnose", {skill, objects, params?}) — dry-run check;
+          returns the plan, or a failure code + `suggest` (act on it).
+        - rig("run", {skill, objects, params?}) — build the rig (armature,
+          constraints, skinning); rolls back cleanly on failure.
+        - rig("verify", {skill, armature, objects?}) — REQUIRED before
+          reporting success: pose-tests the rig through the depsgraph.
+        - rig("validate", {armature}) — rig-standard report for any
+          armature, including imported/hand-built ones.
 
-    @mcp.tool(
-        annotations=ToolAnnotations(
-            title="Rigging: Verify Rig",
-            readOnlyHint=True,
-        )
-    )
-    def rigging_verify(skill: str, armature: str,
-                       objects: list[str] | None = None) -> dict[str, object]:
-        """
-        Postcondition check for a rig produced by rigging_run: standard
-        compliance (validate_rig), weight validity, and skill-specific pose
-        tests through the real depsgraph (does the hinge hinge, does the
-        fixed part stay put, do limits clamp, does the character deform
-        without volume collapse). The pose is reset afterwards.
+        Skills: rig_chain (ORDERED parts -> ball/hinge joint chain;
+        bridges clearance gaps; `armature` param composes chains into an
+        existing rig — spider legs, robot arms, landing gear),
+        rig_rigid_assembly (any pile of parts; `contact_tolerance`,
+        `bridge_gaps`), rig_hinge, rig_piston, rig_wheel, rig_turret,
+        rig_biped_rigify, rig_quadruped_rigify.
 
-        "Technically valid" is not "deforms acceptably" — only report a rig
-        as done after this passes.
+        Typical flow: inspect -> follow `suggested` -> diagnose -> run ->
+        verify. Param/failure-code reference: skills_read("rigging-overview").
         """
-        ctx = {"objects": objects or [], "armature": armature}
-        return _skill_call("verify", skill, ctx, None)
-
-    @mcp.tool(
-        annotations=ToolAnnotations(
-            title="Rigging: Validate Against Standard",
-            readOnlyHint=True,
-        )
-    )
-    def rigging_validate_rig(armature: str) -> dict[str, object]:
-        """
-        Validate any armature (including hand-built or imported ones)
-        against the rig standard: naming prefixes (DEF/CTL/MCH), single
-        root, deform/control separation, zero-length bones, side pairing.
-        Returns machine-readable errors/warnings per rule.
-        """
-        code = _BOOTSTRAP + (
-            "import bpy\n"
-            "from blrig import standard as _std\n"
-            "_o = bpy.data.objects.get({armature!r})\n"
-            "result = _std.validate_rig(_o)\n"
-        ).format(armature=armature)
+        code = _code_for(str(verb), args if isinstance(args, dict) else {})
+        if isinstance(code, dict):
+            return code
         return send_code(code, strict_json=False)

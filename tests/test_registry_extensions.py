@@ -41,9 +41,9 @@ class TestRegistry(unittest.TestCase):
         mcp = FastMCP("test")
         register_all_tools(mcp)
         names = _tool_names(mcp)
-        for expected in ("rigging_inspect", "rigging_diagnose", "rigging_run",
-                         "rigging_verify", "rigging_validate_rig"):
-            self.assertIn(expected, names)
+        # One polymorphic tool for the whole domain, not five.
+        self.assertIn("rig", names)
+        self.assertFalse([n for n in names if n.startswith("rigging_")])
 
     def test_welcome_nudge_applied(self) -> None:
         mcp = FastMCP("test")

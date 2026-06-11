@@ -48,9 +48,10 @@ tuned to how these tools are designed to be used together.
 
 ## Extensions
 
-Optional tools extensions may add domain toolsets (e.g. `rigging_*`
-tools for deterministic rigging: perception queries, diagnose/run/verify
-skill contracts). Extension tools come with matching skills — when you
-see both, read the skill first; it documents when each tool applies and
-the failure codes it can return. Prefer an extension's purpose-built
-tools over hand-writing the same logic in `execute_blender_code`.
+Optional tools extensions add domain toolsets as SINGLE polymorphic
+tools (e.g. `rig(verb, args)` for deterministic rigging of creatures,
+vehicles, robots and props: inspect/diagnose/run/verify/validate).
+Extension tools come with matching skills — when you see both, read the
+skill first; it documents the verbs, params and failure codes. ALWAYS
+prefer an extension's purpose-built tool over hand-writing the same
+logic in `execute_blender_code`.

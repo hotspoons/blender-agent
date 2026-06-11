@@ -26,6 +26,7 @@ import importlib
 
 # Skill name -> module path. Populated as skills land.
 _SKILLS = {
+    "rig_chain": "blrig.skills.rig_chain",
     "rig_hinge": "blrig.skills.rig_hinge",
     "rig_piston": "blrig.skills.rig_piston",
     "rig_wheel": "blrig.skills.rig_wheel",

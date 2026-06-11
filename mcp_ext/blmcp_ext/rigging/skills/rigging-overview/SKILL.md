@@ -1,55 +1,77 @@
 ---
 name: rigging-overview
-description: How to rig anything in Blender with the rigging_* tools — skill selection decision table, the diagnose/run/verify contract, structured failure codes and what to do about each.
+description: How to rig ANYTHING in Blender with the rig(verb, args) tool — creatures with any number of legs, vehicles, robots, props. Decision table, gap bridging, the diagnose/run/verify contract, and every failure code with its fix.
 ---
 
-# Rigging with the deterministic rigging toolset
+# Rigging with the deterministic rigging tool
 
-The `rigging_*` tools rig models WITHOUT you doing spatial reasoning: you
-select a skill and pass semantic parameters; deterministic geometry code
-inside Blender picks every coordinate. Never compute bone positions
-yourself when one of these applies.
+ONE tool covers the whole domain: `rig(verb, args)`. You select a skill
+and pass semantic parameters; deterministic geometry code inside Blender
+computes every coordinate. Never compute bone positions yourself, and
+never hand-build armatures via `execute_blender_code` for cases below.
 
 ## Workflow (always this order)
 
-1. `rigging_inspect(objects=[...])` — health, parts, symmetry, contacts.
-2. Pick the skill from the table below.
-3. `rigging_diagnose(skill, objects, params)` — dry-run; read the plan.
-4. `rigging_run(skill, objects, params)` — builds armature + skinning.
-5. `rigging_verify(skill, armature)` — REQUIRED before reporting success.
+1. `rig("inspect", {"objects": [...]})` — read-only. Returns health,
+   parts, symmetry, contacts, disconnected groups WITH their gaps, and
+   `suggested`: ranked skills with ready-to-use params. START HERE.
+2. `rig("diagnose", {"skill": ..., "objects": [...], "params": {...}})`
+   — dry-run; read the plan or the failure code.
+3. `rig("run", {...same...})` — builds the rig; rolls back on failure.
+4. `rig("verify", {"skill": ..., "armature": ...})` — REQUIRED before
+   reporting success.
 
 ## Skill selection
 
-| Situation (from rigging_inspect) | Skill |
+| Situation (from inspect) | Skill |
 |---|---|
-| 2 parts, elongated contact region (door/lid/jaw/flap) | `rig_hinge` |
-| 2 rod-like coaxial parts that slide/extend | `rig_piston` |
-| 1 disc-like part that should spin (wheel/gear/fan/dial) | `rig_wheel` |
-| 3-part aiming stack: base, rotating platform, elevating member | `rig_turret` |
-| Any other pile of rigid parts; one mesh with many loose parts | `rig_rigid_assembly` |
-| Symmetric standing humanoid | `rig_biped_rigify` |
-| Symmetric four-legged creature | `rig_quadruped_rigify` |
+| ORDERED segments forming a limb/arm/tail/boom — touching or not | `rig_chain` |
+| Any pile of rigid parts; one mesh with many loose parts; creature with N legs | `rig_rigid_assembly` |
+| 2 parts, elongated contact (door/lid/jaw) | `rig_hinge` |
+| 2 rod-like coaxial parts that slide | `rig_piston` |
+| 1 disc-like part that spins (wheel/gear/fan/prop) | `rig_wheel` |
+| base + rotating platform + elevating member | `rig_turret` |
+| symmetric standing humanoid | `rig_biped_rigify` |
+| symmetric four-legged character | `rig_quadruped_rigify` |
 
-Anti-patterns: do NOT use rig_hinge for face-on-face stacked parts
-(ambiguous axis — assembly is the general tool); do NOT use character
-skills on mechanical models; do NOT hand-write armature code via
-execute_blender_code for cases the table covers.
+**Multi-legged creatures (spiders, crabs, hexapod robots):**
+`rig_rigid_assembly` with `bridge_gaps` rigs the whole thing in one call —
+each leg chain keeps its internal joints and attaches to the body across
+modeled clearance gaps. For precise per-joint control instead, rig the
+body first, then each leg with `rig_chain` passing `armature` so all
+chains compose into ONE rig.
+
+**Vehicles (cars, planes):** `rig_rigid_assembly` for the body/chassis,
+`rig_wheel` per wheel/propeller, `rig_hinge` for doors/control surfaces,
+`rig_piston` for suspension/gear struts, `rig_chain` for landing-gear
+linkages — chains and re-runs compose via the `armature` param.
+
+## Gaps and tolerances (parts that don't touch)
+
+Models are often built with clearance — nothing touches. Two levers:
+
+- `contact_tolerance` (assembly/chain/hinge): max distance that still
+  counts as touching. Default 0.1% of the assembly size.
+- `bridge_gaps` (assembly): attach whole disconnected groups with a free
+  ball joint at the nearest-pair midpoint. The result's
+  `floating_detail` lists every unattached group's nearest part and gap
+  — the right value is one rerun away. `rig_chain` bridges automatically
+  (the part order already says they connect).
 
 ## Failure codes (act on `suggest`, don't force)
 
 | code | meaning | usual action |
 |---|---|---|
-| `unhealthy_mesh` | unapplied scale, junk geometry | apply scale / clean, or relay to user; `ignore_health` only if user insists |
-| `no_contact` | parts never touch | check object names; rig_rigid_assembly handles floating parts |
-| `ambiguous_axis` | contact is face-like | pass `axis_hint: "x"/"y"/"z"` from user intent |
-| `not_a_wheel` | part isn't disc-like | wrong skill — reconsider, or `axis_hint` if it really must spin |
-| `not_coaxial` / `not_elongated` | not a piston pair | likely rig_hinge or rig_rigid_assembly |
-| `no_chain` | turret parts don't touch in order | ctx order must be [base, yaw, pitch] |
-| `asymmetric` | character isn't bilaterally symmetric | tell the user; `ignore_symmetry` only on their say-so |
-| `bone_heat_failed` | automatic weights found no solution | mesh needs manifold repair (see make-manifold skill) |
-| `verify_failed` | rig built but behaves wrong | read `checks`, report the failing check; do not ship the rig |
+| `unhealthy_mesh` | unapplied scale, junk geometry | apply scale / clean; `ignore_health` only if the user insists |
+| `no_contact` | hinge/turret parts never touch | use rig_chain (bridges) or assembly `bridge_gaps` |
+| `ambiguous_axis` | contact/segments give no hinge axis | pass `axis_hint` / `hinge_axis_hint` |
+| `not_a_wheel` / `not_coaxial` / `not_elongated` | wrong skill for the shape | follow `suggest` |
+| `no_chain` | turret order wrong | objects = [base, platform, member] |
+| `asymmetric` | character not bilaterally symmetric | tell the user; `ignore_symmetry` on their say-so |
+| `bone_heat_failed` | auto-weights found no solution | repair mesh (make-manifold skill) or rig as parts |
+| `bone_exists` | chain composed twice into one armature | pick different part set / armature |
+| `verify_failed` | rig built but moves wrong | read `checks`; do not ship |
 
-Every run is rolled back on failure — a failed attempt leaves the scene
-clean, so trying a different skill afterwards is safe.
+Failed runs roll back — retrying a different skill is always safe.
 
 See also: `rigging-mechanical`, `rigging-characters`, `rigging-standard`.

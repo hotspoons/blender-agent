@@ -15,8 +15,8 @@ normalization. Nothing is reimplemented; nothing is eyeballed.
 One symmetric, standing (Z-up) humanoid mesh.
 
 ```
-rigging_run(skill="rig_biped_rigify", objects=["Hero"])
-rigging_verify(skill="rig_biped_rigify", armature="Rig.Biped")
+rig("run", {"skill": "rig_biped_rigify", "objects": ["Hero"]})
+rig("verify", {"skill": "rig_biped_rigify", "armature": "Rig.Biped"})
 ```
 
 Params: `name` (default "Rig.Biped"), `metarig` ("human" full-featured

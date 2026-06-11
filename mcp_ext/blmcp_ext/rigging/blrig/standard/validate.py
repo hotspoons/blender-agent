@@ -176,7 +176,8 @@ def validate_weights(mesh_obj: bpy.types.Object, armature_obj: bpy.types.Object,
     Validate the skinning of *mesh_obj* against *armature_obj*.
 
     Errors: ``E_NOT_MESH``, ``E_NO_ARMATURE_MODIFIER``, ``E_NON_DEFORM_GROUP``
-    (vertex group naming a bone that is not a deform bone),
+    (vertex group naming a bone that is not a deform bone), ``E_NO_DEFORM_GROUPS``
+    (bound mesh with no deform groups at all),
     ``E_UNNORMALIZED`` (vertices whose deform weights don't sum to ~1),
     ``E_UNWEIGHTED`` (vertices with no deform weight at all).
     """
@@ -206,6 +207,15 @@ def validate_weights(mesh_obj: bpy.types.Object, armature_obj: bpy.types.Object,
 
     deform_group_indices = {
         g.index for g in mesh_obj.vertex_groups if g.name in deform_names}
+    if has_mod and deform_names and not deform_group_indices:
+        # An armature-bound mesh with no deform vertex groups at all is
+        # not skinned — it silently won't move. (This used to slip
+        # through because the per-vertex checks are gated on the groups
+        # existing.)
+        errors.append(_finding(
+            "E_NO_DEFORM_GROUPS", [],
+            "mesh is bound to the armature but has no vertex groups for "
+            "any deform bone"))
     unweighted = 0
     unnormalized = 0
     for v in mesh_obj.data.vertices:

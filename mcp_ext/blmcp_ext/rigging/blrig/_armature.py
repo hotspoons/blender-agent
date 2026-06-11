@@ -10,9 +10,11 @@ helpers own that state dance so nothing else has to (headless-safe).
 """
 
 __all__ = (
+    "add_bones",
     "build_armature",
     "edit_bones",
     "ensure_bone_collections",
+    "remove_bones",
 )
 
 import contextlib
@@ -69,16 +71,43 @@ def build_armature(name: str, bone_specs: list[dict], link: bool = True) -> bpy.
         bpy.context.scene.collection.objects.link(obj)
 
     with edit_bones(obj) as ebones:
-        for spec in bone_specs:
-            eb = ebones.new(spec["name"])
-            eb.head = spec["head"]
-            eb.tail = spec["tail"]
-            eb.roll = spec.get("roll", 0.0)
-            eb.use_deform = spec.get("use_deform", False)
-            parent = spec.get("parent")
-            if parent is not None:
-                eb.parent = ebones[parent]
-                eb.use_connect = spec.get("connect", False)
+        _create_bones(ebones, bone_specs)
 
     ensure_bone_collections(obj)
     return obj
+
+
+def _create_bones(ebones, bone_specs: list[dict]) -> None:
+    for spec in bone_specs:
+        eb = ebones.new(spec["name"])
+        eb.head = spec["head"]
+        eb.tail = spec["tail"]
+        eb.roll = spec.get("roll", 0.0)
+        eb.use_deform = spec.get("use_deform", False)
+        parent = spec.get("parent")
+        if parent is not None:
+            eb.parent = ebones[parent]
+            eb.use_connect = spec.get("connect", False)
+
+
+def add_bones(obj: bpy.types.Object, bone_specs: list[dict]) -> list[str]:
+    """
+    Add *bone_specs* to an EXISTING armature (chains composing into a
+    larger rig). Parents may be pre-existing bones. Returns the created
+    bone names (for rollback).
+    """
+    with edit_bones(obj) as ebones:
+        _create_bones(ebones, bone_specs)
+    ensure_bone_collections(obj)
+    return [spec["name"] for spec in bone_specs]
+
+
+def remove_bones(obj: bpy.types.Object, names: list[str]) -> None:
+    """
+    Remove bones by name (rollback path for :func:`add_bones`).
+    """
+    with edit_bones(obj) as ebones:
+        for name in names:
+            eb = ebones.get(name)
+            if eb is not None:
+                ebones.remove(eb)

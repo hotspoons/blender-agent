@@ -135,6 +135,13 @@ class Rollback:
         self._actions.append(("vgroup", obj.name, group.name))
         return group
 
+    def track_bones(self, obj: bpy.types.Object, names: list[str]) -> None:
+        """
+        Bones added to a PRE-EXISTING armature (a chain composing into a
+        larger rig) — removed by name on undo.
+        """
+        self._actions.append(("bones", obj.name, tuple(names)))
+
     def track_constraint(self, pose_bone, con) -> object:
         self._actions.append(("constraint", pose_bone.id_data.name, pose_bone.name, con.name))
         return con
@@ -187,6 +194,11 @@ class Rollback:
                     con = pb.constraints.get(action[3])
                     if con is not None:
                         pb.constraints.remove(con)
+        elif kind == "bones":
+            obj = bpy.data.objects.get(action[1])
+            if obj is not None and obj.type == "ARMATURE":
+                from .. import _armature
+                _armature.remove_bones(obj, list(action[2]))
         elif kind == "parent":
             obj = bpy.data.objects.get(action[1])
             if obj is not None:

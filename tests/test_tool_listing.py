@@ -805,198 +805,52 @@ EXPECTED_TOOLS = [
         }
     },
     {
-        "name": "rigging_inspect",
+        "name": "rig",
         "description": "\n"
-        "        Geometric perception over the named mesh objects, read-only: mesh\n"
-        "        health (gates every rigging skill), loose-part decomposition,\n"
-        "        bilateral-symmetry estimate per object, and the contact graph\n"
-        "        between them. Use this FIRST to pick a rigging skill: elongated\n"
-        "        two-part contact -> rig_hinge; disc-like part -> rig_wheel; coaxial\n"
-        "        rods -> rig_piston; base/platform/member stack -> rig_turret; many\n"
-        "        parts / unknown -> rig_rigid_assembly; symmetric organic ->\n"
-        "        rig_biped_rigify / rig_quadruped_rigify.\n"
+        "        Deterministic rigging for ANY model \u2014 creatures, vehicles, robots,\n"
+        "        props. You pick a verb and a skill; coordinate-level decisions\n"
+        "        (axes, pivots, weights) are computed from the geometry. One tool,\n"
+        "        verb-dispatched:\n"
         "\n"
-        "        Read the `rigging-overview` skill (skills_read) for the decision\n"
-        "        table and failure codes. Run `welcome` first if you have not.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "objects": {
-                    "items": {
-                        "type": "string"
-                    },
-                    "title": "Objects",
-                    "type": "array"
-                }
-            },
-            "required": [
-                "objects"
-            ],
-            "title": "rigging_inspectArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "rigging_diagnose",
-        "description": "\n"
-        "        Dry-run precondition check for a rigging skill \u2014 never mutates the\n"
-        "        scene. Returns the deterministic plan (axes, pivots, part roles) on\n"
-        "        success, or a structured failure with a machine-readable code and a\n"
-        "        `suggest` field (e.g. unhealthy_mesh, no_contact, ambiguous_axis,\n"
-        "        not_a_wheel, asymmetric). ALWAYS act on `suggest` rather than\n"
-        "        forcing parameters.\n"
+        "        - rig(\"inspect\", {objects: [names]}) \u2014 READ-ONLY first step:\n"
+        "          health, parts, symmetry, contacts, disconnected groups with\n"
+        "          their gaps, and `suggested` skills WITH ready-to-use params.\n"
+        "        - rig(\"diagnose\", {skill, objects, params?}) \u2014 dry-run check;\n"
+        "          returns the plan, or a failure code + `suggest` (act on it).\n"
+        "        - rig(\"run\", {skill, objects, params?}) \u2014 build the rig (armature,\n"
+        "          constraints, skinning); rolls back cleanly on failure.\n"
+        "        - rig(\"verify\", {skill, armature, objects?}) \u2014 REQUIRED before\n"
+        "          reporting success: pose-tests the rig through the depsgraph.\n"
+        "        - rig(\"validate\", {armature}) \u2014 rig-standard report for any\n"
+        "          armature, including imported/hand-built ones.\n"
         "\n"
-        "        Skills: rig_hinge, rig_piston, rig_wheel, rig_turret,\n"
-        "        rig_rigid_assembly, rig_biped_rigify, rig_quadruped_rigify.\n"
-        "        Params are semantic only (see the rigging skills via skills_read).\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "skill": {
-                    "title": "Skill",
-                    "type": "string"
-                },
-                "objects": {
-                    "items": {
-                        "type": "string"
-                    },
-                    "title": "Objects",
-                    "type": "array"
-                },
-                "params": {
-                    "anyOf": [
-                        {
-                            "additionalProperties": True,
-                            "type": "object"
-                        },
-                        {
-                            "type": "null"
-                        }
-                    ],
-                    "default": None,
-                    "title": "Params"
-                }
-            },
-            "required": [
-                "skill",
-                "objects"
-            ],
-            "title": "rigging_diagnoseArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "rigging_run",
-        "description": "\n"
-        "        Execute a rigging skill: builds the armature, constraints and\n"
-        "        skinning for the named objects. Rolls back cleanly on failure (a\n"
-        "        failed run never corrupts the scene). The returned ctx carries the\n"
-        "        created armature name \u2014 pass it to rigging_verify, ALWAYS, before\n"
-        "        reporting success.\n"
+        "        Skills: rig_chain (ORDERED parts -> ball/hinge joint chain;\n"
+        "        bridges clearance gaps; `armature` param composes chains into an\n"
+        "        existing rig \u2014 spider legs, robot arms, landing gear),\n"
+        "        rig_rigid_assembly (any pile of parts; `contact_tolerance`,\n"
+        "        `bridge_gaps`), rig_hinge, rig_piston, rig_wheel, rig_turret,\n"
+        "        rig_biped_rigify, rig_quadruped_rigify.\n"
         "\n"
-        "        Run rigging_diagnose first when unsure; run() re-checks the same\n"
-        "        preconditions and fails with the same structured codes.\n"
+        "        Typical flow: inspect -> follow `suggested` -> diagnose -> run ->\n"
+        "        verify. Param/failure-code reference: skills_read(\"rigging-overview\").\n"
         "        ",
         "inputSchema": {
             "properties": {
-                "skill": {
-                    "title": "Skill",
+                "verb": {
+                    "title": "Verb",
                     "type": "string"
                 },
-                "objects": {
-                    "items": {
-                        "type": "string"
-                    },
-                    "title": "Objects",
-                    "type": "array"
-                },
-                "params": {
-                    "anyOf": [
-                        {
-                            "additionalProperties": True,
-                            "type": "object"
-                        },
-                        {
-                            "type": "null"
-                        }
-                    ],
-                    "default": None,
-                    "title": "Params"
+                "args": {
+                    "additionalProperties": True,
+                    "title": "Args",
+                    "type": "object"
                 }
             },
             "required": [
-                "skill",
-                "objects"
+                "verb",
+                "args"
             ],
-            "title": "rigging_runArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "rigging_verify",
-        "description": "\n"
-        "        Postcondition check for a rig produced by rigging_run: standard\n"
-        "        compliance (validate_rig), weight validity, and skill-specific pose\n"
-        "        tests through the real depsgraph (does the hinge hinge, does the\n"
-        "        fixed part stay put, do limits clamp, does the character deform\n"
-        "        without volume collapse). The pose is reset afterwards.\n"
-        "\n"
-        "        \"Technically valid\" is not \"deforms acceptably\" \u2014 only report a rig\n"
-        "        as done after this passes.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "skill": {
-                    "title": "Skill",
-                    "type": "string"
-                },
-                "armature": {
-                    "title": "Armature",
-                    "type": "string"
-                },
-                "objects": {
-                    "anyOf": [
-                        {
-                            "items": {
-                                "type": "string"
-                            },
-                            "type": "array"
-                        },
-                        {
-                            "type": "null"
-                        }
-                    ],
-                    "default": None,
-                    "title": "Objects"
-                }
-            },
-            "required": [
-                "skill",
-                "armature"
-            ],
-            "title": "rigging_verifyArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "rigging_validate_rig",
-        "description": "\n"
-        "        Validate any armature (including hand-built or imported ones)\n"
-        "        against the rig standard: naming prefixes (DEF/CTL/MCH), single\n"
-        "        root, deform/control separation, zero-length bones, side pairing.\n"
-        "        Returns machine-readable errors/warnings per rule.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "armature": {
-                    "title": "Armature",
-                    "type": "string"
-                }
-            },
-            "required": [
-                "armature"
-            ],
-            "title": "rigging_validate_rigArguments",
+            "title": "rigArguments",
             "type": "object"
         }
     }

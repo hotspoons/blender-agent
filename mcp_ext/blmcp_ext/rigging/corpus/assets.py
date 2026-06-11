@@ -233,6 +233,96 @@ def crate_stack() -> dict:
     }
 
 
+def _cylinder_between(name: str, p0, p1, radius: float,
+                      segments: int = 12) -> bpy.types.Object:
+    """
+    Capped cylinder spanning two world points (leg segments and the like).
+    """
+    p0 = Vector(p0)
+    p1 = Vector(p1)
+    span = p1 - p0
+    bm = bmesh.new()
+    bmesh.ops.create_cone(bm, cap_ends=True, cap_tris=True, segments=segments,
+                          radius1=radius, radius2=radius, depth=span.length)
+    rot = span.to_track_quat("Z", "Y").to_matrix().to_4x4()
+    bmesh.ops.transform(bm, matrix=rot, verts=bm.verts)
+    mesh = bpy.data.meshes.new(name)
+    bm.to_mesh(mesh)
+    bm.free()
+    obj = bpy.data.objects.new(name, mesh)
+    obj.location = (p0 + p1) * 0.5
+    bpy.context.scene.collection.objects.link(obj)
+    return obj
+
+
+def cartoon_spider() -> dict:
+    """
+    The production failure that motivated component bridging (2026-06-11):
+    a round body, 8 legs of 3 segments each — leg segments slightly
+    interpenetrate, but every leg clears the body by ~0.07 (modeled
+    clearance), and a "head" sphere floats far away. Zero of it touches
+    the body; all of it should still rig.
+    """
+    body_center = Vector((0.0, 0.0, 1.0))
+    body_radius = 0.55
+    bm = bmesh.new()
+    bmesh.ops.create_uvsphere(bm, u_segments=24, v_segments=12, radius=body_radius)
+    mesh = bpy.data.meshes.new("SpiderBody")
+    bm.to_mesh(mesh)
+    bm.free()
+    body = bpy.data.objects.new("SpiderBody", mesh)
+    body.location = body_center
+    bpy.context.scene.collection.objects.link(body)
+
+    gap = 0.07
+    embed = 0.03  # consecutive leg segments interpenetrate by this much
+    objects = ["SpiderBody"]
+    for i in range(8):
+        theta = math.pi * (0.18 + 0.21 * (i % 4)) * (1 if i < 4 else -1)
+        radial = Vector((math.cos(theta), math.sin(theta), 0.0))
+        attach = body_center + radial * body_radius
+
+        d_coxa = (radial + Vector((0, 0, -0.35))).normalized()
+        d_femur = (radial + Vector((0, 0, -1.4))).normalized()
+        d_tibia = (radial * 0.4 + Vector((0, 0, -1.0))).normalized()
+
+        p0 = attach + d_coxa * gap
+        p1 = p0 + d_coxa * 0.45
+        p2 = p1 - d_coxa * embed
+        p3 = p2 + d_femur * 0.6
+        p4 = p3 - d_femur * embed
+        p5 = p4 + d_tibia * 0.7
+
+        prefix = "Leg{:d}_".format(i)
+        _cylinder_between(prefix + "Coxa", p0, p1, 0.06)
+        _cylinder_between(prefix + "Femur", p2, p3, 0.05)
+        _cylinder_between(prefix + "Tibia", p4, p5, 0.04)
+        objects += [prefix + "Coxa", prefix + "Femur", prefix + "Tibia"]
+
+    bm = bmesh.new()
+    bmesh.ops.create_uvsphere(bm, u_segments=12, v_segments=8, radius=0.15)
+    mesh = bpy.data.meshes.new("SpiderHead")
+    bm.to_mesh(mesh)
+    bm.free()
+    head = bpy.data.objects.new("SpiderHead", mesh)
+    head.location = body_center + Vector((0.0, 1.0, 0.9))
+    bpy.context.scene.collection.objects.link(head)
+    objects.append("SpiderHead")
+
+    bpy.context.view_layer.update()
+    return {
+        "objects": objects,
+        "skill": "rig_rigid_assembly",
+        "truth": {
+            "n_parts": 26,
+            "n_legs": 8,
+            "body_leg_gap": gap,
+            "leg_internal_joints": 16,
+            "head_gap_at_least": 0.4,
+        },
+    }
+
+
 CORPUS = {
     "door_and_frame": door_and_frame,
     "door_and_frame_garbage": door_and_frame_garbage,
@@ -243,4 +333,5 @@ CORPUS = {
     "desk_lamp": desk_lamp,
     "desk_lamp_single_mesh": desk_lamp_single_mesh,
     "crate_stack": crate_stack,
+    "cartoon_spider": cartoon_spider,
 }

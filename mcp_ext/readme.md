@@ -32,16 +32,21 @@ skills that document when their tools apply.
 Deterministic rigging: the LLM selects and parameterizes skills, `blrig`
 (running inside Blender) owns every coordinate-level decision.
 
-| Tool | Purpose |
-|---|---|
-| `rigging_inspect` | health / loose parts / symmetry / contact graph — pick a skill from geometry |
-| `rigging_diagnose` | dry-run precondition check, structured failure codes + suggestions |
-| `rigging_run` | execute a rigging skill (rolls back cleanly on failure) |
-| `rigging_verify` | pose-test postconditions through the depsgraph |
-| `rigging_validate_rig` | validate any armature against the rig standard |
+ONE polymorphic tool — `rig(verb, args)` — keeps the model's context
+lean:
 
-Skills: `rig_hinge`, `rig_piston`, `rig_wheel`, `rig_turret`,
-`rig_rigid_assembly`, `rig_biped_rigify`, `rig_quadruped_rigify`.
+| verb | Purpose |
+|---|---|
+| `inspect` | health / parts / symmetry / contacts / gaps + suggested skills with params |
+| `diagnose` | dry-run precondition check, structured failure codes + suggestions |
+| `run` | execute a rigging skill (rolls back cleanly on failure) |
+| `verify` | pose-test postconditions through the depsgraph |
+| `validate` | validate any armature against the rig standard |
+
+Skills: `rig_chain` (ordered segments, ball/hinge joints, bridges
+clearance gaps, composes into existing rigs), `rig_rigid_assembly`
+(`contact_tolerance`/`bridge_gaps`), `rig_hinge`, `rig_piston`,
+`rig_wheel`, `rig_turret`, `rig_biped_rigify`, `rig_quadruped_rigify`.
 Bundled docs: `rigging-overview`, `rigging-mechanical`,
 `rigging-characters`, `rigging-standard`.
 

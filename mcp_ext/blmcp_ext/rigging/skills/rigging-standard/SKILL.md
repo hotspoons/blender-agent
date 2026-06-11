@@ -1,11 +1,11 @@
 ---
 name: rigging-standard
-description: The rig standard every blrig skill enforces — DEF/CTL/MCH naming, single-root hierarchy, deform/control separation — and how to validate any armature against it with rigging_validate_rig.
+description: The rig standard every blrig skill enforces — DEF/CTL/MCH naming, single-root hierarchy, deform/control separation — and how to validate any armature against it with rig("validate", {"armature": ...}).
 ---
 
 # The rig standard
 
-Every rig the rigging tools produce conforms to this; `rigging_validate_rig`
+Every rig the rigging tools produce conforms to this; `rig("validate", ...)`
 checks ANY armature (imported or hand-built too) and returns
 machine-readable findings.
 
@@ -26,7 +26,7 @@ machine-readable findings.
 ## Reading a validation report
 
 ```
-rigging_validate_rig(armature="Rig.Hinge")
+rig("validate", {"armature": "Rig.Hinge"})
 -> {"ok": true|false, "errors": [{"rule": "E_...", "bones": [...], "detail": ...}],
     "warnings": [...], "stats": {...}}
 ```

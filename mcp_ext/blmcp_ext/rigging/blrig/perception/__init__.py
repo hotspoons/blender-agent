@@ -22,13 +22,14 @@ __all__ = (
     "cross_sections",
     "loose_parts",
     "mesh_health",
+    "nearest_gap",
     "part_obb",
     "point_inside",
     "points_inside",
     "symmetry_plane",
 )
 
-from .parts import contact_graph, loose_parts
+from .parts import contact_graph, loose_parts, nearest_gap
 from .health import mesh_health
 from .interior import point_inside, points_inside
 from .obb import part_obb

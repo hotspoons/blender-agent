@@ -9,6 +9,7 @@ Connected-component decomposition and part-contact detection.
 __all__ = (
     "contact_graph",
     "loose_parts",
+    "nearest_gap",
 )
 
 import math
@@ -138,6 +139,38 @@ def _item_arrays(item) -> tuple[str, np.ndarray, np.ndarray]:
         )
     verts, tris = _mesh.mesh_arrays(item)
     return item.name, verts, tris
+
+
+def nearest_gap(item_a, item_b, max_samples: int = 2000) -> dict:
+    """
+    Closest approach between two parts: ``{"distance", "point"}`` where
+    ``point`` is the midpoint of the nearest surface pair (world space) —
+    the natural joint location when bridging parts modeled with clearance.
+    """
+    _na, verts_a, tris_a = _item_arrays(item_a)
+    _nb, verts_b, tris_b = _item_arrays(item_b)
+    if len(tris_a) == 0 or len(tris_b) == 0:
+        return {"distance": float("inf"), "point": None}
+
+    best = float("inf")
+    best_pair = None
+    for verts, other_tris, other_verts, flip in (
+            (verts_a, tris_b, verts_b, False),
+            (verts_b, tris_a, verts_a, True)):
+        bvh = _mesh.bvh_from_arrays(other_verts, other_tris)
+        stride = max(1, len(verts) // max_samples)
+        for v in verts[::stride]:
+            hit = bvh.find_nearest(tuple(v), best if best < float("inf") else 1.84e19)
+            if hit is not None and hit[0] is not None:
+                location = np.asarray(hit[0], dtype=np.float64)
+                distance = float(np.linalg.norm(v - location))
+                if distance < best:
+                    best = distance
+                    best_pair = (location, v) if flip else (v, location)
+    if best_pair is None:
+        return {"distance": float("inf"), "point": None}
+    midpoint = (best_pair[0] + best_pair[1]) * 0.5
+    return {"distance": best, "point": midpoint.tolist()}
 
 
 def contact_graph(items: list, tol: float | None = None, max_samples: int = 2000) -> dict:

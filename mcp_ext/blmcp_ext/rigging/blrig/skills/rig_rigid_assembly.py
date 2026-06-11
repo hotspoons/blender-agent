@@ -24,6 +24,15 @@ rig_wheel / rig_turret for their constraints and verification.
 params:
 - ``name``: armature name, default "Rig.Assembly".
 - ``root_part``: part name to use as the anchor; default largest volume.
+- ``contact_tolerance``: max gap (world units) for parts to count as
+  touching; default 0.1% of the assembly diagonal. Raise it when parts
+  are modeled with small clearances.
+- ``bridge_gaps``: max distance (world units) to BRIDGE disconnected
+  part groups: each group gets a free ball joint at the nearest-pair
+  midpoint to its closest already-connected part (a spider leg attaches
+  to the body by its coxa across the modeled clearance). Unbridged
+  groups float to the rig root; ``floating_detail`` in the result names
+  each one's nearest part and gap so the right value is one rerun away.
 - ``ignore_health``: accept unhealthy meshes (default False).
 """
 
@@ -107,7 +116,10 @@ def _plan(ctx: dict, params: dict | None) -> dict:
     if err is not None:
         return err
 
-    graph = perception.contact_graph([p["item"] for p in parts])
+    tolerance = params.get("contact_tolerance")
+    if tolerance is not None:
+        tolerance = float(tolerance)
+    graph = perception.contact_graph([p["item"] for p in parts], tol=tolerance)
 
     root_name = params.get("root_part")
     if root_name is not None:
@@ -118,7 +130,15 @@ def _plan(ctx: dict, params: dict | None) -> dict:
     else:
         root_index = max(range(len(parts)), key=lambda i: parts[i]["volume"])
 
-    # BFS spanning tree from the root over contact edges (strongest first).
+    # BFS spanning trees over contact edges (strongest first) — one tree
+    # PER CONNECTED COMPONENT, not just the root's. A component that
+    # never touches the root part (spider legs a clearance gap away from
+    # the body) still keeps its internal contacts as joints. Components
+    # are then attached to the growing rig greedily by smallest gap:
+    # within ``bridge_gaps`` they get a "bridged" ball joint at the
+    # nearest-pair midpoint (re-rooted at their closest part, so a leg
+    # attaches by its coxa, not by whichever segment is biggest);
+    # beyond it their anchor parents to the rig root as "floating".
     adjacency: dict[int, list[tuple[int, dict]]] = {i: [] for i in range(len(parts))}
     for edge in graph["edges"]:
         adjacency[edge["a"]].append((edge["b"], edge))
@@ -126,23 +146,138 @@ def _plan(ctx: dict, params: dict | None) -> dict:
     for neighbors in adjacency.values():
         neighbors.sort(key=lambda n: -n[1]["n_points"])
 
-    parent_of: dict[int, tuple[int, dict] | None] = {root_index: None}
-    queue = [root_index]
-    while queue:
-        current = queue.pop(0)
-        for neighbor, edge in adjacency[current]:
-            if neighbor not in parent_of:
-                parent_of[neighbor] = (current, edge)
-                queue.append(neighbor)
+    component_of = list(range(len(parts)))
 
-    joints = []
+    def _find(i: int) -> int:
+        while component_of[i] != i:
+            component_of[i] = component_of[component_of[i]]
+            i = component_of[i]
+        return i
+
+    for edge in graph["edges"]:
+        ra, rb = _find(edge["a"]), _find(edge["b"])
+        if ra != rb:
+            component_of[rb] = ra
+
+    components: dict[int, list[int]] = {}
+    for i in range(len(parts)):
+        components.setdefault(_find(i), []).append(i)
+
+    bridge_gaps = params.get("bridge_gaps")
+    if bridge_gaps is not None:
+        bridge_gaps = float(bridge_gaps)
+
+    parent_of: dict[int, tuple[int, dict] | None] = {}
+    bridged_joints: list[dict] = []
+    floating_info: list[dict] = []
+    connected: list[int] = []
+
+    def _grow_tree(anchor: int) -> None:
+        parent_of.setdefault(anchor, None)
+        queue = [anchor]
+        while queue:
+            current = queue.pop(0)
+            connected.append(current)
+            for neighbor, edge in adjacency[current]:
+                if neighbor not in parent_of:
+                    parent_of[neighbor] = (current, edge)
+                    queue.append(neighbor)
+
+    # Cached geometry per part (verts/BVH/AABB) so the greedy
+    # closest-component search below stays cheap: AABB distance prunes
+    # most pairs before any BVH query runs.
+    from ..perception.parts import _item_arrays
+    from ..perception import _mesh as _pmesh
+
+    cached = []
+    for p in parts:
+        _name, verts, tris = _item_arrays(p["item"])
+        cached.append({
+            "verts": verts,
+            "bvh": _pmesh.bvh_from_arrays(verts, tris) if len(tris) else None,
+            "lo": verts.min(axis=0) if len(verts) else None,
+            "hi": verts.max(axis=0) if len(verts) else None,
+        })
+
+    def _pair_gap(i: int, j: int, cap: float) -> dict | None:
+        a, b = cached[i], cached[j]
+        if a["bvh"] is None or b["bvh"] is None:
+            return None
+        aabb_gap = float(np.linalg.norm(
+            np.maximum(0.0, np.maximum(a["lo"] - b["hi"], b["lo"] - a["hi"]))))
+        if aabb_gap > cap:
+            return None
+        best_distance = cap
+        best_pair = None
+        for verts, bvh, flip in ((a["verts"], b["bvh"], False),
+                                 (b["verts"], a["bvh"], True)):
+            stride = max(1, len(verts) // 500)
+            for v in verts[::stride]:
+                hit = bvh.find_nearest(tuple(v), best_distance)
+                if hit is not None and hit[0] is not None:
+                    location = np.asarray(hit[0], dtype=np.float64)
+                    distance = float(np.linalg.norm(v - location))
+                    if distance < best_distance:
+                        best_distance = distance
+                        best_pair = (location, v) if flip else (v, location)
+        if best_pair is None:
+            return None
+        return {"distance": best_distance,
+                "point": ((best_pair[0] + best_pair[1]) * 0.5).tolist()}
+
+    _grow_tree(root_index)
+    pending = [members for key, members in components.items() if key != _find(root_index)]
+    while pending:
+        # Closest unattached component to anything already connected.
+        best = None
+        cap = 1e18
+        for members in pending:
+            for i in members:
+                for j in connected:
+                    gap = _pair_gap(i, j, cap)
+                    if gap is not None and (best is None or gap["distance"] < best[0]["distance"]):
+                        best = (gap, i, j, members)
+                        cap = gap["distance"]
+        if best is None:
+            # Degenerate geometry (empty parts): float them all.
+            members = pending.pop()
+            floating_info.append({
+                "part": parts[members[0]]["name"], "nearest_part": None, "gap": None})
+            _grow_tree(members[0])
+            continue
+        gap, child_index, parent_index, members = best
+        pending.remove(members)
+        if bridge_gaps is not None and gap["distance"] <= bridge_gaps and gap["point"]:
+            bridged_joints.append({
+                "parent": parts[parent_index]["name"],
+                "child": parts[child_index]["name"],
+                "point": gap["point"],
+                "axis": [0.0, 0.0, 1.0],
+                "kind": "bridged_ball",
+                "elongation": 0.0,
+                "contact_kind": "bridged",
+                "gap": float(gap["distance"]),
+            })
+            _grow_tree(child_index)
+            parent_of[child_index] = None  # parented via the bridged joint
+        else:
+            floating_info.append({
+                "part": parts[child_index]["name"],
+                "nearest_part": parts[parent_index]["name"],
+                "gap": float(gap["distance"]),
+            })
+            _grow_tree(child_index)
+
+    joints = list(bridged_joints)
     floating = []
+    bridged_children = {j["child"] for j in bridged_joints}
     for i, part in enumerate(parts):
         if i == root_index:
             continue
         link = parent_of.get(i)
         if link is None:
-            floating.append(part["name"])
+            if part["name"] not in bridged_children:
+                floating.append(part["name"])
             continue
         parent_index, edge = link
         extents = edge["extents"]
@@ -186,6 +321,9 @@ def _plan(ctx: dict, params: dict | None) -> dict:
         "root_part": parts[root_index]["name"],
         "joints": joints,
         "floating": floating,
+        # Why each floating part floats: its nearest neighbor and the gap —
+        # rerun with params={"bridge_gaps": <gap or more>} to joint it there.
+        "floating_detail": floating_info,
         "n_components": graph["n_components"],
         "name": params.get("name", "Rig.Assembly"),
         "root_head": [float(bbox_center[0]), float(bbox_center[1]), float(bbox_min[2])],
@@ -275,6 +413,7 @@ def run(ctx: dict, params: dict | None = None) -> dict:
                 "root_part": plan["root_part"],
                 "joints": plan["joints"],
                 "floating": plan["floating"],
+                "floating_detail": plan["floating_detail"],
                 "n_components": plan["n_components"],
                 "controls": ["CTL-" + j["child"] for j in plan["joints"]],
             },
