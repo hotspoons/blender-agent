@@ -161,17 +161,59 @@ def desk_lamp() -> dict:
     Four-part articulated lamp: base, lower arm, upper arm, head — a chain
     for rig_rigid_assembly with three hinge-like joints along Y axes.
     """
+    # Geometry is chained end-to-end with slight embedding so the contact
+    # graph sees every joint: each arm's end sits ~0.02 inside its neighbor.
+    d_lower = Vector((math.sin(math.radians(20)), 0.0, math.cos(math.radians(20))))
+    d_upper = Vector((math.sin(math.radians(-35)), 0.0, math.cos(math.radians(-35))))
+    lower_bottom = Vector((0.0, 0.0, 0.06))           # inside the base slab
+    lower_center = lower_bottom + d_lower * 0.35
+    lower_top = lower_bottom + d_lower * 0.7
+    upper_center = lower_top + d_upper * 0.3
+    upper_top = lower_top + d_upper * 0.6
+    head_center = upper_top + Vector((-0.05, 0.0, 0.0))
+
     _box("LampBase", dims=(0.5, 0.5, 0.08), location=(0.0, 0.0, 0.04))
     _box("ArmLower", dims=(0.06, 0.06, 0.7),
-         location=(0.12, 0.0, 0.42), rotation=(0.0, math.radians(20), 0.0))
+         location=tuple(lower_center), rotation=(0.0, math.radians(20), 0.0))
     _box("ArmUpper", dims=(0.06, 0.06, 0.6),
-         location=(0.13, 0.0, 1.0), rotation=(0.0, math.radians(-35), 0.0))
-    _box("Head", dims=(0.22, 0.18, 0.18), location=(0.35, 0.0, 1.28))
+         location=tuple(upper_center), rotation=(0.0, math.radians(-35), 0.0))
+    _box("Head", dims=(0.22, 0.18, 0.18), location=tuple(head_center))
     bpy.context.view_layer.update()
     return {
         "objects": ["LampBase", "ArmLower", "ArmUpper", "Head"],
         "skill": "rig_rigid_assembly",
         "truth": {"n_parts": 4, "root_part": "LampBase", "chain": True},
+    }
+
+
+def desk_lamp_single_mesh() -> dict:
+    """
+    The desk lamp as ONE mesh whose loose parts are the four components —
+    exercises vertex-subset binding in rig_rigid_assembly.
+    """
+    manifest = desk_lamp()
+    parts = [bpy.data.objects[n] for n in manifest["objects"]]
+    bm = bmesh.new()
+    for obj in parts:
+        offset = Matrix.Translation(obj.location)
+        tmp = obj.data.copy()
+        tmp.transform(offset)
+        bm.from_mesh(tmp)
+        bpy.data.meshes.remove(tmp)
+    mesh = bpy.data.meshes.new("Lamp")
+    bm.to_mesh(mesh)
+    bm.free()
+    for obj in parts:
+        data = obj.data
+        bpy.data.objects.remove(obj)
+        bpy.data.meshes.remove(data)
+    obj = bpy.data.objects.new("Lamp", mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    bpy.context.view_layer.update()
+    return {
+        "objects": ["Lamp"],
+        "skill": "rig_rigid_assembly",
+        "truth": {"n_parts": 4, "chain": True},
     }
 
 
@@ -199,5 +241,6 @@ CORPUS = {
     "cart_wheel_scaled": cart_wheel_scaled,
     "turret": turret,
     "desk_lamp": desk_lamp,
+    "desk_lamp_single_mesh": desk_lamp_single_mesh,
     "crate_stack": crate_stack,
 }
