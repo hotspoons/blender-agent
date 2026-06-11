@@ -45,5 +45,7 @@ Skills: `rig_hinge`, `rig_piston`, `rig_wheel`, `rig_turret`,
 Bundled docs: `rigging-overview`, `rigging-mechanical`,
 `rigging-characters`, `rigging-standard`.
 
-Development home (tests, corpus, evals): [`rigging/`](../rigging/) at the
-repo root — `cd rigging && make test` runs all tiers headless.
+The extension is fully self-contained — library, tests, corpus and evals
+all live under [`blmcp_ext/rigging/`](blmcp_ext/rigging/):
+`cd mcp_ext/blmcp_ext/rigging && make test` runs all tiers headless
+(tests/corpus are repo-only; wheels ship just the library and skills).

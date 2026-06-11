@@ -20,15 +20,13 @@ import sys
 import unittest
 
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+# The extension's rigging dir: parent of blrig/, corpus/ and tests/.
+# Inserted on sys.path so `import blrig` / `import corpus` / `import tests.*`
+# resolve inside Blender, where the wheel isn't installed.
 _RIGGING_DIR = os.path.dirname(_TESTS_DIR)
-_REPO_DIR = os.path.dirname(_RIGGING_DIR)
-# blrig lives in the tools extension package (blender-mcp-extensions);
-# this harness tests it inside Blender where the wheel isn't installed.
-_BLRIG_PARENT = os.path.join(_REPO_DIR, "mcp_ext", "blmcp_ext", "rigging")
 
-for _path in (_RIGGING_DIR, _BLRIG_PARENT):
-    if _path not in sys.path:
-        sys.path.insert(0, _path)
+if _RIGGING_DIR not in sys.path:
+    sys.path.insert(0, _RIGGING_DIR)
 
 # Deliberate test failures must not pollute the production failure log.
 import tempfile

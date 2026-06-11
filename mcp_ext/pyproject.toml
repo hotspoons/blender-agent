@@ -18,6 +18,11 @@ rigging = "blmcp_ext.rigging"
 
 [tool.setuptools.packages.find]
 where = ["."]
+# The dev/CI harness lives inside the package tree but stays repo-only.
+exclude = [
+    "blmcp_ext.rigging.tests*",
+    "blmcp_ext.rigging.corpus*",
+]
 
 [tool.setuptools.package-data]
 "blmcp_ext" = [

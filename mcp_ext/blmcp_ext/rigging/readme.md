@@ -9,32 +9,29 @@ bone-heat weights, symmetrize) — no ML rigging models.
 
 ## Layout
 
-The library itself (`blrig`) ships inside the tools extension at
-[`mcp_ext/blmcp_ext/rigging/blrig`](../mcp_ext/blmcp_ext/rigging/) — see
-`mcp_ext/readme.md` for the MCP tool surface (`rigging_*`) and the bundled
-SKILL.md collection. This directory is the development/CI home:
+The rigging extension is self-contained in this directory (see
+`mcp_ext/readme.md` for the extension mechanism):
 
 ```
+__init__.py + tools.py  Extension hook + the rigging_* MCP tool surface.
+blrig/perception/       Pure geometric queries (no scene mutation). The keystone.
+blrig/standard/         RIG_STANDARD.md + validate_rig() — conventions, enforced.
+blrig/skills/           One module per skill: diagnose(ctx) / run(ctx, params) / verify(ctx).
+skills/                 Bundled SKILL.md collection (served via skills_* tools).
 corpus/                 Procedural golden-asset generators (deterministic, no .blend blobs).
 tests/                  Tiers: property tests, deformation smoke, golden-render regression.
 evals/                  Agent skill-selection scenarios (natural language -> expected chain).
 logs/                   Structured failure logs (append-only JSONL).
 ```
 
-Inside blrig:
-
-```
-blrig/perception/       Pure geometric queries (no scene mutation). The keystone.
-blrig/standard/         RIG_STANDARD.md + validate_rig() — conventions, enforced.
-blrig/skills/           One module per skill: diagnose(ctx) / run(ctx, params) / verify(ctx).
-```
+`tests/` and `corpus/` are repo-only (excluded from wheels).
 
 ## Running
 
 Everything runs headless inside Blender:
 
 ```sh
-cd rigging
+cd mcp_ext/blmcp_ext/rigging
 make test          # all tiers
 make test-fast     # property tests only
 ```
@@ -56,7 +53,7 @@ from `execute_blender_code`:
 
 ```python
 import sys
-sys.path.insert(0, "<...>/mcp_ext/blmcp_ext/rigging")
+sys.path.insert(0, "<path-to>/blmcp_ext/rigging")  # this directory
 from blrig.skills import rig_hinge
 report = rig_hinge.diagnose(ctx)        # machine-readable preconditions
 result = rig_hinge.run(ctx, params)     # semantic params only
