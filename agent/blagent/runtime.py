@@ -73,13 +73,11 @@ class AgentRuntime:
         self._system_prompt = self._load_system_prompt()
 
     def _load_system_prompt(self) -> str:
+        # No skills index here: the prompt compels a `welcome` call, whose
+        # response carries the live skill inventory — duplicating it in the
+        # system prompt would cost tokens on every turn.
         with open(_SYSTEM_PROMPT_PATH, encoding="utf-8") as fh:
-            prompt = fh.read()
-        skills = self.store.list_skills()
-        if skills:
-            index = "\n".join("- {:s}: {:s}".format(s.name, s.summary) for s in skills)
-            prompt += "\n\n## Available skills\n{:s}\n".format(index)
-        return prompt
+            return fh.read()
 
     # ------------------------------------------------------------------
     # Event broadcast.
