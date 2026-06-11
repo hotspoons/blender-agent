@@ -17,25 +17,24 @@ export class BaLocalLlmPanel extends LitElement {
     modelId: { type: String },
     status: { type: String },     // idle | loading | ready | error
     progress: { type: Object },
-    thinking: { type: Boolean },
     _error: { state: true },
   };
 
-  // Curated ONNX exports verified loadable in the browser: either a
-  // small single file, or external weight data (model.onnx_data) that
-  // bypasses onnxruntime's 4GB WASM session-build heap. NOT every Hub
-  // export qualifies - e.g. Qwen3-1.7B-ONNX ships q4f16 as a 1.43GB
-  // single file and cannot load. The combo stays editable for any
-  // other repo.
+  // Curated, fixed list - modern multi-component exports with external
+  // weight data (model.onnx_data), which bypasses onnxruntime's 4GB
+  // WASM session-build heap. NOT every Hub export qualifies: older
+  // single-file exports >~1GB cannot load at all (Qwen3-1.7B q4f16),
+  // and old exports also lack a KV-friendly layout. Sizes are the
+  // q4f16 component totals actually downloaded.
   static MODELS = [
-    "onnx-community/Qwen3-0.6B-ONNX",
-    "onnx-community/Llama-3.2-1B-Instruct-ONNX",
-    "onnx-community/Qwen3-4B-ONNX",
-    "onnx-community/Llama-3.2-3B-Instruct-ONNX",
+    { id: "onnx-community/Qwen3.5-0.8B-ONNX", label: "Qwen3.5 0.8B (~0.7GB)" },
+    { id: "onnx-community/Qwen3.5-2B-ONNX", label: "Qwen3.5 2B (~1.6GB)" },
+    { id: "onnx-community/Qwen3.5-4B-ONNX", label: "Qwen3.5 4B (~2.8GB)" },
+    { id: "onnx-community/gemma-4-E2B-it-ONNX", label: "Gemma 4 E2B (~3.3GB)" },
+    { id: "onnx-community/gemma-4-E4B-it-ONNX", label: "Gemma 4 E4B (~5.2GB)" },
   ];
 
   static STORAGE_KEY = "blender-agent.local-model";
-  static THINKING_KEY = "blender-agent.local-thinking";
 
   // Host (worker or main-thread engine) + WS survive component
   // teardown (panel toggles, session switches) in shared static state.
@@ -44,10 +43,13 @@ export class BaLocalLlmPanel extends LitElement {
   constructor() {
     super();
     const s = BaLocalLlmPanel._shared;
-    this.modelId = s.modelId || localStorage.getItem(BaLocalLlmPanel.STORAGE_KEY) || BaLocalLlmPanel.MODELS[1];
+    const stored = localStorage.getItem(BaLocalLlmPanel.STORAGE_KEY);
+    const known = (id) => BaLocalLlmPanel.MODELS.some((m) => m.id === id);
+    this.modelId = (s.modelId && known(s.modelId) && s.modelId)
+      || (stored && known(stored) && stored)
+      || BaLocalLlmPanel.MODELS[0].id;
     this.status = s.status;
     this.progress = null;
-    this.thinking = localStorage.getItem(BaLocalLlmPanel.THINKING_KEY) === "true";
     this._error = "";
     this._worker = s.worker;
     this._ws = s.ws;
@@ -220,7 +222,10 @@ export class BaLocalLlmPanel extends LitElement {
   _prepareMessages(req) {
     let messages = [...(req.messages || [])];
 
-    if (!this.thinking) {
+    // Qwen-family models default to reasoning mode; suppress it - on
+    // small local models thinking burns the token budget before the
+    // tool call ever appears.
+    if (/qwen/i.test(this.modelId)) {
       const directive = "/no_think";
       if (messages.length > 0 && messages[0].role === "system") {
         messages[0] = { ...messages[0], content: `${directive}\n${messages[0].content}` };
@@ -399,46 +404,33 @@ export class BaLocalLlmPanel extends LitElement {
     }
     .hint { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
     .err { font-size: 12px; color: var(--danger); margin-top: 6px; }
-    .think {
-      display: flex;
-      align-items: center;
-      gap: 9px;
-      font-size: 13px;
-      color: var(--text-muted);
-      margin-top: 10px;
-    }
   `;
 
   render() {
     const isLoading = this.status === "loading";
     const isReady = this.status === "ready";
+    const labels = BaLocalLlmPanel.MODELS.map((m) => m.label);
+    const current = BaLocalLlmPanel.MODELS.find((m) => m.id === this.modelId);
     return html`
       <div class="head">${icon("cpu-chip")} Transformers.js (in-browser)
         <span class="dot ${this.status}"></span></div>
       <div class="row">
-        <ba-combo .options=${BaLocalLlmPanel.MODELS} .editable=${true}
-          .value=${this.modelId}
-          placeholder="Hugging Face model id (ONNX)"
+        <ba-combo .options=${labels} .editable=${false}
+          .value=${current?.label || ""}
           @input=${(e) => {
-            if (!isLoading && !isReady) this.modelId = e.detail.value;
+            const picked = BaLocalLlmPanel.MODELS[labels.indexOf(e.detail.value)];
+            if (picked && !isLoading && !isReady) this.modelId = picked.id;
           }}></ba-combo>
         ${isReady
           ? html`<button class="act danger" @click=${this._unloadModel}>${icon("x-mark")} Unload</button>`
-          : html`<button class="act" ?disabled=${isLoading || !this.modelId.trim()} @click=${this._loadModel}>
+          : html`<button class="act" ?disabled=${isLoading} @click=${this._loadModel}>
               ${isLoading ? "Loading..." : html`${icon("check")} Load`}</button>`}
       </div>
-      <div class="hint">Any Hub repo with ONNX weights works (the list above is a good start).
-        Weights download once, then are cached by the browser.</div>
+      <div class="hint">Runs on your GPU via WebGPU. Weights download once from the
+        Hugging Face Hub, then are cached by the browser.</div>
       ${isLoading && this.progress ? html`
         <div class="bar"><div class="fill" style="width: ${(this.progress.progress * 100).toFixed(0)}%"></div></div>
         <div class="hint">${this.progress.text}</div>` : nothing}
-      <div class="think">
-        <ba-switch .on=${this.thinking} @input=${(e) => {
-          this.thinking = e.detail.value;
-          localStorage.setItem(BaLocalLlmPanel.THINKING_KEY, String(this.thinking));
-        }}></ba-switch>
-        Allow thinking (Qwen3 reasoning mode)
-      </div>
       ${isReady ? html`<div class="hint">
         Model loaded on ${this._device === "webgpu" ? "WebGPU" : "WASM (no WebGPU - slower)"}${
           this._hostKind === "main" ? " (main thread - this browser has no WebGPU in workers)" : ""};
