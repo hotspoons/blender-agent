@@ -45,7 +45,22 @@
   repos + extension bundles. Search tokenization fixed both sides
   (underscore split + plural stemming).
 
+- **Spider feedback round (41fe9f1)** — single polymorphic `rig(verb,args)`
+  tool replaces the five rigging_* tools; assembly fixed to keep
+  per-component joints (the inspect-vs-run parity bug) + contact_tolerance
+  + bridge_gaps (nearest-pair ball joints across modeled clearance, with
+  re-rooting); NEW rig_chain (ordered parts, ball/hinge, auto-bridging,
+  composes into existing armatures); inspect routes (appendage detection,
+  gap report, ranked suggestions with params); E_NO_DEFORM_GROUPS closes
+  the silent unskinned-rig hole; cartoon_spider corpus + 16 tests (suite
+  114). Validated live on the original failing scene: 28 joints, verify
+  green, posed render confirmed.
+
 ## Next / open
+- rig_creature_rigify (variable leg count via programmatic metarig
+  assembly from Rigify limb samples) — deferred; mechanical path (assembly
+  + chains) covers N-legged creatures today, Rigify path would add IK/FK
+  polish.
 - End-to-end `rigging_run` through a live addon bridge (integration-suite
   style) — pieces are individually tested (payloads compile, blrig green
   headless, send_code is the existing transport), but one full pass through
