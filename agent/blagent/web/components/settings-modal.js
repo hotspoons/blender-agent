@@ -1,125 +1,218 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Settings: LLM endpoint/model/key, autonomy mode, WebLLM fallback.
-// Modeled on Foyer Studio's agent settings modal.
+// Settings dialog. Model source is a mutually exclusive choice:
+// a remote OpenAI-compatible endpoint (with the model combo box
+// auto-populated from {endpoint}/models once reachable - directly,
+// or after an API key is provided) or the local in-browser model
+// model. All controls are Lit-rendered (core/widgets.js).
 
-import { LitElement, html, css } from "lit";
+import { LitElement, html, css, nothing } from "lit";
 import { store } from "/static/core/store.js";
+import { icon } from "/static/core/icons.js";
+import "/static/core/widgets.js";
+import "/static/components/local-llm-panel.js";
 
 export class BaSettingsModal extends LitElement {
   static properties = {
-    _config: { state: true },
+    _mode: { state: true },        // "remote" | "local"
+    _endpoint: { state: true },
+    _model: { state: true },
+    _apiKey: { state: true },      // staged key; empty = keep saved
+    _autonomy: { state: true },
+    _models: { state: true },
   };
 
   constructor() {
     super();
-    this._config = { ...store.state.config };
-  }
-
-  static styles = css`
-    :host {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.5);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 100;
-    }
-    .modal {
-      width: min(480px, 92vw);
-      background: var(--bg-panel);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 18px;
-    }
-    h2 { margin: 0 0 14px; font-size: 16px; }
-    label { display: block; font-size: 12px; color: var(--text-dim); margin: 10px 0 4px; }
-    input, select {
-      width: 100%;
-      padding: 7px 9px;
-      border-radius: 7px;
-      border: 1px solid var(--border);
-      background: var(--bg-input);
-      color: var(--text);
-      font: inherit;
-    }
-    input:focus, select:focus { outline: none; border-color: var(--accent); }
-    .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13px; }
-    .check input { width: auto; }
-    .hint { font-size: 11.5px; color: var(--text-dim); margin-top: 3px; }
-    .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
-    button {
-      border: none;
-      border-radius: 8px;
-      padding: 8px 16px;
-      cursor: pointer;
-      font-weight: 600;
-    }
-    .save { background: var(--accent); color: #fff; }
-    .cancel { background: var(--bg-raised); color: var(--text); }
-  `;
-
-  _save() {
-    const updates = {
-      endpoint: this._config.endpoint || "",
-      model: this._config.model || "",
-      autonomy: this._config.autonomy || "ask",
-      use_webllm: !!this._config.use_webllm,
-    };
-    const key = this.renderRoot.querySelector("#api-key").value;
-    if (key) updates.api_key = key;
-    store.setConfig(updates);
-    this.dispatchEvent(new CustomEvent("close"));
-  }
-
-  render() {
-    const c = this._config;
-    return html`
-      <div class="modal" @click=${(e) => e.stopPropagation()}>
-        <h2>Agent settings</h2>
-
-        <label>OpenAI-compatible endpoint (base URL ending in /v1)</label>
-        <input type="text" placeholder="e.g. https://api.openai.com/v1 or http://127.0.0.1:8080/v1"
-          .value=${c.endpoint || ""}
-          @input=${(e) => { this._config = { ...c, endpoint: e.target.value }; }}>
-        <div class="hint">Leave empty to use the in-browser WebLLM model.</div>
-
-        <label>Model</label>
-        <input type="text" placeholder="e.g. gpt-4o, claude-fable-5, qwen3:8b"
-          .value=${c.model || ""}
-          @input=${(e) => { this._config = { ...c, model: e.target.value }; }}>
-
-        <label>API key (optional)</label>
-        <input id="api-key" type="password"
-          placeholder=${c.has_api_key ? "(saved - enter to replace)" : "(none)"}>
-
-        <label>Autonomy</label>
-        <select .value=${c.autonomy || "ask"}
-          @change=${(e) => { this._config = { ...c, autonomy: e.target.value }; }}>
-          <option value="ask">Ask - confirm destructive tool calls</option>
-          <option value="auto">Auto - run everything without confirmation</option>
-        </select>
-
-        <div class="check">
-          <input id="webllm" type="checkbox" .checked=${c.use_webllm !== false}
-            @change=${(e) => { this._config = { ...c, use_webllm: e.target.checked }; }}>
-          <label for="webllm" style="margin: 0;">Use in-browser WebLLM when no endpoint is set</label>
-        </div>
-
-        <div class="row">
-          <button class="cancel" @click=${() => this.dispatchEvent(new CustomEvent("close"))}>Cancel</button>
-          <button class="save" @click=${() => this._save()}>Save</button>
-        </div>
-      </div>
-    `;
+    const config = store.state.config || {};
+    this._mode = config.use_local_llm ? "local" : "remote";
+    this._endpoint = config.endpoint || "";
+    this._model = config.model || "";
+    this._apiKey = "";
+    this._autonomy = config.autonomy || "ask";
+    this._models = store.state.models;
+    this._fetchTimer = null;
   }
 
   connectedCallback() {
     super.connectedCallback();
-    this.addEventListener("click", (e) => {
-      if (e.target === this) this.dispatchEvent(new CustomEvent("close"));
+    this._unsub = store.subscribe((keys) => {
+      if (keys.has("models")) this._models = { ...store.state.models };
     });
+    // Populate the combo for the saved endpoint right away.
+    if (this._endpoint) store.requestModels(this._endpoint, "");
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this._unsub?.();
+    clearTimeout(this._fetchTimer);
+  }
+
+  /** Debounced model-list fetch as the endpoint or key changes. */
+  _scheduleModelFetch() {
+    clearTimeout(this._fetchTimer);
+    const endpoint = this._endpoint.trim();
+    if (!endpoint) return;
+    this._fetchTimer = setTimeout(() => {
+      store.requestModels(endpoint, this._apiKey);
+    }, 450);
+  }
+
+  static styles = css`
+    *, *::before, *::after { box-sizing: border-box; }
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-muted);
+      margin: 14px 0 5px;
+      letter-spacing: 0.02em;
+    }
+    .section {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      margin: 18px 0 4px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+    }
+    .section:first-child { margin-top: 2px; }
+    input.text {
+      width: 100%;
+      font: inherit;
+      font-family: var(--font-sans);
+      color: var(--text);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 8px 10px;
+      outline: none;
+      transition: border-color 0.15s ease;
+    }
+    input.text:focus { border-color: var(--accent); }
+    input.text::placeholder { color: var(--text-muted); opacity: 0.7; }
+    .hint { font-size: 12px; color: var(--text-muted); margin-top: 5px; }
+    .hint.err { color: var(--danger); }
+    .hint.ok { color: var(--success); }
+    .switchrow {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13.5px;
+      color: var(--text);
+      margin-top: 14px;
+    }
+    .switchrow .sub { color: var(--text-muted); font-size: 12px; }
+    .localbox {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+      padding: 12px;
+      margin-top: 12px;
+    }
+    button.btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font: inherit;
+      font-weight: 600;
+      border: none;
+      border-radius: var(--radius-sm);
+      padding: 8px 18px;
+      cursor: pointer;
+    }
+    .btn.save { color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+    .btn.cancel { background: var(--surface-muted); color: var(--text); }
+  `;
+
+  _save() {
+    const updates = {
+      use_local_llm: this._mode === "local",
+      endpoint: this._endpoint.trim(),
+      model: this._model.trim(),
+      autonomy: this._autonomy,
+    };
+    if (this._apiKey) updates.api_key = this._apiKey;
+    store.setConfig(updates);
+    this.dispatchEvent(new CustomEvent("close"));
+  }
+
+  _renderRemote() {
+    const config = store.state.config || {};
+    const models = this._models;
+    const forThisEndpoint = models.endpoint === this._endpoint.trim().replace(/\/+$/, "");
+    return html`
+      <label>Endpoint (OpenAI-compatible base URL ending in /v1)</label>
+      <input class="text" type="text"
+        placeholder="e.g. https://api.openai.com/v1 or http://127.0.0.1:8080/v1"
+        .value=${this._endpoint}
+        @input=${(e) => { this._endpoint = e.target.value; this._scheduleModelFetch(); }}>
+
+      <label>API key ${config.has_api_key ? "(saved - enter to replace)" : "(optional)"}</label>
+      <input class="text" type="password" autocomplete="off"
+        placeholder=${config.has_api_key ? "************" : "none required for local servers"}
+        .value=${this._apiKey}
+        @input=${(e) => { this._apiKey = e.target.value; this._scheduleModelFetch(); }}>
+
+      <label>Model</label>
+      <ba-combo
+        .value=${this._model}
+        .options=${forThisEndpoint ? models.list : []}
+        .loading=${models.loading}
+        placeholder=${forThisEndpoint && models.list.length
+          ? "pick from the list or type"
+          : "type a model id, or enter an endpoint to list models"}
+        @input=${(e) => { this._model = e.detail.value; }}></ba-combo>
+      ${forThisEndpoint && models.error
+        ? html`<div class="hint err">${icon("exclamation-triangle")} Could not list models: ${models.error}</div>`
+        : nothing}
+      ${forThisEndpoint && !models.error && models.list.length
+        ? html`<div class="hint ok">${models.list.length} model(s) available from this endpoint.</div>`
+        : nothing}
+    `;
+  }
+
+  render() {
+    return html`
+      <ba-modal @close=${() => this.dispatchEvent(new CustomEvent("close"))}>
+        <h2 slot="title">Agent settings</h2>
+
+        <div class="section">${icon("cpu-chip")} Model source</div>
+        <div style="margin-top: 10px;">
+          <ba-segmented
+            .options=${[
+              { value: "remote", label: "Remote endpoint", icon: "arrow-top-right-on-square" },
+              { value: "local", label: "Local (in-browser)", icon: "computer-desktop" },
+            ]}
+            .value=${this._mode}
+            @input=${(e) => { this._mode = e.detail.value; }}></ba-segmented>
+        </div>
+
+        ${this._mode === "remote"
+          ? this._renderRemote()
+          : html`<div class="localbox"><ba-local-llm-panel></ba-local-llm-panel></div>`}
+
+        <div class="section">${icon("cog-6-tooth")} Behavior</div>
+        <div class="switchrow">
+          <ba-switch .on=${this._autonomy === "auto"}
+            @input=${(e) => { this._autonomy = e.detail.value ? "auto" : "ask"; }}></ba-switch>
+          <span>Full autonomy
+            <div class="sub">Off: destructive tool calls pause for an Allow/Deny confirmation.</div>
+          </span>
+        </div>
+
+        <div slot="footer" style="display: flex; gap: 8px;">
+          <button class="btn cancel" @click=${() => this.dispatchEvent(new CustomEvent("close"))}>Cancel</button>
+          <button class="btn save" @click=${() => this._save()}>${icon("check")} Save</button>
+        </div>
+      </ba-modal>
+    `;
   }
 }
 

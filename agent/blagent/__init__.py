@@ -10,8 +10,9 @@ directly (no MCP protocol on the agent path); the same registry can
 optionally be exposed over streamable-HTTP MCP for external clients.
 
 The harness design is ported from Foyer Studio's ``foyer-agent``
-(Rust); the WebLLM reverse tunnel from zip-ties (Python). See
-``agent/readme.md`` for the architecture.
+(Rust); the local-model reverse tunnel from zip-ties (Python),
+fulfilled in the browser by Transformers.js. See ``agent/readme.md``
+for the architecture.
 """
 
 __all__ = (
@@ -22,6 +23,7 @@ __all__ = (
 
 import argparse
 import asyncio
+import os
 import socket
 
 _DEFAULT_HOST = "127.0.0.1"
@@ -70,6 +72,7 @@ async def run_server(
         data_dir: str | None = None,
         open_browser: bool = False,
         port_auto: bool = True,
+        title: str | None = None,
 ) -> None:
     """
     Run the agent server until cancelled. When *mcp_port* is given, the
@@ -79,6 +82,11 @@ async def run_server(
     With *port_auto* (the default), ports already taken - e.g. by the
     agent of another Blender instance - are resolved by walking up to
     the next free port.
+
+    *title* labels this instance in the UI (browser tab title), so
+    agent tabs of side-by-side Blender instances can be told apart -
+    the add-on passes the .blend file name and keeps it updated via
+    ``POST /instance``.
     """
     import uvicorn
 
@@ -96,7 +104,20 @@ async def run_server(
 
     mcp, blender_tools = await build_blender_registry()
     store = AgentStore(data_dir=data_dir)
+
+    # Harness log: turns, tool calls, LLM failures. The first place to
+    # look when a model "stops responding".
+    import logging
+    import logging.handlers
+
+    log_path = os.path.join(store.data_dir, "agent.log")
+    handler = logging.handlers.RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=2)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logging.getLogger("blagent").setLevel(logging.INFO)
+    logging.getLogger("blagent").addHandler(handler)
     runtime = AgentRuntime(store, blender_tools)
+    runtime.instance_title = title if title is not None else os.environ.get("BLENDER_AGENT_TITLE", "")
+    runtime.instance_port = port
     app = create_app(runtime)
 
     servers = [uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning"))]
@@ -121,6 +142,7 @@ async def run_server(
         webbrowser.open("http://{:s}:{:d}/".format(host, port))
 
     print("blender-agent: web UI at http://{:s}:{:d}/".format(host, port), flush=True)
+    print("blender-agent: log file at {:s}".format(log_path), flush=True)
     if mcp_port is not None:
         print("blender-agent: MCP (streamable HTTP) at http://{:s}:{:d}/".format(host, mcp_port), flush=True)
 
@@ -163,6 +185,12 @@ def main() -> int:
         action="store_true",
         help="Fail when a port is taken instead of walking up to the next free one.",
     )
+    parser.add_argument(
+        "--title",
+        default=None,
+        help="Instance label shown in the browser tab title "
+             "(default: $BLENDER_AGENT_TITLE).",
+    )
     args = parser.parse_args()
 
     try:
@@ -173,6 +201,7 @@ def main() -> int:
             data_dir=args.data_dir,
             open_browser=args.open,
             port_auto=not args.no_port_auto,
+            title=args.title,
         ))
     except KeyboardInterrupt:
         pass

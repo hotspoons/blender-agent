@@ -25,6 +25,10 @@ _RIGGING_DIR = os.path.dirname(_TESTS_DIR)
 if _RIGGING_DIR not in sys.path:
     sys.path.insert(0, _RIGGING_DIR)
 
+# Deliberate test failures must not pollute the production failure log.
+import tempfile
+os.environ.setdefault("BLRIG_LOG_DIR", tempfile.mkdtemp(prefix="blrig_test_logs_"))
+
 # Test-module filename prefix per tier. "property" covers perception,
 # standard & skill postcondition tests; the heavier tiers are opt-in groups.
 _TIER_PATTERNS = {

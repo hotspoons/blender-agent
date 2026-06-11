@@ -1,18 +1,49 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Conversation stage: transcript rendering with markdown, the live
-// streaming buffer, collapsible tool-call cards with status badges,
-// and the destructive-tool confirmation gate. Modeled on Foyer
-// Studio's `agent-panel.js`.
+// Conversation stage: transcript with markdown, collapsible model
+// thinking blocks (Qwen-style <think> tags), the live streaming
+// buffer, tool-call cards with status, and the destructive-tool
+// confirmation gate.
 
 import { LitElement, html, css, nothing } from "lit";
 import { store } from "/static/core/store.js";
-import { ensureMarkdownReady, renderMarkdown } from "/static/core/markdown.js";
+import { icon } from "/static/core/icons.js";
+import { brandMark } from "/static/core/brand.js";
+import { adoptHighlightStyles, ensureMarkdownReady, renderMarkdown } from "/static/core/markdown.js";
+import "/static/components/json-view.js";
+import "/static/core/widgets.js";
 
 function unsafeHtml(htmlText) {
   const template = document.createElement("template");
   template.innerHTML = htmlText;
   return template.content;
+}
+
+/**
+ * Split model output into ordered parts: {type: "think"|"text", body,
+ * open} - handles complete <think>...</think> blocks and an
+ * unterminated <think> tail while streaming (open: true). Empty think
+ * blocks (Qwen /no_think mode) are dropped.
+ */
+export function splitThinking(text) {
+  const parts = [];
+  const re = /<think>([\s\S]*?)(<\/think>|$)/g;
+  let cursor = 0;
+  let match;
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > cursor) {
+      parts.push({ type: "text", body: text.slice(cursor, match.index) });
+    }
+    const body = match[1].trim();
+    if (body) {
+      parts.push({ type: "think", body, open: match[2] === "" });
+    }
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < text.length) {
+    parts.push({ type: "text", body: text.slice(cursor) });
+  }
+  return parts.filter((p) => p.type === "think" || p.body.trim());
 }
 
 export class BaChatStage extends LitElement {
@@ -24,6 +55,8 @@ export class BaChatStage extends LitElement {
     _error: { state: true },
     _busy: { state: true },
     _expanded: { state: true },
+    _openThinks: { state: true },
+    _lightbox: { state: true },
   };
 
   constructor() {
@@ -35,11 +68,16 @@ export class BaChatStage extends LitElement {
     this._error = "";
     this._busy = false;
     this._expanded = new Set();
+    this._openThinks = new Set();
+    this._lightbox = null;
   }
 
   connectedCallback() {
     super.connectedCallback();
-    ensureMarkdownReady().then(() => this.requestUpdate());
+    ensureMarkdownReady().then(() => {
+      adoptHighlightStyles(this.renderRoot);
+      this.requestUpdate();
+    });
     this._unsub = store.subscribe((keys) => {
       if (keys.has("records")) this._records = [...store.state.records];
       if (keys.has("streaming")) this._streaming = store.state.streaming;
@@ -66,51 +104,74 @@ export class BaChatStage extends LitElement {
   }
 
   static styles = css`
-    :host { display: block; min-height: 0; }
-    .scroll {
-      height: 100%;
-      overflow-y: auto;
-      padding: 18px 14px;
-    }
+    *, *::before, *::after { box-sizing: border-box; }
+    :host { display: block; min-height: 0; font-family: var(--font-sans); }
+    .scroll { height: 100%; overflow-y: auto; padding: 20px 16px; }
     .col {
-      max-width: 860px;
+      max-width: 820px;
       margin: 0 auto;
       display: flex;
       flex-direction: column;
       gap: 14px;
     }
-    .msg { line-height: 1.55; min-width: 0; }
+    .msg { line-height: 1.6; min-width: 0; }
     .msg.user {
       align-self: flex-end;
-      max-width: 78%;
-      background: var(--user-bubble);
-      border-radius: 14px 14px 4px 14px;
+      max-width: 76%;
+      background: var(--accent-soft);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
       padding: 9px 14px;
-      white-space: pre-wrap;
       word-break: break-word;
     }
+    .msg.user .txt { white-space: pre-wrap; }
     .msg.assistant { align-self: stretch; }
     .msg.assistant :first-child { margin-top: 0; }
     .msg.assistant pre {
-      background: var(--bg-input);
+      background: var(--surface-elevated);
       border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px;
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
       overflow-x: auto;
       font-size: 12.5px;
     }
-    .msg.assistant code { font-family: ui-monospace, "Cascadia Code", Menlo, monospace; }
+    .msg.assistant code { font-family: var(--font-mono); }
     .msg.assistant :not(pre) > code {
-      background: var(--bg-raised);
+      background: var(--surface-muted);
       border-radius: 4px;
       padding: 1px 5px;
-      font-size: 0.9em;
+      font-size: 0.88em;
     }
-    .synthetic { display: none; }
+    .think {
+      border: 1px solid var(--border);
+      border-left: 2px solid var(--accent-2);
+      border-radius: var(--radius-sm);
+      background: var(--surface-elevated);
+      font-size: 13px;
+    }
+    .think-head {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 10px;
+      color: var(--text-muted);
+      cursor: pointer;
+      user-select: none;
+      font-weight: 500;
+    }
+    .think-head:hover { color: var(--text); }
+    .think-head .pulse { color: var(--accent-2); }
+    .think-body {
+      padding: 0 12px 10px;
+      color: var(--text-muted);
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.55;
+    }
     .tool-card {
       border: 1px solid var(--border);
-      border-radius: 10px;
-      background: var(--bg-panel);
+      border-radius: var(--radius-md);
+      background: var(--surface-elevated);
       font-size: 12.5px;
       overflow: hidden;
     }
@@ -121,115 +182,175 @@ export class BaChatStage extends LitElement {
       padding: 7px 10px;
       cursor: pointer;
       user-select: none;
+      color: var(--text-muted);
     }
-    .tool-head:hover { background: var(--bg-raised); }
-    .tool-head .name { font-family: ui-monospace, monospace; font-weight: 600; }
+    .tool-head:hover { background: var(--accent-soft); }
+    .tool-head .name {
+      font-family: var(--font-mono);
+      font-weight: 600;
+      color: var(--text);
+      flex-shrink: 0;
+    }
     .tool-head .summary {
-      color: var(--text-dim);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
       flex: 1;
+      /* Flex min-width:auto would force the card as wide as the full
+         one-line summary, breaking narrow viewports. */
+      min-width: 0;
     }
+    .badge { flex-shrink: 0; }
     .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
       font-size: 10.5px;
       border-radius: 999px;
-      padding: 1px 8px;
+      padding: 2px 9px;
       font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.05em;
     }
     .badge.running { background: var(--accent-soft); color: var(--accent); }
-    .badge.done { background: rgba(76, 175, 114, 0.15); color: var(--ok); }
-    .badge.error, .badge.rejected { background: rgba(224, 92, 92, 0.15); color: var(--err); }
-    .badge.pending_confirm { background: rgba(224, 164, 55, 0.18); color: var(--warn); }
+    .badge.done { background: rgba(34, 197, 94, 0.14); color: var(--success); }
+    .badge.error, .badge.rejected { background: rgba(239, 68, 68, 0.14); color: var(--danger); }
+    .badge.pending_confirm { background: rgba(234, 179, 8, 0.16); color: var(--warning); }
     .tool-body {
       border-top: 1px solid var(--border);
       padding: 8px 10px;
-      background: var(--bg-input);
+      background: var(--surface);
     }
     .tool-body pre {
       margin: 0;
       white-space: pre-wrap;
       word-break: break-word;
       font-size: 12px;
-      font-family: ui-monospace, monospace;
-      color: var(--text-dim);
+      font-family: var(--font-mono);
+      color: var(--text-muted);
     }
     .confirm {
-      border: 1px solid var(--warn);
-      border-radius: 10px;
-      padding: 12px;
-      background: var(--bg-panel);
+      border: 1px solid var(--warning);
+      border-radius: var(--radius-md);
+      padding: 12px 14px;
+      background: var(--surface-elevated);
     }
     .confirm .q { margin-bottom: 8px; }
-    .confirm code { font-family: ui-monospace, monospace; }
+    .confirm code { font-family: var(--font-mono); }
+    .confirm pre {
+      white-space: pre-wrap;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+    }
     .confirm button {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font: inherit;
+      font-weight: 600;
       border: none;
-      border-radius: 7px;
-      padding: 6px 14px;
+      border-radius: var(--radius-sm);
+      padding: 7px 14px;
       margin-right: 8px;
       cursor: pointer;
-      font-weight: 600;
     }
-    .confirm .yes { background: var(--ok); color: #fff; }
-    .confirm .no { background: var(--bg-raised); color: var(--text); }
+    .confirm .yes { background: var(--success); color: #fff; }
+    .confirm .no { background: var(--surface-muted); color: var(--text); }
     .error-banner {
-      border: 1px solid var(--err);
-      color: var(--err);
-      border-radius: 10px;
+      border: 1px solid var(--danger);
+      color: var(--danger);
+      border-radius: var(--radius-md);
       padding: 10px 12px;
       font-size: 13px;
       white-space: pre-wrap;
     }
-    .thinking { color: var(--text-dim); font-size: 13px; }
-    .thinking .dots::after {
-      content: "...";
-      animation: dots 1.2s steps(4, end) infinite;
+    .thinking-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-muted);
+      font-size: 13px;
     }
-    @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+    .thinking-row .spin { animation: spin 1.4s linear infinite; display: inline-flex; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .empty {
       margin: auto;
       text-align: center;
-      color: var(--text-dim);
+      color: var(--text-muted);
       padding-top: 16vh;
     }
-    .empty h2 { color: var(--text); font-weight: 650; }
-    .media-strip { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+    .empty h2 { color: var(--text); font-weight: 600; letter-spacing: 0.01em; }
+    .empty .word { color: var(--brand); }
+    .empty .mark { width: 48px; height: 48px; margin: 0 auto 12px; }
+    .media-strip { display: flex; gap: 6px; flex-wrap: wrap; }
     .media-strip img {
       max-height: 120px;
-      border-radius: 8px;
+      border-radius: var(--radius-sm);
       border: 1px solid var(--border);
       cursor: pointer;
     }
   `;
 
-  _toggle(id) {
-    const next = new Set(this._expanded);
+  _toggleSet(setName, id) {
+    const next = new Set(this[setName]);
     next.has(id) ? next.delete(id) : next.add(id);
-    this._expanded = next;
+    this[setName] = next;
+  }
+
+  /** Render assistant text with <think> blocks as collapsible cards. */
+  _renderAssistantText(text, keyPrefix) {
+    return splitThinking(text).map((part, index) => {
+      if (part.type === "text") {
+        return html`<div class="msg assistant">${unsafeHtml(renderMarkdown(part.body))}</div>`;
+      }
+      const key = `${keyPrefix}:${index}`;
+      const open = part.open || this._openThinks.has(key);
+      return html`
+        <div class="think">
+          <div class="think-head" @click=${() => this._toggleSet("_openThinks", key)}>
+            ${part.open
+              ? html`<span class="pulse">${icon("sparkles")}</span> Thinking...`
+              : html`${icon(open ? "chevron-down" : "chevron-right")} Thought for a moment`}
+          </div>
+          ${open ? html`<div class="think-body">${part.body}</div>` : nothing}
+        </div>`;
+    });
   }
 
   _renderToolCard(id) {
     const call = store.state.toolCalls[id];
     if (!call) return nothing;
     const open = this._expanded.has(id);
-    let prettyArgs = call.arguments || "";
-    try { prettyArgs = JSON.stringify(JSON.parse(prettyArgs), null, 2); } catch {}
+    const badgeIcon = {
+      running: "arrow-path",
+      done: "check",
+      error: "exclamation-triangle",
+      rejected: "x-mark",
+      pending_confirm: "exclamation-triangle",
+    }[call.state];
     return html`
       <div class="tool-card">
-        <div class="tool-head" @click=${() => this._toggle(id)}>
-          <span>${open ? "▾" : "▸"}</span>
+        <div class="tool-head" @click=${() => this._toggleSet("_expanded", id)}>
+          ${icon(open ? "chevron-down" : "chevron-right")}
           <span class="name">${call.name}</span>
           <span class="summary">${call.summary}</span>
-          <span class="badge ${call.state}">${call.state.replace("_", " ")}</span>
+          <span class="badge ${call.state}">${badgeIcon ? icon(badgeIcon) : nothing}
+            ${call.state.replace("_", " ")}</span>
         </div>
-        ${open ? html`<div class="tool-body"><pre>${prettyArgs}</pre></div>` : nothing}
+        ${open ? html`
+          <div class="tool-body">
+            <ba-json label="Arguments" .data=${call.arguments}></ba-json>
+            ${call.data !== undefined && call.data !== null ? html`
+              <div style="margin-top: 8px;">
+                <ba-json label="Result" .data=${call.data}></ba-json>
+              </div>` : nothing}
+          </div>` : nothing}
         ${call.media_ids?.length ? html`
           <div class="tool-body media-strip">
             ${call.media_ids.map((m) => html`
               <img src="/media/${store.state.sessionId}/${m}" alt=${m} title=${m}
-                @click=${(e) => window.open(e.target.src, "_blank")}>`)}
+                @click=${() => { this._lightbox = { src: `/media/${store.state.sessionId}/${m}`, alt: m }; }}>`)}
           </div>` : nothing}
       </div>
     `;
@@ -242,42 +363,85 @@ export class BaChatStage extends LitElement {
       <div class="scroll">
         ${showEmpty ? html`
           <div class="empty">
-            <h2><span style="color: var(--accent)">Blender</span> Agent</h2>
+            <div class="mark">${brandMark}</div>
+            <h2><span class="word">Blender</span> Agent</h2>
             <p>Connected to your Blender session through the MCP tool surface.<br>
             Try: "what's in my scene?" or "make the selected mesh manifold".</p>
           </div>` : html`
           <div class="col">
-            ${records.map((r) => this._renderRecord(r))}
+            ${records.map((r, i) => this._renderRecord(r, i))}
             ${this._toolOrder.map((id) => this._renderToolCard(id))}
             ${this._pending ? this._renderConfirm() : nothing}
-            ${this._streaming ? html`
-              <div class="msg assistant">${unsafeHtml(renderMarkdown(this._streaming))}</div>` : nothing}
+            ${this._streaming ? this._renderAssistantText(this._streaming, "stream") : nothing}
             ${this._busy && !this._streaming ? html`
-              <div class="thinking">thinking<span class="dots"></span></div>` : nothing}
+              <div class="thinking-row"><span class="spin">${icon("arrow-path")}</span> working...</div>` : nothing}
             ${this._error ? html`<div class="error-banner">${this._error}</div>` : nothing}
           </div>`}
       </div>
+      ${this._lightbox ? html`
+        <ba-lightbox .src=${this._lightbox.src} .alt=${this._lightbox.alt}
+          @close=${() => { this._lightbox = null; }}></ba-lightbox>` : nothing}
     `;
   }
 
-  _renderRecord(r) {
+  /** Tool results from the transcript, keyed by tool_call_id. */
+  _toolResultsByCallId() {
+    const map = {};
+    for (const record of this._records) {
+      if (record.role === "tool" && record.tool_call_id) {
+        map[record.tool_call_id] = record.content;
+      }
+    }
+    return map;
+  }
+
+  _renderRecord(r, recordIndex) {
     if (r.role === "user") {
-      return html`<div class="msg user">${r.content}</div>`;
+      return html`<div class="msg user"><span class="txt">${r.content}</span>${r.media_ids?.length ? html`
+            <div class="media-strip" style="margin-top: 6px;">
+              ${r.media_ids.map((m) => html`
+                <img src="/media/${store.state.sessionId}/${m}" alt=${m}
+                  @click=${() => { this._lightbox = { src: `/media/${store.state.sessionId}/${m}`, alt: m }; }}>`)}
+            </div>` : nothing}</div>`;
     }
     const liveIds = new Set(this._toolOrder);
-    // Historic tool calls (reloaded sessions / earlier turns) render as
-    // static cards; the live turn's calls render with status below.
     const historic = (r.tool_calls || []).filter((c) => !liveIds.has(c.id));
     if (!r.content && historic.length === 0) return nothing;
+    const results = historic.length ? this._toolResultsByCallId() : {};
     return html`
-      ${r.content ? html`<div class="msg assistant">${unsafeHtml(renderMarkdown(r.content))}</div>` : nothing}
-      ${historic.map((c) => html`
-        <div class="tool-card">
-          <div class="tool-head" style="cursor: default;">
-            <span class="name">${c.name}</span>
-            <span class="summary">${(c.arguments || "").slice(0, 120)}</span>
-          </div>
-        </div>`)}
+      ${r.content ? this._renderAssistantText(r.content, `r${recordIndex}`) : nothing}
+      ${historic.map((c) => {
+        const open = this._expanded.has(c.id);
+        // Media ids live inside the persisted tool-result JSON - the
+        // live-turn state is gone once the next turn starts, so cards
+        // must re-derive their thumbnails from the transcript.
+        let mediaIds = [];
+        if (results[c.id]) {
+          try { mediaIds = JSON.parse(results[c.id]).media_ids || []; } catch {}
+        }
+        return html`
+          <div class="tool-card">
+            <div class="tool-head" @click=${() => this._toggleSet("_expanded", c.id)}>
+              ${icon(open ? "chevron-down" : "chevron-right")}
+              <span class="name">${c.name}</span>
+              <span class="summary">${(c.arguments || "").slice(0, 120)}</span>
+            </div>
+            ${open ? html`
+              <div class="tool-body">
+                <ba-json label="Arguments" .data=${c.arguments}></ba-json>
+                ${results[c.id] ? html`
+                  <div style="margin-top: 8px;">
+                    <ba-json label="Result" .data=${results[c.id]}></ba-json>
+                  </div>` : nothing}
+              </div>` : nothing}
+            ${mediaIds.length ? html`
+              <div class="tool-body media-strip">
+                ${mediaIds.map((m) => html`
+                  <img src="/media/${store.state.sessionId}/${m}" alt=${m} title=${m}
+                    @click=${() => { this._lightbox = { src: `/media/${store.state.sessionId}/${m}`, alt: m }; }}>`)}
+              </div>` : nothing}
+          </div>`;
+      })}
     `;
   }
 
@@ -288,9 +452,9 @@ export class BaChatStage extends LitElement {
     return html`
       <div class="confirm">
         <div class="q">The agent wants to run <code>${p.name}</code>:</div>
-        <pre style="white-space:pre-wrap; font-size:12px;">${prettyArgs.slice(0, 2000)}</pre>
-        <button class="yes" @click=${() => store.confirm(p.call_id, true)}>Allow</button>
-        <button class="no" @click=${() => store.confirm(p.call_id, false)}>Deny</button>
+        <pre>${prettyArgs.slice(0, 2000)}</pre>
+        <button class="yes" @click=${() => store.confirm(p.call_id, true)}>${icon("check")} Allow</button>
+        <button class="no" @click=${() => store.confirm(p.call_id, false)}>${icon("x-mark")} Deny</button>
       </div>
     `;
   }

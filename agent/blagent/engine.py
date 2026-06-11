@@ -25,13 +25,16 @@ __all__ = (
 
 import asyncio
 import json
+import logging
 import time
 
 from typing import Any, Awaitable, Callable
 
-from .llm import LlmClient
+from .llm import LlmClient, LlmError
 from .media import MediaLibrary
 from .tools import ToolContext, ToolError, ToolRegistry, TurnBudget
+
+_log = logging.getLogger("blagent.engine")
 
 # Records the model sees, counted from the end of the transcript.
 _CONTEXT_RECORD_LIMIT = 80
@@ -45,6 +48,33 @@ EngineEvents = Callable[[dict[str, Any]], Awaitable[None]]
 
 def _now() -> float:
     return time.time()
+
+
+def _messages_have_images(messages: list[dict[str, Any]]) -> bool:
+    """
+    True when any message carries image content parts.
+    """
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list) and any(
+                isinstance(p, dict) and p.get("type") == "image_url" for p in content):
+            return True
+    return False
+
+
+def _clip_result_data(data: object, limit: int = 20_000) -> object:
+    """
+    Result payload for tool-status UI events, size-capped so a huge
+    tool result never bloats the socket (the full payload still goes
+    to the model via the transcript, separately truncated).
+    """
+    try:
+        text = json.dumps(data)
+    except (TypeError, ValueError):
+        return {"repr": repr(data)[:limit]}
+    if len(text) <= limit:
+        return data
+    return {"truncated_preview": text[:limit]}
 
 
 class AgentEngine:
@@ -69,6 +99,10 @@ class AgentEngine:
         self.records: list[dict[str, Any]] = []
         # call_id -> Future resolved by the runtime on user confirm/deny.
         self.pending_confirms: dict[str, asyncio.Future[bool]] = {}
+        # Cleared when the endpoint rejects image content (text-only
+        # model, e.g. vLLM without an image encoder) - the transcript
+        # then renders media as text placeholders instead.
+        self.vision_ok = True
 
     # ------------------------------------------------------------------
     # Transcript helpers.
@@ -87,7 +121,19 @@ class AgentEngine:
             role = record.get("role")
             if role == "user":
                 media_ids = record.get("media_ids") or []
-                content = self._content_with_images(str(record.get("content", "")), media_ids)
+                text = str(record.get("content", ""))
+                if media_ids and not self.vision_ok:
+                    # Tell a blind model the truth - a bare "[Attached:
+                    # media i4]" placeholder reads like an image it
+                    # should describe, and text-only models will
+                    # confidently confabulate a description.
+                    text += (
+                        "\n(note: media {:s} exists but you are connected as a TEXT-ONLY "
+                        "model and cannot see images. Never describe or pretend to see "
+                        "them - inspect the scene with tools, or ask the user to look.)"
+                    ).format(", ".join(media_ids))
+                    media_ids = []
+                content = self._content_with_images(text, media_ids)
                 messages.append({"role": "user", "content": content})
             elif role == "assistant":
                 message: dict[str, Any] = {"role": "assistant", "content": record.get("content", "")}
@@ -136,19 +182,34 @@ class AgentEngine:
             model: str,
             autonomy: str,
             max_rounds: int,
+            media_ids: list[str] | None = None,
     ) -> None:
         """
         Run one full turn. Events are emitted through the runtime's
         broadcast callback; records are appended to the transcript.
+        *media_ids* are user-attached images (pasted/dropped in the UI).
         """
-        self.push_record({"role": "user", "content": user_text})
-        await self._emit({"type": "user_record", "session_id": session_id, "content": user_text})
+        _log.info("turn start session=%s model=%s attachments=%s", session_id, model, media_ids or [])
+        user_record: dict[str, Any] = {"role": "user", "content": user_text}
+        if media_ids:
+            user_record["media_ids"] = media_ids
+        self.push_record(user_record)
+        await self._emit({
+            "type": "user_record",
+            "session_id": session_id,
+            "content": user_text,
+            "media_ids": media_ids or [],
+        })
 
         budget = TurnBudget(rounds_left=max_rounds, rounds_max=max_rounds * 2)
         ctx = ToolContext(media=self._media, turn_budget=budget, session_id=session_id)
         # Media produced by tools in the previous round, fed to the
         # model as a synthetic user record on the next one.
         feedback_media: list[str] = []
+        # Some models go silent after tool results (no text, no calls).
+        # Nudge them to wrap up for the user - a bounded number of times.
+        nudges_left = 2
+        turn_had_tool_calls = False
 
         while True:
             if feedback_media:
@@ -167,7 +228,27 @@ class AgentEngine:
                 "tools": self._registry.specs(),
             }
 
-            content, tool_calls = await self._stream_round(session_id, request, llm)
+            try:
+                content, tool_calls = await self._stream_round(session_id, request, llm)
+            except LlmError as ex:
+                if self.vision_ok and _messages_have_images(request["messages"]):
+                    # Endpoint rejected image content (text-only model,
+                    # e.g. vLLM without an image encoder). Degrade to
+                    # text placeholders for the rest of this session
+                    # and retry the round once.
+                    self.vision_ok = False
+                    _log.warning("endpoint rejected image content; retrying text-only: %s", ex)
+                    await self._emit({
+                        "type": "error",
+                        "session_id": session_id,
+                        "message": "Model rejected image input (text-only model?) - "
+                                   "continuing with text placeholders for media.",
+                    })
+                    request["messages"] = self._llm_messages()
+                    content, tool_calls = await self._stream_round(session_id, request, llm)
+                else:
+                    _log.error("LLM round failed: %s", ex)
+                    raise
 
             record: dict[str, Any] = {"role": "assistant", "content": content}
             if tool_calls:
@@ -184,7 +265,22 @@ class AgentEngine:
             })
 
             if not tool_calls:
+                if not content.strip() and turn_had_tool_calls and nudges_left > 0:
+                    # Empty close-out after tool work: nudge for a
+                    # user-facing summary instead of ending in silence.
+                    nudges_left -= 1
+                    self.push_record({
+                        "role": "user",
+                        "content": (
+                            "(Your last message was empty. Briefly tell the user what was "
+                            "done and what the outcome was, or continue with tool calls "
+                            "if the work is unfinished.)"
+                        ),
+                        "synthetic": True,
+                    })
+                    continue
                 break
+            turn_had_tool_calls = True
             if budget.rounds_left <= 0:
                 await self._emit({
                     "type": "error",
@@ -194,9 +290,38 @@ class AgentEngine:
                 break
             budget.rounds_left -= 1
 
-            for call in tool_calls:
-                media_ids = await self._dispatch_tool(session_id, ctx, call, autonomy)
+            declined = False
+            for index, call in enumerate(tool_calls):
+                if declined:
+                    # A declined call ends the batch: record the rest as
+                    # skipped so the model sees an honest transcript.
+                    message = "skipped: an earlier tool call in this batch was declined by the user"
+                    self._push_tool_record(call["id"], {"status": "skipped", "message": message})
+                    await self._emit({
+                        "type": "tool_status",
+                        "session_id": session_id,
+                        "call_id": call["id"],
+                        "name": call["name"],
+                        "arguments": call["arguments"],
+                        "state": "rejected",
+                        "summary": message,
+                    })
+                    continue
+                media_ids, was_declined = await self._dispatch_tool(session_id, ctx, call, autonomy)
                 feedback_media.extend(media_ids)
+                declined = declined or was_declined
+                del index
+
+            if declined:
+                # Pause the whole turn instead of letting the model retry
+                # into more declines - the user steers with their next
+                # message (the rejected results are in the transcript).
+                await self._emit({
+                    "type": "error",
+                    "session_id": session_id,
+                    "message": "Tool call declined - turn paused. Send a message to tell the agent how to proceed.",
+                })
+                break
 
         await self._emit({"type": "turn_done", "session_id": session_id})
 
@@ -244,10 +369,11 @@ class AgentEngine:
             ctx: ToolContext,
             call: dict[str, Any],
             autonomy: str,
-    ) -> list[str]:
+    ) -> tuple[list[str], bool]:
         """
         Run one tool call through the autonomy gate and dispatch.
-        Returns media ids produced (for the vision feedback loop).
+        Returns ``(media_ids, declined)`` - media for the vision
+        feedback loop, and whether the user declined the call.
         """
         name = call["name"]
         call_id = call["id"]
@@ -268,7 +394,7 @@ class AgentEngine:
             message = "unknown tool: {:s}".format(name)
             await status("error", summary=message)
             self._push_tool_record(call_id, {"status": "error", "message": message})
-            return []
+            return [], False
 
         try:
             args = json.loads(call["arguments"]) if call["arguments"].strip() else {}
@@ -276,7 +402,7 @@ class AgentEngine:
             message = "tool arguments are not valid JSON: {:s}".format(str(ex))
             await status("error", summary=message)
             self._push_tool_record(call_id, {"status": "error", "message": message})
-            return []
+            return [], False
 
         # Autonomy gate: destructive tools pause in ask mode.
         if tool.destructive and autonomy == "ask":
@@ -293,27 +419,33 @@ class AgentEngine:
                 message = "user declined this tool call"
                 await status("rejected", summary=message)
                 self._push_tool_record(call_id, {"status": "rejected", "message": message})
-                return []
+                return [], True
 
         await status("running")
+        _log.info("tool call %s %s", name, call["arguments"][:200])
         try:
             result = await tool.call(ctx, args)
         except ToolError as ex:
             await status("error", summary=str(ex))
             self._push_tool_record(call_id, {"status": "error", "message": str(ex)})
-            return []
+            return [], False
         except Exception as ex:  # pylint: disable=broad-exception-caught
             message = "{:s}: {:s}".format(type(ex).__name__, str(ex))
             await status("error", summary=message)
             self._push_tool_record(call_id, {"status": "error", "message": message})
-            return []
+            return [], False
 
         payload: dict[str, Any] = {"status": "ok", "result": result.data}
         if result.media_ids:
             payload["media_ids"] = result.media_ids
         self._push_tool_record(call_id, payload)
-        await status("done", summary=result.summary, media_ids=result.media_ids)
-        return result.media_ids
+        await status(
+            "done",
+            summary=result.summary,
+            media_ids=result.media_ids,
+            data=_clip_result_data(result.data),
+        )
+        return result.media_ids, False
 
     def _push_tool_record(self, call_id: str, payload: dict[str, Any]) -> None:
         text = json.dumps(payload)

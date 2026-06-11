@@ -397,6 +397,28 @@ class _BLMCP_OT_server_stop(bpy.types.Operator):  # type: ignore[misc]
         return {"FINISHED"}
 
 
+def _instance_title() -> str:
+    """
+    Label for this Blender instance in the agent UI (browser tab
+    title): the open .blend file name, or empty when unsaved (the UI
+    falls back to the agent port).
+    """
+    import os
+
+    return os.path.basename(bpy.data.filepath)
+
+
+@bpy.app.handlers.persistent  # type: ignore[misc]
+def _agent_title_sync_handler(_filepath: object = None) -> None:
+    """
+    Keep the agent's tab title in sync as files are saved or loaded.
+    A no-op when the agent is not running.
+    """
+    from . import agent_launch
+
+    agent_launch.update_title(_instance_title())
+
+
 class _BLMCP_OT_agent_start(bpy.types.Operator):  # type: ignore[misc]
     bl_idname = "blmcp.agent_start"
     bl_label = "Start Agent"
@@ -426,6 +448,7 @@ class _BLMCP_OT_agent_start(bpy.types.Operator):  # type: ignore[misc]
                 mcp_port=prefs.agent_mcp_port if prefs.agent_use_mcp else None,
                 bridge_host=prefs.host,
                 bridge_port=_State.bridge_port_actual or prefs.port,
+                title=_instance_title(),
             )
         except RuntimeError as ex:
             _State.agent_error = str(ex)
@@ -572,6 +595,10 @@ def register() -> None:
     _cli_commands.append(bpy.utils.register_cli_command("blender_mcp", _cli_execute_handler))
     bpy.types.TOPBAR_MT_window.append(_agent_menu_draw)
 
+    for handlers in (bpy.app.handlers.save_post, bpy.app.handlers.load_post):
+        if _agent_title_sync_handler not in handlers:
+            handlers.append(_agent_title_sync_handler)
+
     # Defer auto-start so the server does not slow down Blender's startup.
     if not bpy.app.background:
         if not _State.startup_online_ok_or_error():
@@ -591,6 +618,10 @@ def unregister() -> None:
     from . import execute_interactive
 
     bpy.types.TOPBAR_MT_window.remove(_agent_menu_draw)
+
+    for handlers in (bpy.app.handlers.save_post, bpy.app.handlers.load_post):
+        if _agent_title_sync_handler in handlers:
+            handlers.remove(_agent_title_sync_handler)
 
     for cmd in _cli_commands:
         bpy.utils.unregister_cli_command(cmd)

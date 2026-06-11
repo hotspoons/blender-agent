@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Blender Agent</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#129302;</text></svg>">
+<!-- Same geometry as core/brand.js (keep in sync). -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23f5a623' d='M12 3 20 7.5 12 12 4 7.5Z'/><path fill='%23e87d0d' d='M4 7.5 12 12 12 21 4 16.5Z'/><path fill='%23265787' d='M12 12 20 7.5 20 16.5 12 21Z'/><path stroke='%23fff' stroke-width='1.1' stroke-linecap='round' fill='none' d='M12 12 4 7.5 M12 12 20 7.5 M12 12 12 21'/><circle cx='12' cy='12' r='1.8' fill='%23fff'/></svg>">
 <link rel="stylesheet" href="/static/styles.css">
 <!--
   Import map: bare specifiers for the vendored libraries. Zero build
@@ -14,7 +15,7 @@
 {
   "imports": {
     "lit": "/static/vendor/lit.js",
-    "@mlc-ai/web-llm": "/static/vendor/web-llm.js"
+    "@huggingface/transformers": "/static/vendor/transformers.min.js"
   }
 }
 </script>

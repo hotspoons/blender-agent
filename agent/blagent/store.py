@@ -52,8 +52,8 @@ class AgentConfig:
     api_key: str = ""
     # "ask" pauses destructive tool calls for confirmation; "auto" does not.
     autonomy: str = "ask"
-    # Use the in-browser WebLLM bridge when no endpoint is configured.
-    use_webllm: bool = True
+    # Use the in-browser (Transformers.js) model when no endpoint is configured.
+    use_local_llm: bool = True
     max_rounds: int = 16
 
     @classmethod
@@ -65,6 +65,9 @@ class AgentConfig:
                     raw = json.load(fh)
             except (OSError, ValueError):
                 raw = {}
+            # Pre-Transformers.js configs stored this under the engine name.
+            if "use_local_llm" not in raw and "use_webllm" in raw:
+                raw["use_local_llm"] = raw["use_webllm"]
             for field in dataclasses.fields(cls):
                 if field.name in raw:
                     setattr(config, field.name, raw[field.name])
@@ -87,7 +90,7 @@ class AgentConfig:
             "model": self.model,
             "has_api_key": bool(self.api_key),
             "autonomy": self.autonomy,
-            "use_webllm": self.use_webllm,
+            "use_local_llm": self.use_local_llm,
             "max_rounds": self.max_rounds,
         }
 

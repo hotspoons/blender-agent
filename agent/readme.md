@@ -8,9 +8,9 @@ A web-based agent for Blender, built directly on the
   `foyer-agent`,
 - the **web UI** (zero-build Lit ES modules, served as static files -
   no Node or bundler at runtime),
-- the **WebLLM reverse tunnel** (the browser can host the LLM via
-  WebGPU and serve it to the backend over a WebSocket - protocol
-  ported from zip-ties),
+- the **local-model reverse tunnel** (the browser can host the LLM
+  itself via Transformers.js - WebGPU with a WASM fallback - and serve
+  it to the backend over a WebSocket; protocol ported from zip-ties),
 - optionally, an **MCP streamable-HTTP listener** exposing the same
   tools to external MCP clients.
 
@@ -21,8 +21,8 @@ tool surface (Blender's Python API + bundled documentation) is
 identical everywhere and the agent thread never touches ``bpy``.
 
 ```
-                                    Browser (UI + optional WebLLM)
-                                       ⇕ ws://.../ws  ⇕ ws://.../ws/webllm
+                                Browser (UI + optional Transformers.js)
+                                       ⇕ ws://.../ws  ⇕ ws://.../ws/local-llm
 MCP Client  ⇐ MCP/http ⇒  blender-agent (tools in-process)  ⇐ TCP socket ⇒  Blender Add-on
                                        ⇓ https
                             any OpenAI-compatible endpoint
@@ -59,9 +59,12 @@ Settings (gear icon in the UI, persisted server-side):
 - **OpenAI-compatible endpoint** + model + optional API key - any
   ``/v1`` base URL: OpenAI, Anthropic, OpenRouter, llama.cpp, Ollama,
   vLLM, ...
-- **WebLLM**: leave the endpoint empty and load a model in the
-  browser panel; inference runs on your GPU via WebGPU and streams to
-  the backend over the reverse tunnel.
+- **Local (in-browser)**: leave the endpoint empty and load a model
+  in the browser panel - any Hugging Face repo with ONNX weights (the
+  panel suggests a curated list). Inference runs in a worker via
+  Transformers.js on WebGPU (WASM fallback) and streams to the backend
+  over the reverse tunnel. Weights download once from the Hub, then
+  are cached by the browser.
 - **Autonomy**: ``ask`` (destructive tool calls pause for an
   Allow/Deny confirmation in the UI) or ``auto``.
 
@@ -81,14 +84,14 @@ to save new proven recipes.
 blagent/
   engine.py        per-turn agent loop (rounds, autonomy gate, vision feedback)
   runtime.py       sessions, turn tasks, event broadcast
-  llm.py           OpenAI-compatible streaming client + WebLLM client
-  webllm.py        reverse-tunnel bridge (zip-ties protocol)
+  llm.py           OpenAI-compatible streaming client + local-bridge client
+  local_llm.py     reverse-tunnel bridge (zip-ties protocol)
   blender_tools.py blmcp tools invoked in-process (shared FastMCP registry)
   agent_tools.py   skills / media recall / continue_working tools
   store.py         config, JSONL session transcripts, skills, memory
   media.py         short-id media library (i1, i2, ...)
-  app.py           starlette app: /ws, /ws/webllm, /media, static UI
-  web/             zero-build Lit frontend (vendored lit/marked/highlight/web-llm)
+  app.py           starlette app: /ws, /ws/local-llm, /media, static UI
+  web/             zero-build Lit frontend (vendored lit/marked/highlight/transformers.js)
   data/            system prompt + seeded skills
 ```
 

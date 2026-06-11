@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// In-browser LLM via WebGPU/WebLLM, served to the backend over the
-// /ws/webllm reverse tunnel. Ported from zip-ties' `zt-webllm.js`
-// (same wire protocol; see blagent/webllm.py for the server side).
+// In-browser LLM via Transformers.js (WebGPU with WASM fallback),
+// served to the backend over the /ws/local-llm reverse tunnel. The
+// tunnel protocol originates in zip-ties' `zt-webllm.js` and is
+// engine-agnostic (see blagent/local_llm.py for the server side);
+// inference itself runs in core/local-llm-worker.js so generation
+// never blocks the UI thread.
 
 import { LitElement, html, css, nothing } from "lit";
+import { icon } from "/static/core/icons.js";
+import { MainThreadLlmHost } from "/static/core/local-llm-engine.js";
+import "/static/core/widgets.js";
 
-export class BaWebLlmPanel extends LitElement {
+export class BaLocalLlmPanel extends LitElement {
   static properties = {
     modelId: { type: String },
     status: { type: String },     // idle | loading | ready | error
@@ -15,103 +21,185 @@ export class BaWebLlmPanel extends LitElement {
     _error: { state: true },
   };
 
+  // Curated ONNX exports verified loadable in the browser: either a
+  // small single file, or external weight data (model.onnx_data) that
+  // bypasses onnxruntime's 4GB WASM session-build heap. NOT every Hub
+  // export qualifies - e.g. Qwen3-1.7B-ONNX ships q4f16 as a 1.43GB
+  // single file and cannot load. The combo stays editable for any
+  // other repo.
   static MODELS = [
-    { id: "Qwen3-8B-q4f16_1-MLC", label: "Qwen3 8B", size: "~4.5GB" },
-    { id: "Qwen3-4B-q4f16_1-MLC", label: "Qwen3 4B", size: "~2.3GB" },
-    { id: "Qwen3-1.7B-q4f16_1-MLC", label: "Qwen3 1.7B", size: "~1.0GB" },
-    { id: "Qwen3-30B-A3B-q4f16_1-MLC", label: "Qwen3 30B MoE", size: "~17GB" },
-    { id: "Hermes-3-Llama-3.1-8B-q4f16_1-MLC", label: "Hermes 3 Llama 3.1 8B", size: "~4.3GB" },
-    { id: "Hermes-2-Pro-Mistral-7B-q4f16_1-MLC", label: "Hermes 2 Pro Mistral 7B", size: "~4.0GB" },
+    "onnx-community/Qwen3-0.6B-ONNX",
+    "onnx-community/Llama-3.2-1B-Instruct-ONNX",
+    "onnx-community/Qwen3-4B-ONNX",
+    "onnx-community/Llama-3.2-3B-Instruct-ONNX",
   ];
 
-  static STORAGE_KEY = "blender-agent.webllm-model";
-  static THINKING_KEY = "blender-agent.webllm-thinking";
+  static STORAGE_KEY = "blender-agent.local-model";
+  static THINKING_KEY = "blender-agent.local-thinking";
 
-  // Engine + WS survive component teardown (panel toggles, session
-  // switches) in shared static state.
-  static _shared = { engine: null, ws: null, modelId: "", status: "idle" };
+  // Host (worker or main-thread engine) + WS survive component
+  // teardown (panel toggles, session switches) in shared static state.
+  static _shared = { worker: null, ws: null, modelId: "", status: "idle", device: "", hostKind: "" };
 
   constructor() {
     super();
-    const s = BaWebLlmPanel._shared;
-    this.modelId = s.modelId || localStorage.getItem(BaWebLlmPanel.STORAGE_KEY) || BaWebLlmPanel.MODELS[2].id;
+    const s = BaLocalLlmPanel._shared;
+    this.modelId = s.modelId || localStorage.getItem(BaLocalLlmPanel.STORAGE_KEY) || BaLocalLlmPanel.MODELS[1];
     this.status = s.status;
     this.progress = null;
-    this.thinking = localStorage.getItem(BaWebLlmPanel.THINKING_KEY) === "true";
+    this.thinking = localStorage.getItem(BaLocalLlmPanel.THINKING_KEY) === "true";
     this._error = "";
-    this._engine = s.engine;
+    this._worker = s.worker;
     this._ws = s.ws;
+    this._device = s.device;
+    this._hostKind = s.hostKind;  // "worker" | "main" (WebGPU-less workers)
+    this._requests = new Map();   // request id -> {ws, content}
+    if (this._worker) this._attachWorker(this._worker);
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
-    BaWebLlmPanel._shared = {
-      engine: this._engine, ws: this._ws, modelId: this.modelId, status: this.status,
+    BaLocalLlmPanel._shared = {
+      worker: this._worker, ws: this._ws, modelId: this.modelId,
+      status: this.status, device: this._device, hostKind: this._hostKind,
     };
+  }
+
+  _attachWorker(worker) {
+    worker.onmessage = (e) => this._onWorkerMessage(e.data);
+    worker.onerror = (e) => {
+      this.status = "error";
+      this._error = e.message || "inference worker crashed";
+    };
+  }
+
+  /**
+   * The worker reported it would run on WASM. If the PAGE has WebGPU,
+   * this browser (Safari) just does not expose it to workers - rehost
+   * the engine on the main thread, the trade WebLLM always made. GPU
+   * inference is async, so the UI stays responsive; the WASM path
+   * stays in the worker, where its blocking generate() belongs.
+   */
+  async _rehostOnMainThread() {
+    try {
+      if (!navigator.gpu || !await navigator.gpu.requestAdapter()) return false;
+    } catch {
+      return false;
+    }
+    try { this._worker.terminate(); } catch {}
+    this._worker = new MainThreadLlmHost();
+    this._hostKind = "main";
+    this._attachWorker(this._worker);
+    this.progress = { text: "WebGPU unavailable in workers here - reloading on the main thread...", progress: 0 };
+    this._worker.postMessage({ type: "load", modelId: this.modelId.trim() });
+    return true;
+  }
+
+  _onWorkerMessage(msg) {
+    switch (msg.type) {
+      case "device": {
+        this._device = msg.device;
+        if (msg.device === "wasm" && this._hostKind === "worker" && this.status === "loading") {
+          this._rehostOnMainThread();
+        }
+        break;
+      }
+      case "progress": {
+        const mb = (n) => (n / (1024 * 1024)).toFixed(0);
+        this.progress = {
+          progress: msg.progress,
+          text: msg.total
+            ? `Downloading model... ${mb(msg.loaded)} / ${mb(msg.total)} MB`
+            : "Preparing model...",
+        };
+        break;
+      }
+      case "ready":
+        this.status = "ready";
+        this.progress = null;
+        this._device = msg.device;
+        localStorage.setItem(BaLocalLlmPanel.STORAGE_KEY, this.modelId);
+        BaLocalLlmPanel._shared = {
+          worker: this._worker, ws: null, modelId: this.modelId,
+          status: "ready", device: msg.device, hostKind: this._hostKind,
+        };
+        this._connectBridge();
+        break;
+      case "load_error":
+        this.status = "error";
+        this._error = msg.message;
+        this.progress = null;
+        break;
+      case "delta": {
+        const req = this._requests.get(msg.id);
+        if (!req) break;
+        req.content += msg.text;
+        this._sendChunk(req.ws, msg.id, { content: msg.text });
+        break;
+      }
+      case "done": {
+        const req = this._requests.get(msg.id);
+        if (!req) break;
+        this._requests.delete(msg.id);
+        this._finishRequest(req.ws, msg.id, req.content);
+        break;
+      }
+      case "error": {
+        const req = this._requests.get(msg.id);
+        if (req) {
+          this._requests.delete(msg.id);
+          req.ws.send(JSON.stringify({ id: msg.id, error: msg.message }));
+        }
+        break;
+      }
+      default:
+        break;
+    }
   }
 
   async _loadModel() {
     this.status = "loading";
     this._error = "";
-    this.progress = { text: "Initializing WebLLM engine...", progress: 0 };
-    try {
-      if (!navigator.gpu) {
-        throw new Error("WebGPU is not available in this browser.");
-      }
-      const { CreateMLCEngine } = await import("@mlc-ai/web-llm");
-      this._engine = await CreateMLCEngine(
-        this.modelId,
-        {
-          initProgressCallback: (report) => {
-            this.progress = { text: report.text || "", progress: report.progress || 0 };
-          },
-        },
-        { context_window_size: 20480 },
-      );
-      this.status = "ready";
-      this.progress = null;
-      localStorage.setItem(BaWebLlmPanel.STORAGE_KEY, this.modelId);
-      BaWebLlmPanel._shared = { engine: this._engine, ws: null, modelId: this.modelId, status: "ready" };
-      await this._connectBridge();
-    } catch (e) {
-      this.status = "error";
-      this._error = e.message || String(e);
-      console.error("WebLLM load failed:", e);
+    this.progress = { text: "Starting inference worker...", progress: 0 };
+    if (!this._worker) {
+      this._worker = new Worker("/static/core/local-llm-worker.js", { type: "module" });
+      this._hostKind = "worker";
+      this._attachWorker(this._worker);
     }
+    this._worker.postMessage({ type: "load", modelId: this.modelId.trim() });
   }
 
   _unloadModel() {
     this._closeWs();
-    if (this._engine) {
-      try { this._engine.unload(); } catch {}
-      this._engine = null;
+    if (this._worker) {
+      // Terminate rather than dispose: frees GPU/WASM memory at once
+      // and guarantees no half-finished generation lingers.
+      try { this._worker.terminate(); } catch {}
+      this._worker = null;
     }
+    this._requests.clear();
     this.status = "idle";
     this.progress = null;
     this._error = "";
-    localStorage.removeItem(BaWebLlmPanel.STORAGE_KEY);
-    BaWebLlmPanel._shared = { engine: null, ws: null, modelId: "", status: "idle" };
+    this._hostKind = "";
+    localStorage.removeItem(BaLocalLlmPanel.STORAGE_KEY);
+    BaLocalLlmPanel._shared = { worker: null, ws: null, modelId: "", status: "idle", device: "", hostKind: "" };
   }
 
   _connectBridge() {
     this._closeWs();
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}/ws/webllm`);
+    const ws = new WebSocket(`${proto}://${location.host}/ws/local-llm`);
 
-    const ready = new Promise((resolve, reject) => {
-      ws.onopen = () => {
-        ws.send(JSON.stringify({ type: "model_info", model_id: this.modelId, status: "ready" }));
-        resolve();
-      };
-      ws.onerror = (e) => reject(e);
-    });
-
-    ws.onmessage = async (e) => {
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: "model_info", model_id: this.modelId, status: "ready" }));
+    };
+    ws.onmessage = (e) => {
       try {
         const req = JSON.parse(e.data);
-        await this._handleRequest(req, ws);
+        this._handleRequest(req, ws);
       } catch (err) {
-        console.error("WebLLM request handling error:", err);
+        console.error("local-model request handling error:", err);
       }
     };
     ws.onclose = () => {
@@ -119,7 +207,6 @@ export class BaWebLlmPanel extends LitElement {
       if (this.status === "ready") setTimeout(() => this._connectBridge(), 2000);
     };
     this._ws = ws;
-    return ready;
   }
 
   _closeWs() {
@@ -142,9 +229,9 @@ export class BaWebLlmPanel extends LitElement {
       }
     }
 
-    // Tools are injected into the system prompt rather than passed to
-    // the engine - WebLLM's native function-calling parsers are
-    // model-specific and fragile; <tool_call> tags are parsed here.
+    // Tools are injected into the system prompt rather than handed to
+    // the model natively - small local models are unreliable with
+    // structured function-calling, so <tool_call> tags are parsed here.
     const toolDefs = req.tools || [];
     if (toolDefs.length > 0) {
       const toolBlock = toolDefs.map((t) => {
@@ -171,7 +258,8 @@ export class BaWebLlmPanel extends LitElement {
       }
     }
 
-    // WebLLM only supports system/user/assistant roles.
+    // Chat templates expect system/user/assistant roles with string
+    // content; tool records and vision arrays are flattened.
     messages = messages.map((m) => {
       if (m.role === "assistant" && m.tool_calls) {
         const callText = m.tool_calls.map((tc) => {
@@ -185,8 +273,6 @@ export class BaWebLlmPanel extends LitElement {
         const label = m.name || m.tool_call_id || "unknown";
         return { role: "user", content: `[Tool result: ${label}]\n${m.content}` };
       }
-      // Vision content arrays are not supported by WebLLM text models;
-      // flatten to the text parts.
       if (Array.isArray(m.content)) {
         const text = m.content.filter((p) => p.type === "text").map((p) => p.text).join("\n");
         return { ...m, content: text || "[attached media omitted - text-only local model]" };
@@ -197,70 +283,55 @@ export class BaWebLlmPanel extends LitElement {
     return messages;
   }
 
-  async _handleRequest(req, ws) {
+  _handleRequest(req, ws) {
     const requestId = req.id;
-    if (!requestId || !this._engine) return;
-    try {
-      const messages = this._prepareMessages(req);
-      const model = req.model || this.modelId;
-      const chunks = await this._engine.chat.completions.create({
-        messages,
-        model,
-        temperature: req.temperature ?? 0.7,
-        max_tokens: req.max_tokens ?? 2048,
-        stream: true,
-      });
-
-      let fullContent = "";
-      for await (const chunk of chunks) {
-        const choice = chunk.choices?.[0];
-        if (!choice) continue;
-        const delta = choice.delta || {};
-        if (delta.content) fullContent += delta.content;
-        ws.send(JSON.stringify({
-          id: requestId,
-          type: "chunk",
-          choices: [{ index: 0, delta, finish_reason: choice.finish_reason || null }],
-          model,
-        }));
+    if (!requestId || !this._worker) return;
+    if (req.type === "abort") {
+      // The server dropped the stream (aborted turn): stop generating.
+      // Requests are serialized, so interrupting the worker only ever
+      // hits the request being aborted.
+      if (this._requests.delete(requestId)) {
+        this._worker.postMessage({ type: "abort" });
       }
-
-      // Post-stream: surface <tool_call> blocks as proper tool calls.
-      if (fullContent) {
-        const parsed = this._parseToolCalls(fullContent);
-        for (let i = 0; i < parsed.toolCalls.length; i++) {
-          const tc = parsed.toolCalls[i];
-          ws.send(JSON.stringify({
-            id: requestId,
-            type: "chunk",
-            choices: [{
-              index: 0,
-              delta: {
-                tool_calls: [{
-                  index: i,
-                  id: `call_${requestId.slice(0, 8)}_${i}`,
-                  type: "function",
-                  function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-                }],
-              },
-              finish_reason: null,
-            }],
-            model,
-          }));
-        }
-        if (parsed.toolCalls.length > 0) {
-          ws.send(JSON.stringify({
-            id: requestId,
-            type: "chunk",
-            choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
-            model,
-          }));
-        }
-      }
-      ws.send(JSON.stringify({ id: requestId, type: "done" }));
-    } catch (err) {
-      ws.send(JSON.stringify({ id: requestId, error: err.message || String(err) }));
+      return;
     }
+    this._requests.set(requestId, { ws, content: "" });
+    this._worker.postMessage({
+      type: "generate",
+      id: requestId,
+      messages: this._prepareMessages(req),
+      temperature: req.temperature,
+      max_tokens: req.max_tokens,
+    });
+  }
+
+  _sendChunk(ws, requestId, delta, finishReason = null) {
+    ws.send(JSON.stringify({
+      id: requestId,
+      type: "chunk",
+      choices: [{ index: 0, delta, finish_reason: finishReason }],
+      model: this.modelId,
+    }));
+  }
+
+  /** Post-stream: surface <tool_call> blocks as proper tool calls. */
+  _finishRequest(ws, requestId, fullContent) {
+    const parsed = this._parseToolCalls(fullContent || "");
+    for (let i = 0; i < parsed.toolCalls.length; i++) {
+      const tc = parsed.toolCalls[i];
+      this._sendChunk(ws, requestId, {
+        tool_calls: [{
+          index: i,
+          id: `call_${requestId.slice(0, 8)}_${i}`,
+          type: "function",
+          function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+        }],
+      });
+    }
+    if (parsed.toolCalls.length > 0) {
+      this._sendChunk(ws, requestId, {}, "tool_calls");
+    }
+    ws.send(JSON.stringify({ id: requestId, type: "done" }));
   }
 
   _parseToolCalls(text) {
@@ -281,44 +352,60 @@ export class BaWebLlmPanel extends LitElement {
   }
 
   static styles = css`
-    :host { display: block; }
-    .card {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 10px;
-      background: var(--bg-raised);
-      font-size: 12.5px;
-    }
-    .head { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; font-weight: 600; }
-    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-    .dot.idle { background: var(--text-dim); }
-    .dot.loading { background: var(--warn); animation: pulse 1s infinite; }
-    .dot.ready { background: var(--ok); }
-    .dot.error { background: var(--err); }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-    .row { display: flex; gap: 6px; align-items: center; }
-    select, button {
-      font-size: 12px;
-      padding: 5px 8px;
-      border-radius: 6px;
-      border: 1px solid var(--border);
-      background: var(--bg-input);
+    *, *::before, *::after { box-sizing: border-box; }
+    :host { display: block; font-family: var(--font-sans); }
+    .head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      font-weight: 600;
+      font-size: 13.5px;
       color: var(--text);
     }
-    select { flex: 1; min-width: 0; }
-    button { cursor: pointer; white-space: nowrap; }
-    button.primary { background: var(--accent-soft); border-color: var(--accent); }
-    button.danger { border-color: var(--err); color: var(--err); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-left: auto; }
+    .dot.idle { background: var(--text-muted); }
+    .dot.loading { background: var(--warning); animation: pulse 1s infinite; }
+    .dot.ready { background: var(--success); }
+    .dot.error { background: var(--danger); }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .row ba-combo { flex: 1; min-width: 0; }
+    button.act {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 8px 14px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--accent);
+      background: var(--accent-soft);
+      color: var(--text);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button.act:disabled { opacity: 0.5; cursor: default; }
+    button.act.danger { border-color: var(--danger); color: var(--danger); background: transparent; }
     .bar {
       width: 100%; height: 4px; border-radius: 2px;
-      background: var(--bg-input); overflow: hidden; margin-top: 8px;
+      background: var(--surface-muted); overflow: hidden; margin-top: 10px;
     }
-    .fill { height: 100%; background: var(--accent); transition: width 0.3s ease; }
-    .hint { font-size: 11px; color: var(--text-dim); margin-top: 5px; }
-    .err { font-size: 11.5px; color: var(--err); margin-top: 5px; }
-    label.think {
-      display: flex; align-items: center; gap: 5px;
-      font-size: 11.5px; color: var(--text-dim); margin-top: 7px; cursor: pointer;
+    .fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      transition: width 0.3s ease;
+    }
+    .hint { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+    .err { font-size: 12px; color: var(--danger); margin-top: 6px; }
+    .think {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 10px;
     }
   `;
 
@@ -326,34 +413,39 @@ export class BaWebLlmPanel extends LitElement {
     const isLoading = this.status === "loading";
     const isReady = this.status === "ready";
     return html`
-      <div class="card">
-        <div class="head"><span class="dot ${this.status}"></span> WebLLM (in-browser)</div>
-        <div class="row">
-          <select ?disabled=${isLoading || isReady}
-            @change=${(e) => { this.modelId = e.target.value; }}>
-            ${BaWebLlmPanel.MODELS.map((m) => html`
-              <option value=${m.id} ?selected=${m.id === this.modelId}>${m.label} (${m.size})</option>`)}
-          </select>
-          ${isReady
-            ? html`<button class="danger" @click=${this._unloadModel}>Unload</button>`
-            : html`<button class="primary" ?disabled=${isLoading} @click=${this._loadModel}>
-                ${isLoading ? "Loading..." : "Load"}</button>`}
-        </div>
-        ${isLoading && this.progress ? html`
-          <div class="bar"><div class="fill" style="width: ${(this.progress.progress * 100).toFixed(0)}%"></div></div>
-          <div class="hint">${this.progress.text}</div>` : nothing}
-        <label class="think">
-          <input type="checkbox" .checked=${this.thinking} @change=${(e) => {
-            this.thinking = e.target.checked;
-            localStorage.setItem(BaWebLlmPanel.THINKING_KEY, String(this.thinking));
-          }}>
-          Allow thinking
-        </label>
-        ${isReady ? html`<div class="hint">Model loaded; serving the backend over the reverse tunnel.</div>` : nothing}
-        ${this._error ? html`<div class="err">${this._error}</div>` : nothing}
+      <div class="head">${icon("cpu-chip")} Transformers.js (in-browser)
+        <span class="dot ${this.status}"></span></div>
+      <div class="row">
+        <ba-combo .options=${BaLocalLlmPanel.MODELS} .editable=${true}
+          .value=${this.modelId}
+          placeholder="Hugging Face model id (ONNX)"
+          @input=${(e) => {
+            if (!isLoading && !isReady) this.modelId = e.detail.value;
+          }}></ba-combo>
+        ${isReady
+          ? html`<button class="act danger" @click=${this._unloadModel}>${icon("x-mark")} Unload</button>`
+          : html`<button class="act" ?disabled=${isLoading || !this.modelId.trim()} @click=${this._loadModel}>
+              ${isLoading ? "Loading..." : html`${icon("check")} Load`}</button>`}
       </div>
+      <div class="hint">Any Hub repo with ONNX weights works (the list above is a good start).
+        Weights download once, then are cached by the browser.</div>
+      ${isLoading && this.progress ? html`
+        <div class="bar"><div class="fill" style="width: ${(this.progress.progress * 100).toFixed(0)}%"></div></div>
+        <div class="hint">${this.progress.text}</div>` : nothing}
+      <div class="think">
+        <ba-switch .on=${this.thinking} @input=${(e) => {
+          this.thinking = e.detail.value;
+          localStorage.setItem(BaLocalLlmPanel.THINKING_KEY, String(this.thinking));
+        }}></ba-switch>
+        Allow thinking (Qwen3 reasoning mode)
+      </div>
+      ${isReady ? html`<div class="hint">
+        Model loaded on ${this._device === "webgpu" ? "WebGPU" : "WASM (no WebGPU - slower)"}${
+          this._hostKind === "main" ? " (main thread - this browser has no WebGPU in workers)" : ""};
+        serving the backend over the reverse tunnel.</div>` : nothing}
+      ${this._error ? html`<div class="err">${this._error}</div>` : nothing}
     `;
   }
 }
 
-customElements.define("ba-webllm-panel", BaWebLlmPanel);
+customElements.define("ba-local-llm-panel", BaLocalLlmPanel);

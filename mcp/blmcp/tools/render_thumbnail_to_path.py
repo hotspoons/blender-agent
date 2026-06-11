@@ -14,9 +14,10 @@ from blmcp.tools_helpers import (
     toolcode_wrap_with_calling_convention,
 )
 from blmcp.tools_helpers.connection import send_code
+from blmcp.tools_helpers.image_fetch import response_with_image_blocks
 from blmcp.tools.render_thumbnail_to_path_toolcode import Params
 from mcp.server.fastmcp import FastMCP  # pylint: disable=import-error,no-name-in-module
-from mcp.types import ToolAnnotations  # pylint: disable=import-error,no-name-in-module
+from mcp.types import ImageContent, TextContent, ToolAnnotations  # pylint: disable=import-error,no-name-in-module
 
 _TOOL_CALL = toolcode_wrap_with_calling_convention(toolcode_load_from_filepath(__file__))
 
@@ -26,12 +27,17 @@ def register(mcp: FastMCP) -> None:
         annotations=ToolAnnotations(
             title="Render Thumbnail to Path",
             destructiveHint=True,
-        )
+        ),
+        structured_output=False,
     )
-    def render_thumbnail_to_path(output_path: str) -> dict[str, object]:
+    def render_thumbnail_to_path(output_path: str) -> "list[TextContent | ImageContent]":
         """
         Render a small, low-quality thumbnail to *output_path* (temporarily overrides settings).
+
+        On success the thumbnail is also attached to the result so
+        vision-capable agents can see the render without a separate
+        screenshot call.
         """
         p = Params(output_path=output_path)
         code = toolcode_format_call(_TOOL_CALL, p)
-        return send_code(code, strict_json=True)
+        return response_with_image_blocks(send_code(code, strict_json=True))

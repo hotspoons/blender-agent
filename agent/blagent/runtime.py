@@ -14,17 +14,21 @@ __all__ = (
 )
 
 import asyncio
+import logging
 import os
+
 
 from typing import Any
 
 from .agent_tools import ContinueWorkingTool, MediaTool, SkillsTool
 from .engine import AgentEngine
-from .llm import LlmClient, LlmError, OpenAiHttpClient, WebLlmBridgeClient
+from .llm import LlmClient, LlmError, LocalLlmBridgeClient, OpenAiHttpClient
 from .media import MediaLibrary
 from .store import AgentStore
 from .tools import Tool, ToolRegistry
-from .webllm import WebLlmBridge
+from .local_llm import LocalLlmBridge
+
+_log = logging.getLogger("blagent.runtime")
 
 _SYSTEM_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "system_prompt.md")
 
@@ -47,14 +51,18 @@ class _Session:
 
 class AgentRuntime:
     """
-    Owns the store, the tool registry, the WebLLM bridge, and all live
-    sessions. Every UI (web, future TUI, tests) is a thin client over
+    Owns the store, the tool registry, the local-model bridge, and all
+    live sessions. Every UI (web, future TUI, tests) is a thin client over
     this object.
     """
 
     def __init__(self, store: AgentStore, blender_tools: list[Tool]) -> None:
         self.store = store
-        self.webllm = WebLlmBridge()
+        self.local_llm = LocalLlmBridge()
+        # Instance label (e.g. the .blend file name) + bound UI port,
+        # surfaced as the browser tab title to tell instances apart.
+        self.instance_title = ""
+        self.instance_port = 0
         tools: list[Tool] = list(blender_tools)
         tools.append(SkillsTool(store))
         tools.append(MediaTool())
@@ -140,23 +148,32 @@ class AgentRuntime:
     # LLM resolution.
 
     def _make_llm(self) -> LlmClient:
+        # Local (in-browser Transformers.js) and remote endpoints are
+        # mutually exclusive modes: `use_local_llm` selects local
+        # regardless of any stored endpoint, so switching back and
+        # forth never loses settings.
         config = self.store.config
+        if config.use_local_llm:
+            return LocalLlmBridgeClient(self.local_llm)
         if config.endpoint:
             return OpenAiHttpClient(config.endpoint, api_key=config.api_key)
-        if config.use_webllm:
-            return WebLlmBridgeClient(self.webllm)
-        raise LlmError("no LLM configured - set an endpoint in settings or enable WebLLM")
+        raise LlmError("no LLM configured - pick a local or remote model in settings")
 
     def _model_name(self) -> str:
         config = self.store.config
-        if config.endpoint:
-            return config.model or "default"
-        return self.webllm.model_id or "webllm"
+        if config.use_local_llm:
+            return self.local_llm.model_id or "local"
+        return config.model or "default"
 
     # ------------------------------------------------------------------
     # Turn entry points (called from the WS handler).
 
-    async def send_user_message(self, session_id: str, content: str) -> str:
+    async def send_user_message(
+            self,
+            session_id: str,
+            content: str,
+            media_ids: list[str] | None = None,
+    ) -> str:
         """
         Start a turn. Returns the session id (a new one when blank).
         Raises ``RuntimeError`` when the session is already busy.
@@ -180,11 +197,13 @@ class AgentRuntime:
                     model=model,
                     autonomy=config.autonomy,
                     max_rounds=config.max_rounds,
+                    media_ids=media_ids,
                 )
             except asyncio.CancelledError:
                 await self.emit({"type": "turn_done", "session_id": session_id, "aborted": True})
                 raise
             except LlmError as ex:
+                _log.error("turn failed session=%s: %s", session_id, ex)
                 await self.emit({"type": "error", "session_id": session_id, "message": str(ex)})
                 await self.emit({"type": "turn_done", "session_id": session_id})
             except Exception as ex:  # pylint: disable=broad-exception-caught
@@ -214,6 +233,9 @@ class AgentRuntime:
     # ------------------------------------------------------------------
     # Config.
 
+    def instance_info(self) -> dict[str, object]:
+        return {"title": self.instance_title, "port": self.instance_port}
+
     def set_config(self, updates: dict[str, Any]) -> dict[str, object]:
         config = self.store.config
         for key in ("endpoint", "model", "autonomy"):
@@ -221,8 +243,8 @@ class AgentRuntime:
                 setattr(config, key, str(updates[key]))
         if "api_key" in updates:
             config.api_key = str(updates["api_key"])
-        if "use_webllm" in updates:
-            config.use_webllm = bool(updates["use_webllm"])
+        if "use_local_llm" in updates:
+            config.use_local_llm = bool(updates["use_local_llm"])
         if "max_rounds" in updates:
             config.max_rounds = max(1, int(updates["max_rounds"]))
         self.store.save_config()

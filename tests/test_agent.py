@@ -128,9 +128,9 @@ class TestSkillsStore(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
-class TestWebLlmBridge(unittest.TestCase):
+class TestLocalLlmBridge(unittest.TestCase):
     """
-    Request/response correlation on the WebLLM reverse tunnel.
+    Request/response correlation on the local-model reverse tunnel.
     """
 
     def test_streaming_roundtrip(self) -> None:
@@ -138,7 +138,7 @@ class TestWebLlmBridge(unittest.TestCase):
         Checks chunk/done correlation between a fake browser and the bridge.
         """
         _import_blagent()
-        from blagent.webllm import WebLlmBridge
+        from blagent.local_llm import LocalLlmBridge
 
         class FakeWs:
             def __init__(self, bridge: Any) -> None:
@@ -153,7 +153,7 @@ class TestWebLlmBridge(unittest.TestCase):
                 await self.bridge.handle_message({"id": rid, "type": "done"})
 
         async def run() -> list[dict[str, Any]]:
-            bridge = WebLlmBridge()
+            bridge = LocalLlmBridge()
             await bridge.connect(FakeWs(bridge))
             await bridge.handle_message({"type": "model_info", "model_id": "m", "status": "ready"})
             self.assertTrue(bridge.is_ready())
@@ -171,14 +171,14 @@ class TestWebLlmBridge(unittest.TestCase):
         Checks that a browser disconnect terminates in-flight streams.
         """
         _import_blagent()
-        from blagent.webllm import WebLlmBridge
+        from blagent.local_llm import LocalLlmBridge
 
         class SilentWs:
             async def send_json(self, data: Any) -> None:
                 pass
 
         async def run() -> int:
-            bridge = WebLlmBridge()
+            bridge = LocalLlmBridge()
             await bridge.connect(SilentWs())
             bridge.status = "ready"
 
@@ -291,6 +291,109 @@ class TestAgentTurn(unittest.TestCase):
         self.assertIn("token", events)
         self.assertIn("tool_status", events)
         self.assertEqual(final, "You have a Cube.")
+
+
+@unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
+class TestInstanceTitle(unittest.TestCase):
+    """
+    Instance labeling for multi-Blender setups: the title rides the
+    ``hello`` message and ``POST /instance`` broadcasts updates (the
+    add-on posts from save/load handlers).
+    """
+
+    def test_hello_carries_title_and_update_broadcasts(self) -> None:
+        _import_blagent()
+        from blagent.app import create_app
+        from blagent.runtime import AgentRuntime
+        from blagent.store import AgentStore
+
+        from starlette.testclient import TestClient
+
+        async def build() -> AgentRuntime:
+            store = AgentStore(data_dir=tempfile.mkdtemp(prefix="blagent-title-"))
+            return AgentRuntime(store, [])
+
+        runtime = asyncio.new_event_loop().run_until_complete(build())
+        runtime.instance_title = "house.blend"
+        runtime.instance_port = 10102
+        client = TestClient(create_app(runtime))
+        with client.websocket_connect("/ws") as ws:
+            hello = ws.receive_json()
+            self.assertEqual(hello["instance"], {"title": "house.blend", "port": 10102})
+            response = client.post("/instance", json={"title": "barn.blend"})
+            self.assertEqual(response.status_code, 200)
+            event = ws.receive_json()
+            self.assertEqual(event["type"], "instance")
+            self.assertEqual(event["title"], "barn.blend")
+            self.assertEqual(event["port"], 10102)
+
+
+@unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
+class TestVisionFallback(unittest.TestCase):
+    """
+    Endpoints without an image encoder (e.g. vLLM hosting a text-only
+    model) reject multimodal content; the engine must strip images,
+    retry once, and continue text-only.
+    """
+
+    def test_image_rejection_falls_back_to_text(self) -> None:
+        _import_blagent()
+        from blagent.engine import AgentEngine
+        from blagent.llm import LlmChunk, LlmClient, LlmError
+        from blagent.media import MediaLibrary
+        from blagent.tools import ToolRegistry
+
+        media_dir = tempfile.mkdtemp(prefix="blagent-vision-")
+        media = MediaLibrary(media_dir)
+        media_id = media.register_bytes(b"\x89PNG fake", mime="image/png", label="probe")
+
+        class RejectingLlm(LlmClient):
+            def __init__(self) -> None:
+                self.calls: list[bool] = []
+
+            async def stream(self, request: dict[str, Any]) -> Any:
+                has_images = any(
+                    isinstance(m.get("content"), list) for m in request["messages"])
+                self.calls.append(has_images)
+                if has_images:
+                    raise LlmError("400: image input not supported by this model")
+                yield LlmChunk(content="Understood, text only.")
+
+        events: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            events.append(event)
+
+        engine = AgentEngine(
+            registry=ToolRegistry([]),
+            media=media,
+            system_prompt="test",
+            emit=emit,
+            append_record=lambda record: None,
+        )
+        llm = RejectingLlm()
+        asyncio.run(engine.run_turn(
+            session_id="s1",
+            user_text="look at this",
+            llm=llm,
+            model="text-only",
+            autonomy="auto",
+            max_rounds=4,
+            media_ids=[media_id],
+        ))
+        # First call carried images and was rejected; the retry did not.
+        self.assertEqual(llm.calls, [True, False])
+        self.assertFalse(engine.vision_ok)
+        # The blind model must be told it cannot see, not handed a
+        # bare attachment placeholder to confabulate from.
+        retry_messages = engine._llm_messages()  # pylint: disable=protected-access
+        joined = json.dumps(retry_messages)
+        self.assertIn("TEXT-ONLY", joined)
+        self.assertIn("cannot see images", joined)
+        messages = [e for e in events if e["type"] == "error"]
+        self.assertTrue(any("image input" in m["message"] or "text placeholders" in m["message"]
+                            for m in messages))
+        self.assertEqual(events[-1]["type"], "turn_done")
 
 
 if __name__ == "__main__":

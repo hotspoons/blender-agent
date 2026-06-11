@@ -3,22 +3,27 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-WebLLM reverse tunnel: the browser hosts an LLM via WebGPU/WebLLM and
-serves it to this backend over a WebSocket.
+Local-model reverse tunnel: the browser hosts an LLM (Transformers.js
+on WebGPU, with a WASM fallback) and serves it to this backend over a
+WebSocket.
 
-Direct port of the zip-ties bridge
-(``ext/zip-ties/zip-ties-web/zip_ties_web/webllm_bridge.py``), and the
-same wire protocol, so the browser component ports over unchanged:
+The wire protocol originates in the zip-ties bridge
+(``ext/zip-ties/zip-ties-web/zip_ties_web/webllm_bridge.py``) and is
+engine-agnostic - it carried WebLLM before Transformers.js and would
+carry any future in-browser runtime unchanged:
 
 Browser -> server: ``{"type": "model_info", "model_id": ..., "status": ...}``
 Server -> browser: ``{"id": <uuid>, ...openai chat completions request...}``
 Browser -> server: ``{"id": <uuid>, "type": "chunk", "choices": [...]}``
                    ``{"id": <uuid>, "type": "done"}``
                    ``{"id": <uuid>, "error": "..."}``
+Server -> browser: ``{"id": <uuid>, "type": "abort"}`` when a streaming
+request is dropped before ``done`` (turn aborted) - the browser stops
+generating instead of burning CPU/GPU until the token cap.
 """
 
 __all__ = (
-    "WebLlmBridge",
+    "LocalLlmBridge",
 )
 
 import asyncio
@@ -27,7 +32,7 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Protocol
 
-_REQUEST_TIMEOUT = 120.0
+_REQUEST_TIMEOUT = 300.0  # WASM-fallback generation can be slow.
 
 _SENTINEL: object = object()
 
@@ -36,7 +41,7 @@ class _WsLike(Protocol):
     async def send_json(self, data: Any) -> None: ...  # noqa: E704
 
 
-class WebLlmBridge:
+class LocalLlmBridge:
     """
     Correlates backend chat-completion requests with streamed responses
     fulfilled by the single connected browser tab.
@@ -68,7 +73,7 @@ class WebLlmBridge:
             self.model_id = ""
             for future in self._pending.values():
                 if not future.done():
-                    future.set_exception(ConnectionError("WebLLM browser disconnected"))
+                    future.set_exception(ConnectionError("local-model browser tab disconnected"))
             self._pending.clear()
             for queue in self._streams.values():
                 queue.put_nowait(_SENTINEL)
@@ -106,7 +111,7 @@ class WebLlmBridge:
         future = self._pending.get(request_id)
         if future is not None and not future.done():
             if "error" in data:
-                future.set_exception(RuntimeError("WebLLM error: {:s}".format(str(data["error"]))))
+                future.set_exception(RuntimeError("local model error: {:s}".format(str(data["error"]))))
             else:
                 payload = dict(data)
                 payload.pop("id", None)
@@ -118,7 +123,7 @@ class WebLlmBridge:
         """
         ws = self._ws
         if ws is None:
-            raise ConnectionError("WebLLM browser is not connected")
+            raise ConnectionError("local-model browser tab is not connected")
         request_id = str(uuid.uuid4())
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
@@ -134,19 +139,30 @@ class WebLlmBridge:
         """
         ws = self._ws
         if ws is None:
-            raise ConnectionError("WebLLM browser is not connected")
+            raise ConnectionError("local-model browser tab is not connected")
         request_id = str(uuid.uuid4())
         queue: asyncio.Queue[object] = asyncio.Queue()
         self._streams[request_id] = queue
+        finished = False
         try:
             await ws.send_json({"id": request_id, "stream": True, **request_body})
             while True:
                 item = await asyncio.wait_for(queue.get(), timeout=_REQUEST_TIMEOUT)
                 if item is _SENTINEL:
+                    finished = True
                     return
                 if isinstance(item, Exception):
+                    finished = True
                     raise item
                 assert isinstance(item, dict)
                 yield item
         finally:
             self._streams.pop(request_id, None)
+            if not finished and self._ws is not None:
+                # Consumer went away mid-stream (aborted turn): tell the
+                # browser to stop generating. Shielded so it completes
+                # even when this generator is closed by cancellation.
+                try:
+                    await asyncio.shield(ws.send_json({"id": request_id, "type": "abort"}))
+                except (Exception, asyncio.CancelledError):  # pylint: disable=broad-exception-caught
+                    pass

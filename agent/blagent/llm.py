@@ -6,17 +6,18 @@
 LLM transport, ported from Foyer Studio's ``foyer-agent/src/llm.rs``.
 
 Every endpoint — OpenAI, Anthropic (via its OpenAI-compatible surface),
-OpenRouter, local llama.cpp / Ollama / vLLM, or the in-browser WebLLM
-bridge — is treated as a uniform OpenAI-compatible chat-completions
-endpoint. Streaming only; deltas are reassembled by the engine.
+OpenRouter, local llama.cpp / Ollama / vLLM, or the in-browser
+Transformers.js bridge — is treated as a uniform OpenAI-compatible
+chat-completions endpoint. Streaming only; deltas are reassembled by
+the engine.
 """
 
 __all__ = (
     "LlmChunk",
     "LlmClient",
     "LlmError",
+    "LocalLlmBridgeClient",
     "OpenAiHttpClient",
-    "WebLlmBridgeClient",
 )
 
 import json
@@ -27,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 if TYPE_CHECKING:
-    from .webllm import WebLlmBridge
+    from .local_llm import LocalLlmBridge
 
 
 class LlmError(Exception):
@@ -125,21 +126,21 @@ class OpenAiHttpClient(LlmClient):
             raise LlmError("LLM endpoint unreachable at {:s}: {:s}".format(url, str(ex))) from ex
 
 
-class WebLlmBridgeClient(LlmClient):
+class LocalLlmBridgeClient(LlmClient):
     """
-    Streaming client backed by the in-browser WebLLM reverse tunnel
-    (see ``webllm.py``). From the engine's perspective it is just
-    another endpoint.
+    Streaming client backed by the in-browser local-model reverse
+    tunnel (see ``local_llm.py``). From the engine's perspective it is
+    just another endpoint.
     """
 
-    def __init__(self, bridge: "WebLlmBridge") -> None:
+    def __init__(self, bridge: "LocalLlmBridge") -> None:
         self._bridge = bridge
 
     async def stream(self, request: dict[str, Any]) -> AsyncIterator[LlmChunk]:
         if not self._bridge.is_ready():
             raise LlmError(
-                "WebLLM bridge is not connected - open the web UI and load a model, "
-                "or configure an external endpoint in settings."
+                "local model is not loaded - open the web UI and load one in "
+                "Settings, or configure an external endpoint instead."
             )
         async for payload in self._bridge.send_streaming_request(request):
             chunk = LlmChunk.from_openai(payload)

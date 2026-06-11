@@ -107,7 +107,7 @@ Notes:
 Located in ``agent/``, installed as the optional ``blender-mcp-agent``
 package. A web-based agent UI that drives Blender through the same
 tool surface, with conversation sessions, a searchable skills library,
-media artifacts, an in-browser WebGPU LLM option, and any
+media artifacts, an in-browser LLM option (Transformers.js), and any
 OpenAI-compatible endpoint. It can be launched from the add-on
 preferences (Web Agent section) or standalone via ``blender-agent``.
 See [agent/readme.md](agent/readme.md).

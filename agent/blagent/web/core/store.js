@@ -13,7 +13,8 @@ class Store extends EventTarget {
     this.state = {
       connected: false,
       config: {},
-      webllm: { status: "disconnected", model_id: "", connected: false },
+      localLlm: { status: "disconnected", model_id: "", connected: false },
+      instance: { title: "", port: 0 },   // which Blender this agent belongs to
       sessions: [],
       sessionId: "",
       records: [],       // persisted transcript records for the open session
@@ -24,6 +25,7 @@ class Store extends EventTarget {
       toolOrder: [],     // call ids in arrival order (current turn)
       pendingConfirm: null, // {call_id, name, arguments}
       error: "",
+      models: { endpoint: "", list: [], error: "", loading: false },
     };
     this._ws = null;
     this._backoff = 500;
@@ -76,7 +78,12 @@ class Store extends EventTarget {
     const forThisSession = !msg.session_id || msg.session_id === this.state.sessionId;
     switch (msg.type) {
       case "hello":
-        this._set({ config: msg.config, sessions: msg.sessions, webllm: msg.webllm });
+        this._set({
+          config: msg.config,
+          sessions: msg.sessions,
+          localLlm: msg.local_llm,
+          instance: msg.instance || this.state.instance,
+        });
         if (!this.state.sessionId && msg.sessions.length) {
           this.loadSession(msg.sessions[0].id);
         }
@@ -84,25 +91,40 @@ class Store extends EventTarget {
       case "sessions":
         this._set({ sessions: msg.sessions });
         break;
-      case "session_loaded":
-        this._set({
+      case "session_loaded": {
+        // Mid-turn refreshes (media updates) for the CURRENT session
+        // must not wipe live turn state - doing so destroyed the
+        // pending-confirm card, the engine timed out, and the model
+        // saw phantom "user declined" results.
+        const sameSessionBusy = msg.session_id === this.state.sessionId && this.state.busy;
+        const patch = {
           sessionId: msg.session_id,
           records: msg.records || [],
           media: msg.media || [],
-          streaming: "",
-          toolCalls: {},
-          toolOrder: [],
-          pendingConfirm: null,
-          error: "",
-        });
+        };
+        if (!sameSessionBusy) {
+          Object.assign(patch, {
+            streaming: "",
+            toolCalls: {},
+            toolOrder: [],
+            pendingConfirm: null,
+            error: "",
+          });
+        }
+        this._set(patch);
         break;
+      }
       case "chat_accepted":
         this._set({ sessionId: msg.session_id, busy: true, error: "" });
         this.send({ type: "list_sessions" });
         break;
       case "user_record":
         if (forThisSession) {
-          this.state.records.push({ role: "user", content: msg.content });
+          this.state.records.push({
+            role: "user",
+            content: msg.content,
+            media_ids: msg.media_ids || [],
+          });
           this._set({ records: this.state.records });
         }
         break;
@@ -130,6 +152,7 @@ class Store extends EventTarget {
           state: msg.state,
           summary: msg.summary || existing.summary || "",
           media_ids: msg.media_ids || existing.media_ids || [],
+          data: msg.data !== undefined ? msg.data : existing.data,
         };
         const order = this.state.toolOrder.includes(msg.call_id)
           ? this.state.toolOrder
@@ -154,8 +177,21 @@ class Store extends EventTarget {
       case "config":
         this._set({ config: msg.config });
         break;
-      case "webllm_status":
-        this._set({ webllm: { status: msg.status, model_id: msg.model_id, connected: msg.connected } });
+      case "local_llm_status":
+        this._set({ localLlm: { status: msg.status, model_id: msg.model_id, connected: msg.connected } });
+        break;
+      case "instance":
+        this._set({ instance: { title: msg.title || "", port: msg.port || 0 } });
+        break;
+      case "models":
+        this._set({
+          models: {
+            endpoint: msg.endpoint,
+            list: msg.models || [],
+            error: msg.error || "",
+            loading: false,
+          },
+        });
         break;
       case "error":
         if (forThisSession) this._set({ error: msg.message, busy: false });
@@ -176,9 +212,32 @@ class Store extends EventTarget {
   // ----------------------------------------------------------------
   // Actions.
 
-  chat(content) {
+  chat(content, attachments = []) {
     this._set({ streaming: "", toolCalls: {}, toolOrder: [], error: "" });
-    this.send({ type: "chat", session_id: this.state.sessionId, content });
+    this.send({ type: "chat", session_id: this.state.sessionId, content, attachments });
+  }
+
+  /**
+   * Upload an image attachment to the current session (creating one
+   * when none is open). Resolves to {session_id, id}.
+   */
+  async uploadAttachment(file) {
+    const sessionId = this.state.sessionId || "new";
+    const response = await fetch(`/upload/${sessionId}`, {
+      method: "POST",
+      headers: { "Content-Type": file.type || "application/octet-stream" },
+      body: file,
+    });
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new Error(detail.error || `upload failed (${response.status})`);
+    }
+    const result = await response.json();
+    if (!this.state.sessionId) {
+      this._set({ sessionId: result.session_id });
+      this.send({ type: "list_sessions" });
+    }
+    return result;
   }
 
   newSession() {
@@ -198,6 +257,12 @@ class Store extends EventTarget {
 
   setConfig(updates) {
     this.send({ type: "set_config", ...updates });
+  }
+
+  /** Fetch the model list for an endpoint (debounced by callers). */
+  requestModels(endpoint, apiKey) {
+    this._set({ models: { ...this.state.models, loading: true, error: "" } });
+    this.send({ type: "list_models", endpoint, api_key: apiKey || "" });
   }
 
   confirm(callId, approve) {

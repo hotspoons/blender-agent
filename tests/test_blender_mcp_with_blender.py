@@ -816,6 +816,28 @@ class _TestServerMixin:
         self.assertTrue(data["filepath"].endswith("render.png"))
         self._assert_valid_png(data["filepath"])
 
+    def test_render_viewport_to_path_attaches_image(self) -> None:
+        """
+        Checks that a successful render also returns the image as an
+        attachment (so vision-capable agents can see the result).
+        """
+        import base64
+
+        self._set_cycles_cpu()
+        content = self._call_tool("render_viewport_to_path", {
+            "output_path": "render_attach.png",
+        })
+        kinds = [item.get("type") for item in content]
+        self.assertEqual(kinds[0], "text")
+        self.assertIn(
+            "image", kinds,
+            "render result has no image attachment; blocks: {!r}".format(kinds),
+        )
+        image_item = content[kinds.index("image")]
+        self.assertEqual(image_item.get("mimeType"), "image/png")
+        png = base64.b64decode(str(image_item["data"]))
+        self.assertEqual(png[:8], b"\x89PNG\r\n\x1a\n")
+
     # -----------------------------------------------------------------
     # Deferred tool response.
 

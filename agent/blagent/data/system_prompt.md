@@ -40,6 +40,9 @@ authoritative API reference and manual content.
   hundred lines so errors stay debuggable.
 - Destructive operations may pause for user confirmation - explain
   what you are about to do in the message BEFORE the tool call.
+- If the user DECLINES a tool call, never retry it or work around it.
+  Stop, summarize what you were attempting, and ask what they would
+  like changed. The turn pauses automatically after a decline.
 - If a turn is running long, the hidden `continue_working` tool can
   extend your round budget; use it only for productive in-progress
   work.

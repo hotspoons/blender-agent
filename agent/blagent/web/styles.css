@@ -1,38 +1,95 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-/* Theme variables - [data-theme] scopes on <html>, set by core/theme.js. */
+/*
+ * Design tokens, adapted from Foyer Studio's theme (itself derived
+ * from Patapsco's platform-ui): slate-indigo dark surfaces, Jost
+ * type, restrained radii. [data-theme] scopes set by core/theme.js.
+ */
 
+/* Jost - self-hosted WOFF2. SIL OFL; vendored via Foyer Studio. */
+@font-face {
+  font-family: "Jost"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url("/static/vendor/fonts/jost-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Jost"; font-style: normal; font-weight: 500; font-display: swap;
+  src: url("/static/vendor/fonts/jost-latin-500-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Jost"; font-style: normal; font-weight: 600; font-display: swap;
+  src: url("/static/vendor/fonts/jost-latin-600-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Jost"; font-style: normal; font-weight: 700; font-display: swap;
+  src: url("/static/vendor/fonts/jost-latin-700-normal.woff2") format("woff2");
+}
+
+/* True dark - the default when the system prefers dark. */
 :root, html[data-theme="dark"] {
-  --bg: #16181d;
-  --bg-panel: #1d2026;
-  --bg-raised: #262a32;
-  --bg-input: #14161a;
-  --border: #32363f;
-  --text: #e8eaee;
-  --text-dim: #9aa1ad;
-  --accent: #e87d0d;        /* Blender orange */
-  --accent-soft: rgba(232, 125, 13, 0.16);
-  --user-bubble: #2c3340;
-  --ok: #4caf72;
-  --warn: #e0a437;
-  --err: #e05c5c;
   color-scheme: dark;
+  --surface:          #0d0d0d;
+  --surface-elevated: #1a1a1a;
+  --surface-muted:    #262626;
+  --border:           #3f3f46;
+  --text:             #e5e7eb;
+  --text-muted:       #9ca3af;
+  --accent:           #818cf8;
+  --accent-2:         #a78bfa;
+  --accent-soft:      rgba(129, 140, 248, 0.14);
+  --brand:            #e87d0d;          /* Blender orange - wordmark only */
+  --success:          #22c55e;
+  --warning:          #eab308;
+  --danger:           #ef4444;
+  --shadow-panel:     0 24px 64px rgba(0, 0, 0, 0.5);
+  --overlay-tint:     rgba(10, 10, 10, 0.62);
+}
+
+/* Dim - the slate-indigo trademark, an explicit choice. */
+html[data-theme="dim"] {
+  color-scheme: dark;
+  --surface:          #0f172a;
+  --surface-elevated: #1e293b;
+  --surface-muted:    #334155;
+  --border:           #3c4a61;
+  --text:             #f1f5f9;
+  --text-muted:       #94a3b8;
+  --accent:           #6366f1;
+  --accent-2:         #8b5cf6;
+  --accent-soft:      rgba(99, 102, 241, 0.14);
+  --brand:            #e87d0d;
+  --success:          #22c55e;
+  --warning:          #eab308;
+  --danger:           #ef4444;
+  --shadow-panel:     0 24px 64px rgba(0, 0, 0, 0.4);
+  --overlay-tint:     rgba(2, 6, 23, 0.6);
 }
 
 html[data-theme="light"] {
-  --bg: #f4f5f7;
-  --bg-panel: #ffffff;
-  --bg-raised: #eceef1;
-  --bg-input: #ffffff;
-  --border: #d4d8df;
-  --text: #1c1f24;
-  --text-dim: #5d6570;
-  --accent: #d96b00;
-  --accent-soft: rgba(217, 107, 0, 0.12);
-  --user-bubble: #e4e9f1;
-  --ok: #2e8b57;
-  --warn: #a8741a;
-  --err: #c43c3c;
   color-scheme: light;
+  --surface:          #ffffff;
+  --surface-elevated: #f8fafc;
+  --surface-muted:    #e2e8f0;
+  --border:           #cbd5e1;
+  --text:             #0f172a;
+  --text-muted:       #475569;
+  --accent:           #4f46e5;
+  --accent-2:         #7c3aed;
+  --accent-soft:      rgba(79, 70, 229, 0.10);
+  --brand:            #d96b00;
+  --success:          #16a34a;
+  --warning:          #a16207;
+  --danger:           #dc2626;
+  --shadow-panel:     0 24px 64px rgba(15, 23, 42, 0.18);
+  --overlay-tint:     rgba(15, 23, 42, 0.35);
+}
+
+:root {
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --font-sans: "Jost", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --overlay-blur: 3px;
+  --overlay-saturate: 100%;
 }
 
 * { box-sizing: border-box; }
@@ -40,10 +97,13 @@ html[data-theme="light"] {
 html, body {
   margin: 0;
   height: 100%;
-  background: var(--bg);
+  background: var(--surface);
   color: var(--text);
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  font-size: 14px;
+  font-family: var(--font-sans);
+  font-size: 14.5px;
+  letter-spacing: 0.01em;
 }
 
-ba-app { display: block; height: 100%; }
+/* No `display` here: the component's :host rule sets its own grid,
+   and document-level host styles would override it. */
+ba-app { height: 100%; }
