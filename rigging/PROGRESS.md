@@ -37,6 +37,14 @@
   test_mcp_server (42), test_tool_listing (regenerated snapshot),
   test_agent (11) — all green.
 
+- **Skills unification (0974325)** — agent skills fully ported to the core
+  index: bundled examples became the core "builtin" collection; AgentStore
+  is a facade over blmcp.skills (saved skills write Anthropic folders,
+  legacy flat files migrate on startup, agent-store source overrides
+  builtins); the agent `skills` tool now sees builtin + drop-folder + git
+  repos + extension bundles. Search tokenization fixed both sides
+  (underscore split + plural stemming).
+
 ## Next / open
 - End-to-end `rigging_run` through a live addon bridge (integration-suite
   style) — pieces are individually tested (payloads compile, blrig green
