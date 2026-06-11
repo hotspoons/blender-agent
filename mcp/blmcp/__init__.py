@@ -14,9 +14,7 @@ __all__ = (
 )
 
 import argparse
-import importlib
 import os
-import pkgutil
 
 import yaml
 from mcp.server.fastmcp import FastMCP  # pylint: disable=import-error,no-name-in-module
@@ -65,15 +63,9 @@ def main() -> int:
 
     mcp = FastMCP("blender-mcp", instructions=str(prompts["initial_instructions"]))
 
-    # Auto-discover and register all tools (they are never un-registered).
-    import blmcp.tools as tools_pkg
-
-    for _importer, modname, _ispkg in pkgutil.iter_modules(tools_pkg.__path__):
-        if modname.endswith("_toolcode") or modname.startswith("_template_"):
-            continue
-        mod = importlib.import_module("blmcp.tools.{:s}".format(modname))
-        if hasattr(mod, "register"):
-            mod.register(mcp)
+    # Core tools + optional extensions (they are never un-registered).
+    from blmcp.registry import register_all_tools
+    register_all_tools(mcp)
 
     transport = args.transport
     if _USE_HTTP_SUPPORT and transport == "http":

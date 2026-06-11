@@ -28,12 +28,15 @@ EXPECTED_TOOLS = [
     {
         "name": "execute_blender_code",
         "description": "\n"
-        "Execute Python code in the connected Blender instance.\n"
+        "        Execute Python code in the connected Blender instance.\n"
         "\n"
-        "The code runs in Blender's Python environment with full access to ``bpy``.\n"
-        "To return data, assign a JSON-serialisable dict to a variable named ``result``.\n"
-        "Deferred completion via ``check_is_finished`` is only supported by the\n"
-        "interactive addon server, and is rejected in background mode.\n",
+        "        The code runs in Blender's Python environment with full access to ``bpy``.\n"
+        "        To return data, assign a JSON-serialisable dict to a variable named ``result``.\n"
+        "        Deferred completion via ``check_is_finished`` is only supported by the\n"
+        "        interactive addon server, and is rejected in background mode.\n"
+        "        \n"
+        "\n"
+        "If you have not yet this session: call the `welcome` tool first \u2014 it loads the working instructions this Blender toolset is designed around.",
         "inputSchema": {
             "properties": {
                 "code": {
@@ -51,10 +54,13 @@ EXPECTED_TOOLS = [
     {
         "name": "execute_blender_code_for_cli",
         "description": "\n"
-        "Execute Python code in a background Blender process.\n"
+        "        Execute Python code in a background Blender process.\n"
         "\n"
-        "Opens *blend_file* with ``blender --background`` and runs *code*.\n"
-        "Assign a dict to ``result`` to return data.\n",
+        "        Opens *blend_file* with ``blender --background`` and runs *code*.\n"
+        "        Assign a dict to ``result`` to return data.\n"
+        "        \n"
+        "\n"
+        "If you have not yet this session: call the `welcome` tool first \u2014 it loads the working instructions this Blender toolset is designed around.",
         "inputSchema": {
             "properties": {
                 "blend_file": {
@@ -77,7 +83,8 @@ EXPECTED_TOOLS = [
     {
         "name": "get_blendfile_summary_datablocks",
         "description": "\n"
-        "Return a summary of the blend file: data-block counts, active workspace, and render engine.\n",
+        "        Return a summary of the blend file: data-block counts, active workspace, and render engine.\n"
+        "        ",
         "inputSchema": {
             "properties": {},
             "title": "get_blendfile_summary_datablocksArguments",
@@ -87,7 +94,8 @@ EXPECTED_TOOLS = [
     {
         "name": "get_blendfile_summary_datablocks_for_cli",
         "description": "\n"
-        "Return a data-block summary by opening *blend_file* in background Blender.\n",
+        "        Return a data-block summary by opening *blend_file* in background Blender.\n"
+        "        ",
         "inputSchema": {
             "properties": {
                 "blend_file": {
@@ -105,8 +113,9 @@ EXPECTED_TOOLS = [
     {
         "name": "get_blendfile_summary_missing_files",
         "description": "\n"
-        "Report external file references that are missing from disk\n"
-        "(images, libraries, fonts, sounds, movie clips, caches, sequences).\n",
+        "        Report external file references that are missing from disk\n"
+        "        (images, libraries, fonts, sounds, movie clips, caches, sequences).\n"
+        "        ",
         "inputSchema": {
             "properties": {},
             "title": "get_blendfile_summary_missing_filesArguments",
@@ -116,7 +125,8 @@ EXPECTED_TOOLS = [
     {
         "name": "get_blendfile_summary_missing_files_for_cli",
         "description": "\n"
-        "Report missing file references by opening *blend_file* in background Blender.\n",
+        "        Report missing file references by opening *blend_file* in background Blender.\n"
+        "        ",
         "inputSchema": {
             "properties": {
                 "blend_file": {
@@ -134,7 +144,8 @@ EXPECTED_TOOLS = [
     {
         "name": "get_blendfile_summary_of_linked_libraries",
         "description": "\n"
-        "Return a tree of directly and indirectly linked library files.\n",
+        "        Return a tree of directly and indirectly linked library files.\n"
+        "        ",
         "inputSchema": {
             "properties": {},
             "title": "get_blendfile_summary_of_linked_librariesArguments",
@@ -144,7 +155,8 @@ EXPECTED_TOOLS = [
     {
         "name": "get_blendfile_summary_of_linked_libraries_for_cli",
         "description": "\n"
-        "Return linked-library info by opening *blend_file* in background Blender.\n",
+        "        Return linked-library info by opening *blend_file* in background Blender.\n"
+        "        ",
         "inputSchema": {
             "properties": {
                 "blend_file": {
@@ -162,7 +174,8 @@ EXPECTED_TOOLS = [
     {
         "name": "get_blendfile_summary_path_info",
         "description": "\n"
-        "Simple/fast access to the blend file's path, save status, age, and backups.\n",
+        "        Simple/fast access to the blend file's path, save status, age, and backups.\n"
+        "        ",
         "inputSchema": {
             "properties": {},
             "title": "get_blendfile_summary_path_infoArguments",
@@ -172,7 +185,8 @@ EXPECTED_TOOLS = [
     {
         "name": "get_blendfile_summary_path_info_for_cli",
         "description": "\n"
-        "Return path info by opening *blend_file* in background Blender.\n",
+        "        Return path info by opening *blend_file* in background Blender.\n"
+        "        ",
         "inputSchema": {
             "properties": {
                 "blend_file": {
@@ -190,7 +204,8 @@ EXPECTED_TOOLS = [
     {
         "name": "get_blendfile_summary_usage_guess",
         "description": "\n"
-        "Guess the primary use-cases of the current blend file (scored 0-100 with certainty).\n",
+        "        Guess the primary use-cases of the current blend file (scored 0-100 with certainty).\n"
+        "        ",
         "inputSchema": {
             "properties": {},
             "title": "get_blendfile_summary_usage_guessArguments",
@@ -200,7 +215,8 @@ EXPECTED_TOOLS = [
     {
         "name": "get_blendfile_summary_usage_guess_for_cli",
         "description": "\n"
-        "Guess use-cases by opening *blend_file* in background Blender.\n",
+        "        Guess use-cases by opening *blend_file* in background Blender.\n"
+        "        ",
         "inputSchema": {
             "properties": {
                 "blend_file": {
@@ -218,10 +234,11 @@ EXPECTED_TOOLS = [
     {
         "name": "get_object_detail_summary",
         "description": "\n"
-        "Return a structured summary of the object identified by *name*.\n"
+        "        Return a structured summary of the object identified by *name*.\n"
         "\n"
-        "Includes type, transforms, parent, children, modifiers, constraints,\n"
-        "materials, visibility, data-block name, and collections.\n",
+        "        Includes type, transforms, parent, children, modifiers, constraints,\n"
+        "        materials, visibility, data-block name, and collections.\n"
+        "        ",
         "inputSchema": {
             "properties": {
                 "name": {
@@ -239,10 +256,13 @@ EXPECTED_TOOLS = [
     {
         "name": "get_objects_summary",
         "description": "\n"
-        "Return the scene's collection hierarchy and their objects.\n"
+        "        Return the scene's collection hierarchy and their objects.\n"
         "\n"
-        "Each collection lists its objects (name, type, parent, data name,\n"
-        "selection, visibility) and nested child collections.\n",
+        "        Each collection lists its objects (name, type, parent, data name,\n"
+        "        selection, visibility) and nested child collections.\n"
+        "        \n"
+        "\n"
+        "If you have not yet this session: call the `welcome` tool first \u2014 it loads the working instructions this Blender toolset is designed around.",
         "inputSchema": {
             "properties": {},
             "title": "get_objects_summaryArguments",
@@ -252,55 +272,56 @@ EXPECTED_TOOLS = [
     {
         "name": "get_python_api_docs",
         "description": "\n"
-        "Return the Blender Python API docs for *identifier*, or list\n"
-        "modules matching a trailing-``*`` discovery pattern.\n"
+        "        Return the Blender Python API docs for *identifier*, or list\n"
+        "        modules matching a trailing-``*`` discovery pattern.\n"
         "\n"
-        "*identifier* should be a fully-qualified Python name (e.g.\n"
-        "``bpy.app`` or ``bpy.types.Scene.frame_current``).\n"
-        "The trailing-``*`` forms are supported as discovery entry-points:\n"
+        "        *identifier* should be a fully-qualified Python name (e.g.\n"
+        "        ``bpy.app`` or ``bpy.types.Scene.frame_current``).\n"
+        "        The trailing-``*`` forms are supported as discovery entry-points:\n"
         "\n"
-        "- ``*`` enumerates the top-level modules (``bpy``, ``bmesh``,\n"
-        "  ``mathutils``, ``gpu``, ...).\n"
-        "- ``X.*`` enumerates the direct-child identifiers under the\n"
-        "  *X* namespace (``bpy.*`` -> ``bpy.app``, ``bpy.context``, ...).\n"
+        "        - ``*`` enumerates the top-level modules (``bpy``, ``bmesh``,\n"
+        "          ``mathutils``, ``gpu``, ...).\n"
+        "        - ``X.*`` enumerates the direct-child identifiers under the\n"
+        "          *X* namespace (``bpy.*`` -> ``bpy.app``, ``bpy.context``, ...).\n"
         "\n"
-        "Both return a ``namespace`` response even when ``X.rst`` would\n"
-        "otherwise resolve to ``exact``; the ``.*`` form lets an agent\n"
-        "force the child listing.\n"
+        "        Both return a ``namespace`` response even when ``X.rst`` would\n"
+        "        otherwise resolve to ``exact``; the ``.*`` form lets an agent\n"
+        "        force the child listing.\n"
         "\n"
-        "The response always carries ``kind``, ``found``, and ``identifier``.\n"
-        "The remaining keys depend on ``kind``:\n"
+        "        The response always carries ``kind``, ``found``, and ``identifier``.\n"
+        "        The remaining keys depend on ``kind``:\n"
         "\n"
-        "- ``\"exact\"`` (``found=True``): ``<identifier>.rst`` was read.\n"
-        "  Extra keys: ``content`` (RST text), ``examples``. When the\n"
-        "  file exceeds 32 KB, ``content`` is replaced with a dot-point\n"
-        "  summary of the file's top-level definitions (prefixed by a\n"
-        "  header noting the truncation) and ``examples`` is empty -\n"
-        "  re-query individual members for their rendered blocks.\n"
-        "- ``\"namespace\"`` (``found=True``):\n"
-        "  no ``<identifier>.rst`` but ``<identifier>.<child>.rst`` siblings exist.\n"
-        "  Extra key: ``submodules`` (list of child identifiers).\n"
-        "- ``\"definition\"`` (``found=True``):\n"
-        "  *identifier* is defined inside a parent RST\n"
-        "  (e.g. ``bpy.props.IntProperty`` lives in ``bpy.props.rst``).\n"
-        "  Extra keys: ``content`` (rendered block), ``examples``.\n"
-        "- ``\"partial\"`` (``found=False``):\n"
-        "  the parent RST was located but the trailing component isn't defined in it.\n"
-        "  Extra keys:\n"
-        "  - ``parent`` the identifier whose RST was loaded.\n"
-        "  - ``available`` top-level definitions in that RST.\n"
-        "  - ``submodules`` sibling identifiers ``<parent>.<child>`` with their own RSTs,\n"
-        "    filtered to those whose last component contains every character of the missing tail.\n"
+        "        - ``\"exact\"`` (``found=True``): ``<identifier>.rst`` was read.\n"
+        "          Extra keys: ``content`` (RST text), ``examples``. When the\n"
+        "          file exceeds 32 KB, ``content`` is replaced with a dot-point\n"
+        "          summary of the file's top-level definitions (prefixed by a\n"
+        "          header noting the truncation) and ``examples`` is empty -\n"
+        "          re-query individual members for their rendered blocks.\n"
+        "        - ``\"namespace\"`` (``found=True``):\n"
+        "          no ``<identifier>.rst`` but ``<identifier>.<child>.rst`` siblings exist.\n"
+        "          Extra key: ``submodules`` (list of child identifiers).\n"
+        "        - ``\"definition\"`` (``found=True``):\n"
+        "          *identifier* is defined inside a parent RST\n"
+        "          (e.g. ``bpy.props.IntProperty`` lives in ``bpy.props.rst``).\n"
+        "          Extra keys: ``content`` (rendered block), ``examples``.\n"
+        "        - ``\"partial\"`` (``found=False``):\n"
+        "          the parent RST was located but the trailing component isn't defined in it.\n"
+        "          Extra keys:\n"
+        "          - ``parent`` the identifier whose RST was loaded.\n"
+        "          - ``available`` top-level definitions in that RST.\n"
+        "          - ``submodules`` sibling identifiers ``<parent>.<child>`` with their own RSTs,\n"
+        "            filtered to those whose last component contains every character of the missing tail.\n"
         "\n"
-        "  For a toctree landing page like ``bpy.types`` ``available`` is empty and ``submodules``\n"
-        "  is the near-miss list; for a self-contained module like ``bpy.props`` it's the reverse.\n"
-        "- ``\"suggestions\"`` (``found=False``):\n"
-        "  no direct match, but *identifier* appears as a component of other files.\n"
-        "  Extra key: ``suggestions`` (list of full identifiers).\n"
-        "- ``\"missing\"`` (``found=False``): nothing matched.\n"
+        "          For a toctree landing page like ``bpy.types`` ``available`` is empty and ``submodules``\n"
+        "          is the near-miss list; for a self-contained module like ``bpy.props`` it's the reverse.\n"
+        "        - ``\"suggestions\"`` (``found=False``):\n"
+        "          no direct match, but *identifier* appears as a component of other files.\n"
+        "          Extra key: ``suggestions`` (list of full identifiers).\n"
+        "        - ``\"missing\"`` (``found=False``): nothing matched.\n"
         "\n"
-        "``examples`` (present on the ``exact`` and ``definition`` kinds)\n"
-        "is a list of ``{path, content}`` entries referenced from this documentation.\n",
+        "        ``examples`` (present on the ``exact`` and ``definition`` kinds)\n"
+        "        is a list of ``{path, content}`` entries referenced from this documentation.\n"
+        "        ",
         "inputSchema": {
             "properties": {
                 "identifier": {
@@ -318,12 +339,13 @@ EXPECTED_TOOLS = [
     {
         "name": "get_screenshot_of_area_as_image",
         "description": "\n"
-        "Take a screenshot of a single Blender area and return it as a PNG image.\n"
+        "        Take a screenshot of a single Blender area and return it as a PNG image.\n"
         "\n"
-        "*area_ui_type* matches the area's ``ui_type``.\n"
+        "        *area_ui_type* matches the area's ``ui_type``.\n"
         "\n"
-        "*size_limit_in_bytes* caps the image size in bytes.\n"
-        "Zero (the default) uses the MCP message size limit.\n",
+        "        *size_limit_in_bytes* caps the image size in bytes.\n"
+        "        Zero (the default) uses the MCP message size limit.\n"
+        "        ",
         "inputSchema": {
             "properties": {
                 "area_ui_type": {
@@ -370,10 +392,11 @@ EXPECTED_TOOLS = [
     {
         "name": "get_screenshot_of_window_as_image",
         "description": "\n"
-        "Take a screenshot of the entire Blender window and return it as a PNG image.\n"
+        "        Take a screenshot of the entire Blender window and return it as a PNG image.\n"
         "\n"
-        "*size_limit_in_bytes* caps the image size in bytes.\n"
-        "Zero (the default) uses the MCP message size limit.\n",
+        "        *size_limit_in_bytes* caps the image size in bytes.\n"
+        "        Zero (the default) uses the MCP message size limit.\n"
+        "        ",
         "inputSchema": {
             "properties": {
                 "size_limit_in_bytes": {
@@ -389,7 +412,8 @@ EXPECTED_TOOLS = [
     {
         "name": "get_screenshot_of_window_as_json",
         "description": "\n"
-        "Return a JSON description of the Blender window layout, areas, active object, and selection.\n",
+        "        Return a JSON description of the Blender window layout, areas, active object, and selection.\n"
+        "        ",
         "inputSchema": {
             "properties": {},
             "title": "get_screenshot_of_window_as_jsonArguments",
@@ -399,7 +423,8 @@ EXPECTED_TOOLS = [
     {
         "name": "jump_to_tab_by_name",
         "description": "\n"
-        "Switch the active workspace tab to *name*.\n",
+        "        Switch the active workspace tab to *name*.\n"
+        "        ",
         "inputSchema": {
             "properties": {
                 "name": {
@@ -417,10 +442,11 @@ EXPECTED_TOOLS = [
     {
         "name": "jump_to_tab_by_space_type",
         "description": "\n"
-        "Switch to a workspace whose main area matches *space_type*.\n"
+        "        Switch to a workspace whose main area matches *space_type*.\n"
         "\n"
-        "If *allow_edits* is True and no matching workspace exists, a new one\n"
-        "is created by duplicating the current workspace.\n",
+        "        If *allow_edits* is True and no matching workspace exists, a new one\n"
+        "        is created by duplicating the current workspace.\n"
+        "        ",
         "inputSchema": {
             "properties": {
                 "space_type": {
@@ -443,10 +469,11 @@ EXPECTED_TOOLS = [
     {
         "name": "jump_to_view3d_object_by_name",
         "description": "\n"
-        "Move the 3D viewport to focus on an object by *name*.\n"
+        "        Move the 3D viewport to focus on an object by *name*.\n"
         "\n"
-        "If *allow_edits* is True the object may be un-hidden and its\n"
-        "collections enabled to make it visible.\n",
+        "        If *allow_edits* is True the object may be un-hidden and its\n"
+        "        collections enabled to make it visible.\n"
+        "        ",
         "inputSchema": {
             "properties": {
                 "name": {
@@ -469,10 +496,11 @@ EXPECTED_TOOLS = [
     {
         "name": "jump_to_view3d_object_data_by_name",
         "description": "\n"
-        "Move the 3D viewport to the object whose data block matches *name*.\n"
+        "        Move the 3D viewport to the object whose data block matches *name*.\n"
         "\n"
-        "If *allow_edits* is True the object may be un-hidden and its\n"
-        "collections enabled to make it visible.\n",
+        "        If *allow_edits* is True the object may be un-hidden and its\n"
+        "        collections enabled to make it visible.\n"
+        "        ",
         "inputSchema": {
             "properties": {
                 "name": {
@@ -495,7 +523,12 @@ EXPECTED_TOOLS = [
     {
         "name": "render_thumbnail_to_path",
         "description": "\n"
-        "Render a small, low-quality thumbnail to *output_path* (temporarily overrides settings).\n",
+        "        Render a small, low-quality thumbnail to *output_path* (temporarily overrides settings).\n"
+        "\n"
+        "        On success the thumbnail is also attached to the result so\n"
+        "        vision-capable agents can see the render without a separate\n"
+        "        screenshot call.\n"
+        "        ",
         "inputSchema": {
             "properties": {
                 "output_path": {
@@ -513,7 +546,12 @@ EXPECTED_TOOLS = [
     {
         "name": "render_viewport_to_path",
         "description": "\n"
-        "Render the current scene to *output_path* using current render settings.\n",
+        "        Render the current scene to *output_path* using current render settings.\n"
+        "\n"
+        "        On success the rendered image is also attached to the result\n"
+        "        (downscaled to fit the message size limit) so vision-capable\n"
+        "        agents can see the render without a separate screenshot call.\n"
+        "        ",
         "inputSchema": {
             "properties": {
                 "output_path": {
@@ -575,8 +613,12 @@ EXPECTED_TOOLS = [
                 },
                 "index": {
                     "anyOf": [
-                        {"type": "integer"},
-                        {"type": "null"}
+                        {
+                            "type": "integer"
+                        },
+                        {
+                            "type": "null"
+                        }
                     ],
                     "default": None,
                     "title": "Index"
@@ -636,8 +678,12 @@ EXPECTED_TOOLS = [
                 },
                 "index": {
                     "anyOf": [
-                        {"type": "integer"},
-                        {"type": "null"}
+                        {
+                            "type": "integer"
+                        },
+                        {
+                            "type": "null"
+                        }
                     ],
                     "default": None,
                     "title": "Index"
@@ -647,6 +693,310 @@ EXPECTED_TOOLS = [
                 "query"
             ],
             "title": "search_manual_docsArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "skills_list",
+        "description": "\n"
+        "        List every available skill (name + one-line description) and the\n"
+        "        sources they were indexed from.\n"
+        "\n"
+        "        Skills are proven recipes for complex Blender workflows (rigging,\n"
+        "        modeling, repair, ...) with sample code YOU apply via\n"
+        "        ``execute_blender_code`` \u2014 read one with ``skills_read`` before\n"
+        "        attempting work it covers. Run the ``welcome`` tool first if you\n"
+        "        have not yet this session.\n"
+        "\n"
+        "        Set ``refresh=True`` to re-scan folders and re-sync skill git repos.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "refresh": {
+                    "default": False,
+                    "title": "Refresh",
+                    "type": "boolean"
+                }
+            },
+            "title": "skills_listArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "skills_search",
+        "description": "\n"
+        "        Rank skills against a natural-language *query* (task description,\n"
+        "        keywords). Returns name + description; follow up with\n"
+        "        ``skills_read`` on the best match.\n"
+        "\n"
+        "        ALWAYS search before non-trivial geometry, rigging, texturing or\n"
+        "        repair work \u2014 skills encode deterministic recipes and their gotchas.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "query": {
+                    "title": "Query",
+                    "type": "string"
+                },
+                "max_results": {
+                    "default": 8,
+                    "title": "Max Results",
+                    "type": "integer"
+                }
+            },
+            "required": [
+                "query"
+            ],
+            "title": "skills_searchArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "skills_read",
+        "description": "\n"
+        "        Read a skill's SKILL.md (default) or one of its ancillary files\n"
+        "        (``file`` = relative path from ``skills_read(name)``'s file list).\n"
+        "\n"
+        "        The skill body contains instructions and sample code \u2014 execute the\n"
+        "        code yourself via ``execute_blender_code``, adapting names/params\n"
+        "        to the scene; nothing runs automatically.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "name": {
+                    "title": "Name",
+                    "type": "string"
+                },
+                "file": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "File"
+                }
+            },
+            "required": [
+                "name"
+            ],
+            "title": "skills_readArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "welcome",
+        "description": "\n"
+        "        RUN THIS FIRST, once per session, before any other tool.\n"
+        "\n"
+        "        Returns the working instructions this Blender toolset is designed\n"
+        "        around: inspection-before-action workflow, API verification, the\n"
+        "        skills library (`skills_search`/`skills_read`), code-execution\n"
+        "        conventions, and any installed extension toolsets. Adopt the\n"
+        "        returned instructions for the rest of the session.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {},
+            "title": "welcomeArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "rigging_inspect",
+        "description": "\n"
+        "        Geometric perception over the named mesh objects, read-only: mesh\n"
+        "        health (gates every rigging skill), loose-part decomposition,\n"
+        "        bilateral-symmetry estimate per object, and the contact graph\n"
+        "        between them. Use this FIRST to pick a rigging skill: elongated\n"
+        "        two-part contact -> rig_hinge; disc-like part -> rig_wheel; coaxial\n"
+        "        rods -> rig_piston; base/platform/member stack -> rig_turret; many\n"
+        "        parts / unknown -> rig_rigid_assembly; symmetric organic ->\n"
+        "        rig_biped_rigify / rig_quadruped_rigify.\n"
+        "\n"
+        "        Read the `rigging-overview` skill (skills_read) for the decision\n"
+        "        table and failure codes. Run `welcome` first if you have not.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "objects": {
+                    "items": {
+                        "type": "string"
+                    },
+                    "title": "Objects",
+                    "type": "array"
+                }
+            },
+            "required": [
+                "objects"
+            ],
+            "title": "rigging_inspectArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "rigging_diagnose",
+        "description": "\n"
+        "        Dry-run precondition check for a rigging skill \u2014 never mutates the\n"
+        "        scene. Returns the deterministic plan (axes, pivots, part roles) on\n"
+        "        success, or a structured failure with a machine-readable code and a\n"
+        "        `suggest` field (e.g. unhealthy_mesh, no_contact, ambiguous_axis,\n"
+        "        not_a_wheel, asymmetric). ALWAYS act on `suggest` rather than\n"
+        "        forcing parameters.\n"
+        "\n"
+        "        Skills: rig_hinge, rig_piston, rig_wheel, rig_turret,\n"
+        "        rig_rigid_assembly, rig_biped_rigify, rig_quadruped_rigify.\n"
+        "        Params are semantic only (see the rigging skills via skills_read).\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "skill": {
+                    "title": "Skill",
+                    "type": "string"
+                },
+                "objects": {
+                    "items": {
+                        "type": "string"
+                    },
+                    "title": "Objects",
+                    "type": "array"
+                },
+                "params": {
+                    "anyOf": [
+                        {
+                            "additionalProperties": True,
+                            "type": "object"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Params"
+                }
+            },
+            "required": [
+                "skill",
+                "objects"
+            ],
+            "title": "rigging_diagnoseArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "rigging_run",
+        "description": "\n"
+        "        Execute a rigging skill: builds the armature, constraints and\n"
+        "        skinning for the named objects. Rolls back cleanly on failure (a\n"
+        "        failed run never corrupts the scene). The returned ctx carries the\n"
+        "        created armature name \u2014 pass it to rigging_verify, ALWAYS, before\n"
+        "        reporting success.\n"
+        "\n"
+        "        Run rigging_diagnose first when unsure; run() re-checks the same\n"
+        "        preconditions and fails with the same structured codes.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "skill": {
+                    "title": "Skill",
+                    "type": "string"
+                },
+                "objects": {
+                    "items": {
+                        "type": "string"
+                    },
+                    "title": "Objects",
+                    "type": "array"
+                },
+                "params": {
+                    "anyOf": [
+                        {
+                            "additionalProperties": True,
+                            "type": "object"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Params"
+                }
+            },
+            "required": [
+                "skill",
+                "objects"
+            ],
+            "title": "rigging_runArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "rigging_verify",
+        "description": "\n"
+        "        Postcondition check for a rig produced by rigging_run: standard\n"
+        "        compliance (validate_rig), weight validity, and skill-specific pose\n"
+        "        tests through the real depsgraph (does the hinge hinge, does the\n"
+        "        fixed part stay put, do limits clamp, does the character deform\n"
+        "        without volume collapse). The pose is reset afterwards.\n"
+        "\n"
+        "        \"Technically valid\" is not \"deforms acceptably\" \u2014 only report a rig\n"
+        "        as done after this passes.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "skill": {
+                    "title": "Skill",
+                    "type": "string"
+                },
+                "armature": {
+                    "title": "Armature",
+                    "type": "string"
+                },
+                "objects": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Objects"
+                }
+            },
+            "required": [
+                "skill",
+                "armature"
+            ],
+            "title": "rigging_verifyArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "rigging_validate_rig",
+        "description": "\n"
+        "        Validate any armature (including hand-built or imported ones)\n"
+        "        against the rig standard: naming prefixes (DEF/CTL/MCH), single\n"
+        "        root, deform/control separation, zero-length bones, side pairing.\n"
+        "        Returns machine-readable errors/warnings per rule.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "armature": {
+                    "title": "Armature",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "armature"
+            ],
+            "title": "rigging_validate_rigArguments",
             "type": "object"
         }
     }

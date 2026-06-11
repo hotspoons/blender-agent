@@ -20,10 +20,8 @@ __all__ = (
     "load_initial_instructions",
 )
 
-import importlib
 import json
 import os
-import pkgutil
 
 from typing import Any
 
@@ -40,14 +38,10 @@ def _build_fastmcp() -> FastMCP:
     """
     mcp = FastMCP("blender-mcp", instructions=load_initial_instructions())
 
-    import blmcp.tools as tools_pkg
-
-    for _importer, modname, _ispkg in pkgutil.iter_modules(tools_pkg.__path__):
-        if modname.endswith("_toolcode") or modname.startswith("_template_"):
-            continue
-        mod = importlib.import_module("blmcp.tools.{:s}".format(modname))
-        if hasattr(mod, "register"):
-            mod.register(mcp)
+    # Shared with `blmcp.main`: core tools + optional tools extensions
+    # (e.g. blender-mcp-extensions' rigging toolset) + skills subsystem.
+    from blmcp.registry import register_all_tools
+    register_all_tools(mcp)
     return mcp
 
 

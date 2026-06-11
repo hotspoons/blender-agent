@@ -59,7 +59,7 @@ def _source_tool_definitions() -> dict[str, dict[str, object]]:
     Return source-defined MCP tool signatures keyed by tool name.
     """
     tools_dir = os.path.join(_REPO_DIR, "mcp", "blmcp", "tools")
-    tool_defs: dict[str, dict[str, object]] = {}
+    paths = []
     for filename in sorted(os.listdir(tools_dir)):
         if (
             not filename.endswith(".py") or
@@ -68,7 +68,18 @@ def _source_tool_definitions() -> dict[str, dict[str, object]]:
             filename.startswith("_template_")
         ):
             continue
-        path = os.path.join(tools_dir, filename)
+        paths.append(os.path.join(tools_dir, filename))
+    # Tools extensions (installed in the dev environment) register into the
+    # same server; their wrappers live in each extension's `tools.py`.
+    ext_root = os.path.join(_REPO_DIR, "mcp_ext", "blmcp_ext")
+    if os.path.isdir(ext_root):
+        for ext_name in sorted(os.listdir(ext_root)):
+            ext_tools = os.path.join(ext_root, ext_name, "tools.py")
+            if os.path.isfile(ext_tools):
+                paths.append(ext_tools)
+
+    tool_defs: dict[str, dict[str, object]] = {}
+    for path in paths:
         with open(path, encoding="utf-8") as fh:
             module = ast.parse(fh.read(), filename=path)
         for node in ast.walk(module):
@@ -574,7 +585,7 @@ class TestMainConfiguration(unittest.TestCase):
             mock.patch.object(
                 blmcp, "FastMCP", return_value=mcp_instance
             ) as fastmcp_cls,
-            mock.patch.object(blmcp.pkgutil, "iter_modules", return_value=[]),
+            mock.patch("blmcp.registry.register_all_tools"),
         ):
             result = blmcp.main()
         self.assertEqual(result, 0)
@@ -584,20 +595,21 @@ class TestMainConfiguration(unittest.TestCase):
         )
         mcp_instance.run.assert_called_once_with(transport="stdio")
 
-    def test_main_discovers_and_registers_only_public_tool_modules(self) -> None:
+    def test_registry_discovers_and_registers_only_public_tool_modules(self) -> None:
         """
-        Checks that startup imports only public tool modules and registers them.
+        Checks that the registry imports only public tool modules and registers them.
+        (Discovery lives in ``blmcp.registry`` and is shared by ``main()``
+        and the in-process agent harness.)
         """
-        blmcp = _import_blmcp_module()
+        from blmcp import registry
+
         mcp_instance = mock.Mock()
         gamma_mod = mock.Mock()
         no_register_mod = object()
 
         with (
-            mock.patch.object(sys, "argv", ["blmcp"]),
-            mock.patch.object(blmcp, "FastMCP", return_value=mcp_instance),
             mock.patch.object(
-                blmcp.pkgutil,
+                registry.pkgutil,
                 "iter_modules",
                 return_value=[
                     (None, "alpha", False),
@@ -607,14 +619,15 @@ class TestMainConfiguration(unittest.TestCase):
                 ],
             ),
             mock.patch.object(
-                blmcp.importlib,
+                registry.importlib,
                 "import_module",
                 side_effect=[no_register_mod, gamma_mod],
             ) as import_module,
+            mock.patch.object(registry, "_register_extensions"),
+            mock.patch.object(registry, "_apply_welcome_nudge"),
         ):
-            result = blmcp.main()
+            registry.register_all_tools(mcp_instance)
 
-        self.assertEqual(result, 0)
         self.assertEqual(
             import_module.call_args_list,
             [
@@ -623,35 +636,34 @@ class TestMainConfiguration(unittest.TestCase):
             ],
         )
         gamma_mod.register.assert_called_once_with(mcp_instance)
-        mcp_instance.run.assert_called_once_with(transport="stdio")
 
-    def test_main_skips_modules_without_register(self) -> None:
+    def test_registry_skips_modules_without_register(self) -> None:
         """
-        Checks that startup ignores tool modules that do not define ``register()``.
+        Checks that the registry ignores tool modules that do not define
+        ``register()``.
         """
-        blmcp = _import_blmcp_module()
+        from blmcp import registry
+
         mcp_instance = mock.Mock()
         no_register_mod = object()
 
         with (
-            mock.patch.object(sys, "argv", ["blmcp"]),
-            mock.patch.object(blmcp, "FastMCP", return_value=mcp_instance),
             mock.patch.object(
-                blmcp.pkgutil,
+                registry.pkgutil,
                 "iter_modules",
                 return_value=[(None, "alpha", False)],
             ),
             mock.patch.object(
-                blmcp.importlib,
+                registry.importlib,
                 "import_module",
                 return_value=no_register_mod,
             ) as import_module,
+            mock.patch.object(registry, "_register_extensions"),
+            mock.patch.object(registry, "_apply_welcome_nudge"),
         ):
-            result = blmcp.main()
+            registry.register_all_tools(mcp_instance)
 
-        self.assertEqual(result, 0)
         import_module.assert_called_once_with("blmcp.tools.alpha")
-        mcp_instance.run.assert_called_once_with(transport="stdio")
 
     def test_main_configures_http_transport_settings_and_cors(self) -> None:
         """
@@ -695,7 +707,7 @@ class TestMainConfiguration(unittest.TestCase):
                 ["blmcp", "--transport", "http", "--host", "0.0.0.0", "--port", "8123"],
             ),
             mock.patch.object(blmcp, "FastMCP", return_value=mcp_instance),
-            mock.patch.object(blmcp.pkgutil, "iter_modules", return_value=[]),
+            mock.patch("blmcp.registry.register_all_tools"),
             mock.patch.dict(
                 sys.modules,
                 {
