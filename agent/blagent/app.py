@@ -154,6 +154,16 @@ def create_app(runtime: AgentRuntime) -> Starlette:
         WebSocketRoute("/ws/local-llm", ws_local_llm),
         Mount("/static", app=StaticFiles(directory=_WEB_DIR), name="static"),
     ]
+
+    # Optional OpenAI-compatible front end (BLENDER_AGENT_CHAT_API=1):
+    # API-only chat with per-client sessions, media both ways, and tool
+    # calls as non-standard properties. Raises at startup when the
+    # required remote-LLM env vars are missing.
+    from . import chat_api
+    if chat_api.enabled():
+        chat_api.configure(runtime)
+        routes = chat_api.routes(runtime) + routes
+
     return Starlette(routes=routes)
 
 

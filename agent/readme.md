@@ -60,13 +60,61 @@ Settings (gear icon in the UI, persisted server-side):
   ``/v1`` base URL: OpenAI, Anthropic, OpenRouter, llama.cpp, Ollama,
   vLLM, ...
 - **Local (in-browser)**: leave the endpoint empty and load a model
-  in the browser panel - any Hugging Face repo with ONNX weights (the
-  panel suggests a curated list). Inference runs in a worker via
-  Transformers.js on WebGPU (WASM fallback) and streams to the backend
-  over the reverse tunnel. Weights download once from the Hub, then
-  are cached by the browser.
+  in the browser panel, picking one of two engines. **Transformers.js**
+  (ONNX Runtime Web; WebGPU with WASM fallback) covers the widest
+  catalog via a curated list of onnx-community exports; **WebLLM**
+  (MLC) runs models compiled to WebGPU kernels with paged attention -
+  noticeably faster decode at agent-sized contexts, from a curated list
+  of MLC builds (official mlc-ai Qwen3.5 conversions plus
+  community-compiled Gemma 4). Either way inference streams to the backend
+  over the reverse tunnel and weights are downloaded once, then cached.
+  Raw model output is parsed per model family (Qwen XML tool calls,
+  Gemma 4's native grammar, or prompt-instructed JSON for everything
+  else - override in the panel when auto-detection guesses wrong), and
+  `<think>` reasoning renders as collapsible cards in the chat.
 - **Autonomy**: ``ask`` (destructive tool calls pause for an
   Allow/Deny confirmation in the UI) or ``auto``.
+
+## Chat completions API (headless clients)
+
+Set ``BLENDER_AGENT_CHAT_API=1`` to expose an OpenAI-compatible
+``POST /v1/chat/completions`` (+ ``GET /v1/models``) on the agent's
+HTTP port, so any OpenAI client can chat with the agent — no browser
+UI involved. This mode REQUIRES a remote LLM: ``BLENDER_AGENT_ENDPOINT``
+and ``BLENDER_AGENT_MODEL`` must be set (``BLENDER_AGENT_API_KEY``
+optional); the in-browser local model is disabled for the process.
+
+- **Sessions are per client and persistent**: the request's ``user``
+  field (or an ``X-Client-Id`` header) maps to one agent session, so
+  transcripts, media and compaction accumulate server-side. Each request
+  contributes its latest user message; prior ``messages`` are ignored.
+- **Tool calls** stream as non-standard ``blender_tool_calls`` entries
+  on deltas and the final message (``call_id``/``name``/``args_json``/
+  ``status``/``summary``); strict clients ignore them. Set
+  ``BLENDER_AGENT_CHAT_API_INLINE_TOOLS=1`` to also render them as
+  markdown blockquotes inside the assistant text.
+- **Media both ways**: send images as standard ``image_url`` data-URL
+  content parts; tool-produced renders come back as ``blender_media``
+  entries (data URLs) plus an inline markdown image.
+- **Auth**: set ``BLENDER_AGENT_CHAT_API_KEY`` to require
+  ``Authorization: Bearer <key>``; unset means open (gate it at the
+  network level).
+- Turns run with autonomy forced to ``auto`` — nobody can answer a
+  confirmation prompt over a fire-and-forget API.
+
+```sh
+BLENDER_AGENT_CHAT_API=1 \
+BLENDER_AGENT_ENDPOINT=https://openrouter.ai/api/v1 \
+BLENDER_AGENT_MODEL=anthropic/claude-sonnet-4.6 \
+BLENDER_AGENT_API_KEY=sk-... \
+blender-mcp-agent
+
+curl -N http://127.0.0.1:10102/v1/chat/completions -d '{
+  "user": "my-pipeline",
+  "stream": true,
+  "messages": [{"role": "user", "content": "add a cube and render it"}]
+}'
+```
 
 ## Skills
 

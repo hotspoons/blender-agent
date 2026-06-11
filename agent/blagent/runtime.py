@@ -171,10 +171,13 @@ class AgentRuntime:
             session_id: str,
             content: str,
             media_ids: list[str] | None = None,
+            autonomy: str | None = None,
     ) -> str:
         """
         Start a turn. Returns the session id (a new one when blank).
         Raises ``RuntimeError`` when the session is already busy.
+        *autonomy* overrides the configured mode for this turn (the chat
+        API forces "auto": nobody can answer a confirm over that wire).
         """
         if not session_id:
             session_id = self.new_session()
@@ -183,6 +186,7 @@ class AgentRuntime:
             raise RuntimeError("a turn is already running in this session")
 
         config = self.store.config
+        turn_autonomy = autonomy if autonomy is not None else config.autonomy
         llm = self._make_llm()
         model = self._model_name()
 
@@ -193,7 +197,7 @@ class AgentRuntime:
                     user_text=content,
                     llm=llm,
                     model=model,
-                    autonomy=config.autonomy,
+                    autonomy=turn_autonomy,
                     max_rounds=config.max_rounds,
                     media_ids=media_ids,
                 )
