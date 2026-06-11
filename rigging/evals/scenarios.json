@@ -1,0 +1,99 @@
+{
+  "description": "Agent skill-selection scenarios: natural-language rigging requests x corpus assets, scored on correct skill chain + sane params. When these fail but the skills pass their own tests, fix the skill DESCRIPTIONS (the tuned surface), not the code. Track the two failure modes separately.",
+  "scenarios": [
+    {
+      "id": "door-basic",
+      "asset": "door_and_frame",
+      "request": "Rig this door so it can swing open and closed on its frame.",
+      "expected_chain": ["rig_hinge"],
+      "param_checks": {"moving": "Door"}
+    },
+    {
+      "id": "door-limited",
+      "asset": "door_and_frame",
+      "request": "Make the door openable but only outward, up to 90 degrees.",
+      "expected_chain": ["rig_hinge"],
+      "param_checks": {"min_angle_deg": 0, "max_angle_deg": 90}
+    },
+    {
+      "id": "door-garbage",
+      "asset": "door_and_frame_garbage",
+      "request": "Rig this door to swing.",
+      "expected_chain": ["rig_hinge"],
+      "expect_diagnose_fail": "unhealthy_mesh",
+      "notes": "Correct behavior is to surface the mesh problems, not force the rig."
+    },
+    {
+      "id": "wheel-spin",
+      "asset": "cart_wheel",
+      "request": "I want this wheel to be able to roll.",
+      "expected_chain": ["rig_wheel"]
+    },
+    {
+      "id": "piston-extend",
+      "asset": "piston_pair",
+      "request": "Rig the hydraulic cylinder so it can extend and stay aligned.",
+      "expected_chain": ["rig_piston"]
+    },
+    {
+      "id": "turret-aim",
+      "asset": "turret",
+      "request": "Make the gun turret aimable: rotate the platform and elevate the barrel.",
+      "expected_chain": ["rig_turret"]
+    },
+    {
+      "id": "turret-limits",
+      "asset": "turret",
+      "request": "Rig the turret; the barrel must not dip below horizontal.",
+      "expected_chain": ["rig_turret"],
+      "param_checks": {"pitch_limits_deg": [0, 75]}
+    },
+    {
+      "id": "lamp-articulate",
+      "asset": "desk_lamp",
+      "request": "Make this desk lamp poseable, all the joints should bend.",
+      "expected_chain": ["rig_rigid_assembly"]
+    },
+    {
+      "id": "lamp-single-mesh",
+      "asset": "desk_lamp_single_mesh",
+      "request": "This lamp is one mesh but has separate pieces, rig them so I can pose it.",
+      "expected_chain": ["rig_rigid_assembly"]
+    },
+    {
+      "id": "humanoid-full",
+      "asset": "humanoid",
+      "request": "Rig this character for animation with IK arms and legs.",
+      "expected_chain": ["rig_biped_rigify"]
+    },
+    {
+      "id": "humanoid-asymmetric",
+      "asset": "humanoid_asymmetric",
+      "request": "Rig this character.",
+      "expected_chain": ["rig_biped_rigify"],
+      "expect_diagnose_fail": "asymmetric",
+      "notes": "Agent should report asymmetry and offer rig_rigid_assembly or override."
+    },
+    {
+      "id": "quadruped-dog",
+      "asset": "quadruped",
+      "request": "This is a four-legged creature, set it up so an animator can walk it.",
+      "expected_chain": ["rig_quadruped_rigify"]
+    },
+    {
+      "id": "crates-not-hinge",
+      "asset": "crate_stack",
+      "request": "Connect these crates into one poseable prop.",
+      "expected_chain": ["rig_rigid_assembly"],
+      "notes": "Anti-trigger test: two of the crates touch face-on-face; rig_hinge would be wrong (ambiguous axis) and rig_rigid_assembly is the general tool."
+    },
+    {
+      "id": "wheel-not-blob",
+      "asset": "crate_stack",
+      "request": "Make the small crate spin like a wheel.",
+      "expected_chain": ["rig_wheel"],
+      "expect_diagnose_fail": "not_a_wheel",
+      "notes": "Correct behavior: try rig_wheel per the user's intent, surface the not_a_wheel diagnosis (a cube is not a disc), and relay the suggestion."
+    }
+  ]
+}
