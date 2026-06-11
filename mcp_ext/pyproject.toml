@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blender-mcp-extensions"
+version = "0.1.0"
+description = "Optional tools extensions for the Blender MCP server: advanced workflow toolsets (rigging, ...) with bundled skills"
+requires-python = ">=3.10"
+dependencies = [
+    "blender-mcp",
+]
+
+# Discovered by blmcp.registry at server/agent startup; each entry is a
+# module exposing register(mcp) and optionally skills_dir().
+[project.entry-points."blender_mcp.extensions"]
+rigging = "blmcp_ext.rigging"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+"blmcp_ext" = [
+    # Bundled skill collections (Anthropic SKILL.md layout) and the
+    # in-Blender rigging library sources (sent to Blender by path).
+    "rigging/skills/**/*",
+    "rigging/blrig/**/*.py",
+    "rigging/blrig/**/*.md",
+]

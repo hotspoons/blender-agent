@@ -38,6 +38,39 @@ _cli_commands: list[object] = []
 _state_offline_error_message = "Online access must be enabled in the system preferences"
 
 
+# -----------------------------------------------------------------------------
+# Skills library configuration.
+#
+# Preferences are mirrored to a JSON file the MCP server's skills index
+# reads (the server runs in a separate process); see `blmcp.skills`.
+
+def _skills_config_path() -> str:
+    import os
+    return os.environ.get(
+        "BLENDER_MCP_SKILLS_CONFIG",
+        os.path.join(os.path.expanduser("~"), ".config", "blender-mcp", "skills.json"),
+    )
+
+
+def _skills_config_write(prefs: "_BlenderMCPPreferences") -> None:
+    import json
+    import os
+
+    config = {
+        "skill_dirs": (
+            [bpy.path.abspath(prefs.skills_dir)] if prefs.skills_dir.strip() else []),
+        "skill_repos": [
+            url.strip() for url in prefs.skills_repos.split(",") if url.strip()],
+    }
+    path = _skills_config_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(config, fh, indent=2)
+    except OSError as ex:
+        print("blender_mcp: failed to write skills config {!r}: {!s}".format(path, ex))
+
+
 class _State:
     """
     Module-level runtime state that is not persisted across sessions.
@@ -272,6 +305,32 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         default=True,
     )
 
+    def _update_skills_config(self, _context: bpy.types.Context) -> None:
+        _skills_config_write(self)
+
+    skills_dir: StringProperty(  # type: ignore[valid-type]
+        name="Skills Folder",
+        description=(
+            "Folder of skill collections (Anthropic SKILL.md layout): drop\n"
+            "collections in here and they are parsed and indexed when the MCP\n"
+            "server starts (or on skills_list(refresh=True)).\n"
+            "Leave empty to use ~/.config/blender-mcp/skills"
+        ),
+        subtype="DIR_PATH",
+        default="",
+        update=_update_skills_config,
+    )
+    skills_repos: StringProperty(  # type: ignore[valid-type]
+        name="Skill Git Repos",
+        description=(
+            "Comma-separated git URLs of skill repositories. Each is cloned\n"
+            "(shallow) into a local cache and re-synced when the skills index\n"
+            "refreshes; skills inside follow the SKILL.md folder layout"
+        ),
+        default="",
+        update=_update_skills_config,
+    )
+
     def draw(self, context: bpy.types.Context) -> None:
         del context
         layout = self.layout
@@ -298,6 +357,15 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
         if _State.autostart_error:
             box.label(text=_State.autostart_error, icon="ERROR")
+
+        # -------------------------------------------------------------
+        # Skills library.
+
+        box = layout.box()
+        box.label(text="Skills Library", icon="ASSET_MANAGER")
+        box.prop(self, "skills_dir")
+        box.prop(self, "skills_repos")
+        box.label(text="Indexed on MCP server startup; agents refresh via skills_list(refresh=True)")
 
         # -------------------------------------------------------------
         # Web agent (optional).
