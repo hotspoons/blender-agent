@@ -6,9 +6,16 @@
   Concurrent headless instances confirmed working (3 simultaneous on 10 cores).
   Repo layout stood up under `rigging/`; `make test` runs all tiers headless.
 
+- **Phase 1** — perception layer complete: `loose_parts`, `contact_graph`
+  (tri-tri intersection contact points, PCA contact axis), `part_obb` (PCA,
+  extent-sorted, right-handed), `symmetry_plane` (BVH surface-distance metric,
+  PCA + local-axis candidates), `cross_sections` (Green's theorem over oriented
+  segments — handles holes/multi-loop), `point_inside` (raycast parity),
+  `mesh_health` (manifoldness, winding, degenerates, duplicates, scale gates).
+  36 property tests green.
+
 ## Next
-- Phase 1: perception layer (`blrig/perception`) + exhaustive unit tests against
-  primitive fixtures.
+- Phase 2: `standard/RIG_STANDARD.md` + `validate_rig()`.
 
 ## Blockers
 - None.
