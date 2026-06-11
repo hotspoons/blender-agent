@@ -37,10 +37,34 @@ blender-agent --mcp-port 10101
 ```
 
 Defaults: web UI at ``http://127.0.0.1:10102/``; MCP over HTTP only
-with ``--mcp-port``. Blender must be running with the MCP add-on's
-bridge server started. When the preferred ports are taken (another
+with ``--mcp-port``. When the preferred ports are taken (another
 Blender instance's agent), the next free ports are auto-assigned;
 ``--no-port-auto`` disables the scan.
+
+## Compute surface (standalone / headless)
+
+The agent's tools talk to Blender over the add-on's TCP bridge. The
+agent resolves that bridge on startup:
+
+- **Bridge already reachable** (``$BLENDER_MCP_HOST``/``PORT``, default
+  ``localhost:9876``) → attach to it. This is the normal case when
+  Blender launched the agent.
+- **No bridge, launched standalone** → spawn ``blender --background
+  --command blender_mcp`` as the agent's own compute surface, wait for
+  its bridge, then tear it down on exit. So a headless deployment needs
+  only the ``blender-agent`` process — it brings Blender up itself. The
+  Blender binary is ``$BLENDER_PATH`` (or ``blender``) and must have the
+  blender-mcp add-on installed.
+- **No bridge, but the agent is a descendant of Blender** (the add-on
+  spawned it) → never spawn (recursion guard); attach to the bridge the
+  add-on is bringing up. The guard combines process-tree introspection
+  with an explicit ``BLENDER_AGENT_SPAWNED_BY_BLENDER`` marker.
+
+Relevant flags: ``--spawn-blender`` / ``--no-spawn-blender`` (force the
+behavior; default is auto), ``--blend FILE`` (open a file in the spawned
+surface), ``--bridge-host`` / ``--bridge-port`` (which bridge to
+attach/spawn). A spawned surface is terminated when the agent exits; a
+bridge merely attached to is left running.
 
 ## Launching from Blender
 
@@ -136,6 +160,7 @@ blagent/
   llm.py           OpenAI-compatible streaming client + local-bridge client
   local_llm.py     reverse-tunnel bridge (zip-ties protocol)
   blender_tools.py blmcp tools invoked in-process (shared FastMCP registry)
+  blender_surface.py standalone launch: spawn/attach Blender bridge + recursion guard
   agent_tools.py   skills / media recall / continue_working tools
   store.py         config, JSONL transcripts (flock-guarded for multi-window), skills, memory
   media.py         short-id media library (i1, i2, ...)

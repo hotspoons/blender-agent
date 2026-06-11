@@ -218,6 +218,125 @@ class TestPortAutoAssign(unittest.TestCase):
             blocker.close()
 
 
+class TestBlenderSurface(unittest.TestCase):
+    """
+    Standalone launch: process-tree recursion guard, the attach/spawn
+    decision, argv, and a real spawn/teardown against a fake Blender.
+    The module is dependency-free, so this runs without agent deps.
+    """
+
+    def _surface(self) -> Any:
+        if os.path.join(_REPO_DIR, "agent") not in sys.path:
+            sys.path.insert(0, os.path.join(_REPO_DIR, "agent"))
+        return importlib.import_module("blagent.blender_surface")
+
+    def test_decision_matrix(self) -> None:
+        s = self._surface()
+        self.assertEqual(s.surface_decision(bridge_up=True, is_blender_child=False, want_spawn=True), "attach")
+        # Guard beats spawn: a Blender child never spawns Blender.
+        self.assertEqual(s.surface_decision(bridge_up=False, is_blender_child=True, want_spawn=True), "guarded")
+        self.assertEqual(s.surface_decision(bridge_up=False, is_blender_child=False, want_spawn=True), "spawn")
+        self.assertEqual(s.surface_decision(bridge_up=False, is_blender_child=False, want_spawn=False), "none")
+
+    def test_blender_name_matcher(self) -> None:
+        s = self._surface()
+        for ok in ("blender", "Blender", "blender.exe", "blender-4.2", "/usr/bin/blender", "blender4.5"):
+            self.assertTrue(s._name_is_blender(ok), ok)  # pylint: disable=protected-access
+        for no in ("blender-agent", "blender_mcp", "blender-mcp", "blenderkit", "python", ""):
+            self.assertFalse(s._name_is_blender(no), no)  # pylint: disable=protected-access
+
+    def test_ancestor_walk_finds_blender(self) -> None:
+        s = self._surface()
+        me = os.getpid()
+        # Fake tree: me -> 100 (shell) -> 200 (blender) -> 1 (init).
+        tree = {me: (100, "blender-agent"), 100: (200, "bash"), 200: (1, "blender"), 1: (0, "init")}
+        found = s.blender_ancestor_pid(_reader=lambda pid: tree.get(pid))
+        self.assertEqual(found, 200)
+
+    def test_ancestor_walk_no_blender(self) -> None:
+        s = self._surface()
+        me = os.getpid()
+        tree = {me: (100, "blender-agent"), 100: (200, "bash"), 200: (1, "tmux"), 1: (0, "init")}
+        self.assertIsNone(s.blender_ancestor_pid(_reader=lambda pid: tree.get(pid)))
+
+    def test_env_marker_is_authoritative(self) -> None:
+        s = self._surface()
+        # No Blender in the (empty) tree, but the add-on marker is set.
+        self.assertTrue(s.spawned_by_blender(
+            env={"BLENDER_AGENT_SPAWNED_BY_BLENDER": "1"},
+            _reader=lambda pid: None))
+        self.assertFalse(s.spawned_by_blender(env={}, _reader=lambda pid: None))
+
+    def test_argv_shape(self) -> None:
+        s = self._surface()
+        argv = s.build_blender_argv("blender", "localhost", 9876, "/tmp/x.blend", True)
+        self.assertEqual(argv[:2], ["blender", "--background"])
+        self.assertIn("/tmp/x.blend", argv)
+        self.assertIn("--online-mode", argv)
+        self.assertEqual(argv[-6:], ["--command", "blender_mcp", "--host", "localhost", "--port", "9876"])
+        # No blend file and no online mode -> both omitted.
+        bare = s.build_blender_argv("blender", "h", 1, None, False)
+        self.assertNotIn("--online-mode", bare)
+        self.assertEqual([a for a in bare if a.endswith(".blend")], [])
+
+    def test_bridge_reachable(self) -> None:
+        s = self._surface()
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        try:
+            self.assertTrue(s.bridge_reachable("127.0.0.1", port))
+        finally:
+            srv.close()
+        # Nothing listening on a just-freed port.
+        self.assertFalse(s.bridge_reachable("127.0.0.1", port, timeout=0.2))
+
+    def test_spawn_and_teardown_against_fake_blender(self) -> None:
+        """
+        BlenderSurface spawns a process and waits for its bridge; a fake
+        'blender' opens the requested --port. stop() terminates it.
+        """
+        s = self._surface()
+        script = os.path.join(tempfile.mkdtemp(prefix="fakeblender-"), "blender")
+        with open(script, "w", encoding="utf-8") as fh:
+            fh.write(
+                "#!/usr/bin/env python3\n"
+                "import sys, socket, time\n"
+                "argv = sys.argv[1:]\n"
+                "port = int(argv[argv.index('--port') + 1])\n"
+                "srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+                "srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+                "srv.bind(('127.0.0.1', port)); srv.listen(5)\n"
+                "time.sleep(30)\n"
+            )
+        os.chmod(script, 0o755)
+        free = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        free.bind(("127.0.0.1", 0))
+        port = free.getsockname()[1]
+        free.close()
+        surface = s.BlenderSurface(host="127.0.0.1", port=port, blender_path=script)
+        surface.start(timeout=15.0)
+        try:
+            self.assertTrue(s.bridge_reachable("127.0.0.1", port))
+            self.assertIsNotNone(surface.proc)
+            self.assertIsNone(surface.proc.poll())  # still running
+        finally:
+            surface.stop()
+        self.assertIsNotNone(surface.proc.poll())  # terminated
+
+    def test_spawn_raises_when_process_exits_early(self) -> None:
+        s = self._surface()
+        script = os.path.join(tempfile.mkdtemp(prefix="fakeblender-"), "blender")
+        with open(script, "w", encoding="utf-8") as fh:
+            fh.write("#!/usr/bin/env python3\nimport sys\nsys.exit(3)\n")
+        os.chmod(script, 0o755)
+        surface = s.BlenderSurface(host="127.0.0.1", port=59999, blender_path=script)
+        with self.assertRaises(RuntimeError) as cm:
+            surface.start(timeout=5.0)
+        self.assertIn("exited", str(cm.exception))
+
+
 @unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
 class TestAgentTurn(unittest.TestCase):
     """

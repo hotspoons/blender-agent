@@ -153,6 +153,11 @@ def start(
     bridge_env = {
         "BLENDER_MCP_HOST": bridge_host,
         "BLENDER_MCP_PORT": str(bridge_port),
+        # Marks the agent as Blender-spawned so its standalone launch
+        # logic never spawns a second Blender (recursion guard). The
+        # agent also detects this by process-tree introspection; the
+        # marker makes the guard reliable where introspection is not.
+        "BLENDER_AGENT_SPAWNED_BY_BLENDER": "1",
     }
 
     if how == "in-process":
