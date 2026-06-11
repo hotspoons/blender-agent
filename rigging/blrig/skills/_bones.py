@@ -13,6 +13,7 @@ __all__ = (
     "assign_custom_shapes",
     "bind_rigid",
     "evaluated_verts",
+    "evaluated_volume",
     "pose_rotate",
     "reset_pose",
 )
@@ -135,6 +136,35 @@ def bind_rigid(obj: bpy.types.Object, armature_obj: bpy.types.Object,
         mod.object = armature_obj
         if rollback is not None:
             rollback.track_modifier(obj, mod)
+
+
+def evaluated_volume(obj: bpy.types.Object) -> float:
+    """
+    Unsigned volume of the evaluated (post-modifier) mesh, divergence
+    theorem over world-space triangles. Meaningful for closed meshes.
+    """
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    eval_obj = obj.evaluated_get(depsgraph)
+    mesh = eval_obj.to_mesh()
+    try:
+        n = len(mesh.vertices)
+        co = np.empty(n * 3, dtype=np.float64)
+        mesh.vertices.foreach_get("co", co)
+        co = co.reshape(n, 3)
+        mw = np.array(eval_obj.matrix_world, dtype=np.float64)
+        verts = co @ mw[:3, :3].T + mw[:3, 3]
+        mesh.calc_loop_triangles()
+        m = len(mesh.loop_triangles)
+        tris = np.empty(m * 3, dtype=np.int64)
+        mesh.loop_triangles.foreach_get("vertices", tris)
+        tris = tris.reshape(m, 3)
+        center = verts.mean(axis=0)
+        a0 = verts[tris[:, 0]] - center
+        a1 = verts[tris[:, 1]] - center
+        a2 = verts[tris[:, 2]] - center
+        return float(abs(np.einsum("ij,ij->i", a0, np.cross(a1, a2)).sum()) / 6.0)
+    finally:
+        eval_obj.to_mesh_clear()
 
 
 def evaluated_verts(obj: bpy.types.Object) -> np.ndarray:

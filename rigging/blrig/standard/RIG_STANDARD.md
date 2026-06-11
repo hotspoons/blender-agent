@@ -21,8 +21,10 @@ validator (rule ids below are what its reports reference).
 
 ## Structure
 
-- Exactly **one** parentless bone: `root`. Everything else descends from it
-  (the hierarchy is therefore a tree).
+- Exactly **one** parentless bone in the deform/control hierarchy: `root`.
+  Everything else descends from it (the hierarchy is therefore a tree).
+  Exception: `MCH-`/`ORG-` mechanism bones may float parentless — Rigify's
+  parent-switching machinery relies on constraint-driven floaters.
 - Deform/control separation is absolute: a bone deforms if and only if it is
   `DEF-`-prefixed. Meshes get vertex groups **only** for `DEF-` bones.
 - No (near-)zero-length bones — Blender silently deletes true zero-length

@@ -80,11 +80,15 @@ def validate_rig(obj: bpy.types.Object) -> dict:
             "armature object scale is {!r}, must be applied".format(tuple(round(s, 4) for s in scale)),
         ))
 
-    roots = [b.name for b in bones if b.parent is None]
+    # Mechanism bones may float parentless (Rigify's parent-switching
+    # MCH-*.parent bones are constraint-driven); the rule applies to the
+    # deform/control hierarchy.
+    roots = [b.name for b in bones
+             if b.parent is None and bone_class(b.name) != "mechanism"]
     if len(roots) != 1:
         errors.append(_finding(
             "E_ROOT_COUNT", roots,
-            "expected exactly 1 parentless bone, found {:d}".format(len(roots)),
+            "expected exactly 1 parentless non-mechanism bone, found {:d}".format(len(roots)),
         ))
     elif roots[0] != "root":
         warnings.append(_finding("W_ROOT_NAME", roots, "parentless bone should be named 'root'"))

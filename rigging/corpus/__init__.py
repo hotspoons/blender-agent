@@ -12,7 +12,10 @@ __all__ = (
     "build",
 )
 
-from .assets import CORPUS
+from .assets import CORPUS as _MECHANICAL
+from .characters import CHARACTERS as _CHARACTERS
+
+CORPUS = {**_MECHANICAL, **_CHARACTERS}
 
 
 def build(name: str) -> dict:
