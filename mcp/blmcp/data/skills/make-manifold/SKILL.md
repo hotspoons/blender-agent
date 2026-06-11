@@ -1,3 +1,8 @@
+---
+name: make-manifold
+description: Diagnose and repair non-manifold geometry so a mesh is watertight for booleans, 3D printing, and volumetrics.
+---
+
 # Make a mesh manifold (watertight)
 
 Diagnose and repair non-manifold geometry so a mesh is watertight for booleans, 3D printing, and volumetrics.

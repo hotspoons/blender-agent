@@ -12,6 +12,7 @@ __all__ = (
     "get_index",
     "parse_skill_md",
     "register_extension_skills",
+    "register_skills_source",
     "scan_collection",
 )
 
@@ -24,12 +25,30 @@ import subprocess
 import yaml
 
 _CONFIG_PATH_DEFAULT = os.path.join("~", ".config", "blender-mcp", "skills.json")
+
+# Baseline skills shipped with the core server. Scanned first, so every
+# other source can override them by name.
+_BUILTIN_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "skills")
 _DROP_DIR_DEFAULT = os.path.join("~", ".config", "blender-mcp", "skills")
 _REPO_CACHE_DEFAULT = os.path.join("~", ".cache", "blender-mcp", "skill-repos")
 
 _GIT_TIMEOUT = 60.0
 
-_WORD_RE = re.compile(r"[a-z0-9_]+")
+# No underscore in the token class: identifiers like ``rig_hinge`` must
+# match the words "rig" and "hinge".
+_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def _tokens(text: str) -> list[str]:
+    """
+    Lowercase word tokens with naive plural stemming (trailing ``s``),
+    applied identically to queries and skill text.
+    """
+    return [
+        t[:-1] if len(t) > 3 and t.endswith("s") else t
+        for t in _WORD_RE.findall(text.lower())
+    ]
 
 # Extension-bundled collections, registered before the index is built.
 _EXTENSION_DIRS: list[tuple[str, str]] = []  # (label, path)
@@ -197,10 +216,11 @@ def _load_config() -> dict:
     return config
 
 
-def register_extension_skills(label: str, directory: str) -> None:
+def register_skills_source(label: str, directory: str) -> None:
     """
-    Called by tools extensions at registration time to contribute their
-    bundled skill collection.
+    Register an extra skill collection at runtime (tools extensions, the
+    agent's own skill store, ...). Runtime sources are scanned last, so
+    they override builtins and configured sources on name collisions.
     """
     entry = (label, directory)
     if entry not in _EXTENSION_DIRS:
@@ -208,6 +228,14 @@ def register_extension_skills(label: str, directory: str) -> None:
     # A late registration invalidates an already-built index.
     global _INDEX
     _INDEX = None
+
+
+def register_extension_skills(label: str, directory: str) -> None:
+    """
+    Tools-extension wrapper around :func:`register_skills_source` (kept as
+    the documented extension hook name).
+    """
+    register_skills_source("extension:{:s}".format(label), directory)
 
 
 # -----------------------------------------------------------------------------
@@ -226,6 +254,7 @@ class SkillIndex:
         config = _load_config()
 
         scan_plan: list[tuple[str, str]] = []
+        scan_plan.append(("builtin", _BUILTIN_DIR))
         drop_dir = os.path.expanduser(
             os.environ.get("BLENDER_MCP_SKILLS_DIR", _DROP_DIR_DEFAULT))
         scan_plan.append(("drop-folder", drop_dir))
@@ -242,7 +271,7 @@ class SkillIndex:
                 self.sources.append({"source": "repo:{:s}".format(url),
                                      "warning": error})
         for label, directory in _EXTENSION_DIRS:
-            scan_plan.append(("extension:{:s}".format(label), directory))
+            scan_plan.append((label, directory))
 
         for source, directory in scan_plan:
             found = scan_collection(directory, source)
@@ -260,19 +289,19 @@ class SkillIndex:
                                  "path": directory})
 
     def search(self, query: str, max_results: int = 8) -> list[Skill]:
-        terms = set(_WORD_RE.findall(query.lower()))
+        terms = set(_tokens(query))
         if not terms:
             return []
         scored: list[tuple[int, Skill]] = []
         for skill in self.skills.values():
-            name_tokens = set(_WORD_RE.findall(skill.name.lower()))
-            desc_tokens = _WORD_RE.findall(skill.description.lower())
+            name_tokens = set(_tokens(skill.name))
+            desc_tokens = _tokens(skill.description)
             score = 0
             score += 8 * len(terms & name_tokens)
             score += 3 * sum(1 for t in desc_tokens if t in terms)
             if score == 0:
                 try:
-                    body_tokens = _WORD_RE.findall(skill.body().lower())
+                    body_tokens = _tokens(skill.body())
                 except OSError:
                     body_tokens = []
                 score += sum(1 for t in body_tokens if t in terms)

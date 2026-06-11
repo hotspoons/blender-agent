@@ -1,3 +1,8 @@
+---
+name: texturing-basics
+description: Set up a PBR material with image textures, including UV unwrap and correct color spaces.
+---
+
 # Texturing: UVs and a principled material
 
 Set up a PBR material with image textures, including UV unwrap and correct color spaces.

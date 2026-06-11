@@ -1,3 +1,8 @@
+---
+name: boolean-modeling
+description: Combine, subtract, and intersect meshes reliably with the Boolean modifier.
+---
+
 # Additive and subtractive boolean modeling
 
 Combine, subtract, and intersect meshes reliably with the Boolean modifier.

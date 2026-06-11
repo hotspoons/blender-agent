@@ -28,6 +28,7 @@ __all__ = (
     "ensure_index",
     "get_index",
     "register_extension_skills",
+    "register_skills_source",
 )
 
 from .index import (
@@ -35,4 +36,5 @@ from .index import (
     ensure_index,
     get_index,
     register_extension_skills,
+    register_skills_source,
 )

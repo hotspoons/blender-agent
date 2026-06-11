@@ -11,9 +11,14 @@ Layout under the data dir (default ``$XDG_DATA_HOME/blender-agent``)::
 
     config.json
     memory.md
-    skills/<name>.md
+    skills/<name>/SKILL.md
     sessions/<id>/transcript.jsonl
     sessions/<id>/media/<short-id>.<ext>
+
+Skills are backed by the core blmcp skill index (Anthropic SKILL.md
+layout): this store's ``skills/`` folder is registered as one source among
+builtin/drop-folder/git-repo/extension collections, and legacy flat
+``skills/<name>.md`` files migrate to folders on startup.
 """
 
 __all__ = (
@@ -32,7 +37,6 @@ import uuid
 
 from typing import Any
 
-_SKILL_SEED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "skills")
 
 
 def _default_data_dir() -> str:
@@ -112,11 +116,17 @@ class Skill:
         return cls(name=name, summary=summary, body=text)
 
 
-_WORD_RE = re.compile(r"[a-z0-9_]+")
+# No underscore in the token class: identifiers like ``rig_hinge`` must
+# match the words "rig" and "hinge".
+_WORD_RE = re.compile(r"[a-z0-9]+")
 
 
 def _tokenize(text: str) -> list[str]:
-    return _WORD_RE.findall(text.lower())
+    # Naive plural stemming, applied identically to queries and skill text.
+    return [
+        t[:-1] if len(t) > 3 and t.endswith("s") else t
+        for t in _WORD_RE.findall(text.lower())
+    ]
 
 
 def search_skills(skills: list[Skill], query: str, max_results: int = 5) -> list[tuple[Skill, int]]:
@@ -156,7 +166,8 @@ class AgentStore:
         os.makedirs(self.data_dir, exist_ok=True)
         self._config_path = os.path.join(self.data_dir, "config.json")
         self.config = AgentConfig.load(self._config_path)
-        self._seed_skills()
+        self._migrate_legacy_skills()
+        self._register_skills_source()
 
     # ------------------------------------------------------------------
     # Config.
@@ -171,53 +182,93 @@ class AgentStore:
     def skills_dir(self) -> str:
         return os.path.join(self.data_dir, "skills")
 
-    def _seed_skills(self) -> None:
+    def _migrate_legacy_skills(self) -> None:
         """
-        Copy the bundled example skills on first run (never overwrite).
+        One-time migration: flat ``skills/<name>.md`` files (the pre-core
+        store format, including previously seeded examples) become
+        Anthropic-layout ``skills/<name>/SKILL.md`` folders. The bundled
+        examples themselves now ship with core blmcp ("builtin" source),
+        so seeding is gone; user-saved copies migrate and override them.
         """
         os.makedirs(self.skills_dir, exist_ok=True)
-        if not os.path.isdir(_SKILL_SEED_DIR):
-            return
-        for filename in os.listdir(_SKILL_SEED_DIR):
-            if not filename.endswith(".md"):
-                continue
-            dst = os.path.join(self.skills_dir, filename)
-            if os.path.exists(dst):
-                continue
-            with open(os.path.join(_SKILL_SEED_DIR, filename), encoding="utf-8") as fh:
-                text = fh.read()
-            with open(dst, "w", encoding="utf-8") as fh:
-                fh.write(text)
-
-    def list_skills(self) -> list[Skill]:
-        skills: list[Skill] = []
-        if not os.path.isdir(self.skills_dir):
-            return skills
         for filename in sorted(os.listdir(self.skills_dir)):
             if not filename.endswith(".md"):
                 continue
+            path = os.path.join(self.skills_dir, filename)
+            if not os.path.isfile(path):
+                continue
             name = filename[:-3]
             try:
-                with open(os.path.join(self.skills_dir, filename), encoding="utf-8") as fh:
+                with open(path, encoding="utf-8") as fh:
                     text = fh.read()
+                self.save_skill(name, text)
+                os.remove(path)
             except OSError:
                 continue
-            skills.append(Skill.from_markdown(name, text))
+
+    def _register_skills_source(self) -> None:
+        """
+        Contribute this store's skills folder to the core blmcp skill
+        index. Runtime sources scan last, so user-saved skills override
+        builtins of the same name.
+        """
+        from blmcp.skills import register_skills_source
+        register_skills_source("agent-store", self.skills_dir)
+
+    @staticmethod
+    def _core_index():
+        from blmcp.skills import ensure_index
+        return ensure_index()
+
+    def list_skills(self) -> list[Skill]:
+        """
+        Every skill visible to the agent, via the core index: builtin,
+        drop-folder, configured dirs/git repos, tools extensions, and this
+        store's own saved skills.
+        """
+        skills = []
+        for core_skill in sorted(self._core_index().skills.values(), key=lambda s: s.name):
+            try:
+                body = core_skill.body()
+            except OSError:
+                continue
+            skills.append(Skill(name=core_skill.name, summary=core_skill.description, body=body))
         return skills
 
     def get_skill(self, name: str) -> Skill | None:
-        safe = os.path.basename(name)
-        path = os.path.join(self.skills_dir, safe + ".md")
-        if not os.path.isfile(path):
+        core_skill = self._core_index().skills.get(name)
+        if core_skill is None:
             return None
-        with open(path, encoding="utf-8") as fh:
-            return Skill.from_markdown(safe, fh.read())
+        try:
+            body = core_skill.body()
+        except OSError:
+            return None
+        return Skill(name=core_skill.name, summary=core_skill.description, body=body)
 
     def save_skill(self, name: str, body: str) -> None:
+        """
+        Write ``skills/<name>/SKILL.md`` (Anthropic layout). A frontmatter
+        block is added when *body* lacks one, deriving the description from
+        the first non-heading line; the core index is refreshed so the
+        skill is immediately visible everywhere.
+        """
         safe = os.path.basename(name)
-        os.makedirs(self.skills_dir, exist_ok=True)
-        with open(os.path.join(self.skills_dir, safe + ".md"), "w", encoding="utf-8") as fh:
+        skill_folder = os.path.join(self.skills_dir, safe)
+        os.makedirs(skill_folder, exist_ok=True)
+        if not body.startswith("---"):
+            description = ""
+            for line in body.splitlines():
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    description = stripped
+                    break
+            body = "---\nname: {:s}\ndescription: {:s}\n---\n\n{:s}".format(
+                safe, description, body)
+        with open(os.path.join(skill_folder, "SKILL.md"), "w", encoding="utf-8") as fh:
             fh.write(body)
+
+        from blmcp.skills import ensure_index
+        ensure_index(refresh=True)
 
     # ------------------------------------------------------------------
     # Memory.

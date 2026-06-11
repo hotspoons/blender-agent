@@ -26,7 +26,6 @@ include = ["blagent*"]
 [tool.setuptools.package-data]
 "blagent" = [
     "data/system_prompt.md",
-    "data/skills/*.md",
     "web/**/*",
 ]
 

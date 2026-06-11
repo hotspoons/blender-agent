@@ -1,3 +1,8 @@
+---
+name: lighting-setups
+description: Two dependable lighting starts: a classic three-point rig scaled to the subject, and HDRI world lighting.
+---
+
 # Lighting: three-point and HDRI environment setups
 
 Two dependable lighting starts: a classic three-point rig scaled to the subject, and HDRI world lighting.

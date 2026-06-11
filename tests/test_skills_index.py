@@ -56,8 +56,13 @@ class _IndexTestCase(unittest.TestCase):
         os.environ.pop("BLENDER_MCP_SKILLS_REPOS", None)
         self._saved_ext = list(skills_index._EXTENSION_DIRS)
         skills_index._EXTENSION_DIRS.clear()
+        # Isolate from the builtin collection shipped with blmcp — these
+        # tests assert exact skill sets.
+        self._saved_builtin = skills_index._BUILTIN_DIR
+        skills_index._BUILTIN_DIR = os.path.join(self._tmp.name, "builtin-empty")
 
     def tearDown(self) -> None:
+        skills_index._BUILTIN_DIR = self._saved_builtin
         for key, value in self._env.items():
             if value is None:
                 os.environ.pop(key, None)
@@ -148,6 +153,27 @@ class TestSources(_IndexTestCase):
         # Extensions scan last and win; the override is reported.
         self.assertEqual(index.skills["shared-name"].source, "extension:testext")
         self.assertTrue(any("overrides" in s.get("warning", "") for s in index.sources))
+
+
+class TestBuiltinSource(_IndexTestCase):
+
+    def test_builtin_collection_indexed(self) -> None:
+        skills_index._BUILTIN_DIR = self._saved_builtin
+        index = skills_index.ensure_index(refresh=True)
+        for name in ("make-manifold", "boolean-modeling", "fillets-and-bevels",
+                     "lighting-setups", "texturing-basics"):
+            self.assertIn(name, index.skills)
+            self.assertEqual(index.skills[name].source, "builtin")
+
+    def test_runtime_source_overrides_builtin(self) -> None:
+        skills_index._BUILTIN_DIR = self._saved_builtin
+        store_dir = os.path.join(self._tmp.name, "agent-store")
+        _write_skill(store_dir, "m", "make-manifold", "User-customized version.")
+        skills_index.register_skills_source("agent-store", store_dir)
+        index = skills_index.ensure_index(refresh=True)
+        self.assertEqual(index.skills["make-manifold"].source, "agent-store")
+        self.assertEqual(index.skills["make-manifold"].description,
+                         "User-customized version.")
 
 
 class TestSearch(_IndexTestCase):

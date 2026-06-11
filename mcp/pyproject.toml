@@ -23,6 +23,10 @@ where = ["."]
 "blmcp" = [
     # MCP prompt definitions.
     "data/prompts.yml",
+    # Welcome-tool working instructions.
+    "data/welcome_prompt.md",
+    # Builtin skill collection (Anthropic SKILL.md layout).
+    "data/skills/**/*",
     # Blender Python API reference.
     "data/api/**/*.rst",
     # Blender user manual.

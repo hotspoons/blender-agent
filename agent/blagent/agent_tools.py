@@ -28,7 +28,10 @@ class SkillsTool(Tool):
     name = "skills"
     description = (
         "Playbook library of proven Blender recipes (manifold repair, fillets, "
-        "booleans, texturing, lighting, ...) plus persistent agent memory. "
+        "booleans, texturing, lighting, rigging, ...) plus persistent agent memory. "
+        "Backed by the shared core skill index: builtin skills, the user's "
+        "drop-folder and registered skill git repos, tools-extension bundles "
+        "(e.g. rigging-*), and skills you saved. "
         "Subcommands: list (all skills with one-line summaries), "
         "get {name} (full skill body - ALWAYS read a relevant skill before "
         "attempting tedious geometry work), "
