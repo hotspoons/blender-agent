@@ -12,6 +12,11 @@ import { localLlm } from "/static/core/local-llm-controller.js";
 
 const HEIGHT_KEY = "blender-agent.composer-height";
 
+// One comfortable text line (line-height 24 + breathing room): the
+// floor for both the drag-resize and the restored height, so the box
+// can never be crushed into showing a scrollbar around one line.
+const MIN_TA_HEIGHT = 40;
+
 export class BaComposer extends LitElement {
   static properties = {
     _busy: { state: true },
@@ -53,9 +58,10 @@ export class BaComposer extends LitElement {
   }
 
   firstUpdated() {
-    // Restore the last manually-chosen composer height.
+    // Restore the last manually-chosen composer height (floored so a
+    // single line never overflows into a scrollbar).
     const saved = parseInt(localStorage.getItem(HEIGHT_KEY) || "", 10);
-    if (saved > 24) {
+    if (saved > MIN_TA_HEIGHT) {
       const ta = this.renderRoot.querySelector("textarea");
       ta.style.height = Math.min(window.innerHeight * 0.5, saved) + "px";
       this._manualHeight = true;
@@ -129,7 +135,7 @@ export class BaComposer extends LitElement {
     const maxHeight = window.innerHeight * 0.5;
     let height = startHeight;
     const onMove = (ev) => {
-      height = Math.min(maxHeight, Math.max(24, startHeight + (startY - ev.clientY)));
+      height = Math.min(maxHeight, Math.max(MIN_TA_HEIGHT, startHeight + (startY - ev.clientY)));
       ta.style.height = height + "px";
       this._manualHeight = true;
     };
@@ -159,15 +165,18 @@ export class BaComposer extends LitElement {
       flex-direction: column;
       background: var(--surface-elevated);
       border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      padding: 8px 8px 8px 12px;
-      transition: border-color 0.15s ease;
+      border-radius: 22px;
+      padding: 8px 12px 10px;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
     }
-    .box:focus-within { border-color: var(--accent); }
+    .box:focus-within {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
     .box.drag { border-color: var(--accent); background: var(--accent-soft); }
     .grip {
       height: 10px;
-      margin: -8px -8px 0 -12px;   /* span the box's full width */
+      margin: -8px -12px 0;   /* span the box's full width */
       cursor: ns-resize;
       display: flex;
       align-items: center;
@@ -205,48 +214,60 @@ export class BaComposer extends LitElement {
       padding: 2px;
     }
     .chip button:hover { color: var(--danger); }
-    .row { display: flex; gap: 8px; align-items: flex-end; }
     textarea {
-      flex: 1;
+      width: 100%;
       resize: none;              /* the top-edge handle resizes instead */
       border: none;
       outline: none;
       background: transparent;
       color: var(--text);
       font: inherit;
-      line-height: 1.5;
+      line-height: 24px;
       max-height: 50vh;
       min-height: 24px;
-      padding: 4px 0;
+      /* Spacing via margin, NOT vertical padding: padding makes even an
+         EMPTY one-line box overflow its own height (border-box) and
+         grow a scrollbar. */
+      padding: 0 4px;
+      margin-top: 6px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
     }
     textarea::placeholder { color: var(--text-muted); opacity: 0.7; }
-    button.act {
+    /* Controls live UNDER the text like the current crop of chat
+       composers: attach on the left, send/stop circle on the right. */
+    .controls { display: flex; align-items: center; gap: 6px; padding-top: 6px; }
+    .controls .spacer { flex: 1; }
+    .circle {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      font: inherit;
-      font-weight: 600;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
       border: none;
-      border-radius: var(--radius-sm);
-      padding: 9px 16px;
       cursor: pointer;
+      font: inherit;
+      transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+    }
+    .circle:active { transform: scale(0.94); }
+    .circle svg { width: 20px; height: 20px; }
+    button.attach {
+      background: none;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+    }
+    button.attach:hover { color: var(--text); background: var(--accent-soft); border-color: transparent; }
+    button.act {
       color: #fff;
       background: linear-gradient(135deg, var(--accent), var(--accent-2));
     }
-    button.act:disabled { opacity: 0.45; cursor: default; }
+    button.act:hover { filter: brightness(1.1); }
+    button.act:disabled { opacity: 0.45; cursor: default; filter: none; }
     button.act.abort { background: var(--danger); }
     button.act .spin { display: inline-flex; animation: spin 1.4s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    button.attach {
-      display: inline-flex;
-      border: none;
-      background: none;
-      color: var(--text-muted);
-      cursor: pointer;
-      padding: 9px 6px;
-      border-radius: var(--radius-sm);
-    }
-    button.attach:hover { color: var(--text); background: var(--accent-soft); }
     input[type="file"] { display: none; }
   `;
 
@@ -299,30 +320,33 @@ export class BaComposer extends LitElement {
                 }}>${icon("x-mark")}</button>
               </span>`)}
           </div>` : nothing}
-        <div class="row">
-          <button class="attach" title="Attach image"
+        <textarea rows="1" placeholder="Ask the Blender agent..."
+          @paste=${this._onPaste}
+          @input=${(e) => {
+            if (!this._manualHeight) {
+              e.target.style.height = "auto";
+              e.target.style.height = e.target.scrollHeight + "px";
+            }
+          }}
+          @keydown=${(e) => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this._send(); }
+          }}></textarea>
+        <div class="controls">
+          <button class="circle attach" title="Attach files (or paste / drop)"
             @click=${() => this.renderRoot.querySelector("input[type=file]").click()}>
             ${icon("plus")}</button>
           <input type="file" multiple
             @change=${(e) => { this._addFiles([...e.target.files]); e.target.value = ""; }}>
-          <textarea rows="1" placeholder="Ask the Blender agent..."
-            @paste=${this._onPaste}
-            @input=${(e) => {
-              if (!this._manualHeight) {
-                e.target.style.height = "auto";
-                e.target.style.height = e.target.scrollHeight + "px";
-              }
-            }}
-            @keydown=${(e) => {
-              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this._send(); }
-            }}></textarea>
+          <span class="spacer"></span>
           ${this._busy
-            ? html`<button class="act abort" @click=${() => store.abort()}>${icon("stop")} Stop</button>`
+            ? html`<button class="circle act abort" title="Stop"
+                @click=${() => store.abort()}>${icon("stop")}</button>`
             : this._autoload
-              ? html`<button class="act" disabled title=${localLlm.progress?.text || "Loading model..."}>
-                  <span class="spin">${icon("arrow-path")}</span> Loading...</button>`
-              : html`<button class="act" ?disabled=${!this._connected} @click=${() => this._send()}>
-                  ${icon("paper-airplane")} Send</button>`}
+              ? html`<button class="circle act" disabled title=${localLlm.progress?.text || "Loading model..."}>
+                  <span class="spin">${icon("arrow-path")}</span></button>`
+              : html`<button class="circle act" title="Send (Enter)"
+                  ?disabled=${!this._connected} @click=${() => this._send()}>
+                  ${icon("arrow-up")}</button>`}
         </div>
       </div>
     `;
