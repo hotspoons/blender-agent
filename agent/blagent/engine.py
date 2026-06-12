@@ -82,6 +82,15 @@ _QUIET_EMIT_INTERVAL = 1.0
 # worker stuck in a loop.
 _MAX_BUDGET_REVIEWS = 2
 
+_CLOSING_PROMPT = (
+    "(Your tool budget for this turn is exhausted and your pending tool "
+    "calls were skipped. Close out for the USER now: state plainly what "
+    "you accomplished this turn, citing concrete results from tool "
+    "output you actually received; state what remains undone; then ask "
+    "whether they want you to continue - their reply starts a fresh "
+    "budget. Plain text only - no tool calls.)"
+)
+
 _SELF_REPORT_PROMPT = (
     "(Budget checkpoint - your tool-round budget is exhausted; your "
     "pending tool calls have NOT run. Before more rounds can be granted, "
@@ -662,14 +671,31 @@ class AgentEngine:
                             "state": "error",
                             "summary": message,
                         })
-                    if self_report:
-                        # The worker's own accounting closes the turn
-                        # (the out-of-band round would otherwise be lost).
-                        self.push_record({"role": "assistant", "content": self_report})
+                    # Never end on a dead call: one tool-less closing
+                    # round so the user gets an accounting and an
+                    # explicit "want me to continue?" (their reply is
+                    # the natural budget refill). The skipped-call tool
+                    # records are already in the transcript, so the
+                    # projection is protocol-valid.
+                    closing = ""
+                    try:
+                        close_messages = self._llm_messages(context_tokens)
+                        close_messages.append(
+                            {"role": "user", "content": _CLOSING_PROMPT})
+                        closing, _ = await self._stream_round(
+                            session_id, {"model": model, "messages": close_messages}, llm)
+                    except LlmError as ex:
+                        _log.warning("closing summary failed: %s", ex)
+                    if not closing.strip():
+                        # Fall back to the reviewer-facing self-report
+                        # rather than silence.
+                        closing = self_report
+                    if closing.strip():
+                        self.push_record({"role": "assistant", "content": closing})
                         await self._emit({
                             "type": "assistant_done",
                             "session_id": session_id,
-                            "content": self_report,
+                            "content": closing,
                             "tool_calls": [],
                         })
                     await self._emit({

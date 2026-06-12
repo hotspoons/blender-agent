@@ -576,6 +576,10 @@ class TestBudgetReview(unittest.TestCase):
                                            "DEF-Cube bone exists per tool output. "
                                            "One more round finishes the IK.")
                     return
+                if "Close out for the USER" in last:
+                    yield LlmChunk(content="I rigged the cube (DEF-Cube verified); "
+                                           "the IK polish remains. Want me to continue?")
+                    return
                 self.worker_rounds += 1
                 if self.worker_rounds <= 2:
                     yield LlmChunk(content="working {:d}. ".format(self.worker_rounds))
@@ -624,13 +628,14 @@ class TestBudgetReview(unittest.TestCase):
 
         review = next(r for r in engine.records if r.get("role") == "review")
         self.assertEqual(review["granted_rounds"], 0)
-        # Pending call recorded as skipped; the worker's self-report
-        # closes the turn as a normal assistant message.
+        # Pending call recorded as skipped; a user-facing closing
+        # summary (accomplished / remaining / "continue?") ends the turn
+        # as a normal assistant message.
         tool_contents = [json.loads(str(r["content"]))
                          for r in engine.records if r.get("role") == "tool"]
         self.assertTrue(any(c.get("status") == "skipped" for c in tool_contents))
-        self.assertIn("DEF-Cube", str(engine.records[-1].get("content")))
         self.assertEqual(engine.records[-1].get("role"), "assistant")
+        self.assertIn("continue", str(engine.records[-1].get("content")).lower())
         self.assertEqual(events[-1]["type"], "turn_done")
 
 
