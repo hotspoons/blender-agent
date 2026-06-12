@@ -913,7 +913,12 @@ class AgentEngine:
             })
 
         if tool is None:
+            import difflib
+            close = difflib.get_close_matches(
+                name, [t.name for t in self._registry], n=2, cutoff=0.5)
             message = "unknown tool: {:s}".format(name)
+            if close:
+                message += "; did you mean {:s}?".format(" or ".join(close))
             await status("error", summary=message)
             self._push_tool_record(call_id, {"status": "error", "message": message}, name)
             return [], False

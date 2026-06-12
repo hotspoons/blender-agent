@@ -18,7 +18,9 @@ __all__ = (
     "import_file",
     "info_file",
     "list_files",
+    "render_frame",
     "resolve_jail",
+    "stage_file",
     "unique_path",
 )
 
@@ -38,6 +40,16 @@ _AUDIO_EXTS = ("wav", "mp3", "ogg", "flac", "aif", "aiff")
 
 _EXPORT_FORMATS = ("blend", "stl", "obj", "ply", "gltf", "glb", "fbx",
                    "usd", "usdc", "usda", "abc", "svg", "pdf")
+
+# Image formats accepted by export_file (delegated to render_frame —
+# "export me a png" intuitively means "render the scene to an image").
+_IMAGE_RENDER_FORMATS = {
+    "png": "PNG",
+    "jpg": "JPEG",
+    "jpeg": "JPEG",
+    "webp": "WEBP",
+    "exr": "OPEN_EXR",
+}
 
 
 def kind_of(name: str) -> str:
@@ -234,19 +246,119 @@ def _restore_selection(previous: tuple) -> None:
         pass
 
 
+def stage_file(path: str, jail: str | None = None,
+               filename: str | None = None) -> dict:
+    """
+    Copy an EXISTING file on disk (a render output, a baked cache, a
+    file produced by other code) into the jail so the user can see and
+    download it. The intuitive "I already made this file - hand it to
+    the user" verb.
+    """
+    import shutil
+
+    source = os.path.abspath(os.path.expanduser(str(path)))
+    if not os.path.isfile(source):
+        raise ValueError("no file at {!r} to stage".format(path))
+    root = resolve_jail(jail)
+    target = unique_path(root, filename or os.path.basename(source))
+    shutil.copyfile(source, target)
+    name = os.path.relpath(target, root)
+    return {
+        "file": name,
+        "folder": root,
+        "size": os.path.getsize(target),
+        "kind": kind_of(name),
+        "staged_from": source,
+    }
+
+
+def render_frame(jail: str | None = None, frame: int | None = None,
+                 filename: str | None = None, format: str = "png",
+                 camera: str | None = None) -> dict:
+    """
+    Render one frame of the current scene straight into the jail and
+    return the filename — the one-call "show the user an image" path.
+    Uses the scene's render settings (engine, resolution) as they are;
+    only the output path/format are overridden and then restored.
+    """
+    format = (format or "png").lower().lstrip(".")
+    file_format = _IMAGE_RENDER_FORMATS.get(format)
+    if file_format is None:
+        raise ValueError("unsupported image format {!r}; supported: {}".format(
+            format, ", ".join(sorted(_IMAGE_RENDER_FORMATS))))
+
+    scene = bpy.context.scene
+    cam = bpy.data.objects.get(camera) if camera else scene.camera
+    if camera and (cam is None or cam.type != "CAMERA"):
+        raise ValueError("no camera object named {!r}".format(camera))
+    if cam is None:
+        # One camera in the scene is unambiguous — use it.
+        cameras = [o for o in bpy.data.objects if o.type == "CAMERA"]
+        if len(cameras) == 1:
+            cam = cameras[0]
+        else:
+            raise ValueError(
+                "the scene has no active camera ({:d} camera objects); add one "
+                "(bpy.ops.object.camera_add) or pass {{'camera': name}}".format(
+                    len(cameras)))
+
+    root = resolve_jail(jail)
+    stem = safe_name(filename or "render")
+    ext = "jpg" if format == "jpeg" else format
+    if not stem.lower().endswith("." + ext):
+        stem += "." + ext
+    path = unique_path(root, stem)
+
+    previous = (scene.camera, scene.frame_current,
+                scene.render.filepath, scene.render.image_settings.file_format)
+    try:
+        scene.camera = cam
+        if frame is not None:
+            scene.frame_set(int(frame))
+        scene.render.filepath = path
+        scene.render.image_settings.file_format = file_format
+        bpy.ops.render.render(write_still=True)
+    finally:
+        (scene.camera, scene.frame_current,
+         scene.render.filepath,
+         scene.render.image_settings.file_format) = previous
+
+    if not os.path.isfile(path):
+        raise RuntimeError("render produced no file at {!r}".format(path))
+    return {
+        "file": os.path.relpath(path, root),
+        "folder": root,
+        "size": os.path.getsize(path),
+        "format": format,
+        "frame": int(frame) if frame is not None else previous[1],
+        "camera": cam.name,
+    }
+
+
 def export_file(format: str, jail: str | None = None,
                 objects: list | None = None,
                 filename: str | None = None,
                 options: dict | None = None) -> dict:
     """
     Export the scene (or the named *objects*) as *format* into the jail.
-    Returns the (collision-suffixed) filename and size.
+    Returns the (collision-suffixed) filename and size. Image formats
+    delegate to :func:`render_frame` — asking to "export a png" means
+    rendering the scene.
     """
-    del options  # reserved
     format = (format or "").lower().lstrip(".")
+    if format in _IMAGE_RENDER_FORMATS:
+        return render_frame(
+            jail=jail, filename=filename, format=format,
+            frame=(options or {}).get("frame"),
+            camera=(options or {}).get("camera"))
+    del options  # reserved for the non-image exporters
     if format not in _EXPORT_FORMATS:
-        raise ValueError("unsupported export format {!r}; supported: {}".format(
-            format, ", ".join(_EXPORT_FORMATS)))
+        raise ValueError(
+            "unsupported export format {!r}; supported: {} (or an image "
+            "format {} to render the scene; or media_io('stage', ...) for "
+            "a file that already exists on disk)".format(
+                format, ", ".join(_EXPORT_FORMATS),
+                "/".join(sorted(_IMAGE_RENDER_FORMATS))))
 
     root = resolve_jail(jail)
     targets = []

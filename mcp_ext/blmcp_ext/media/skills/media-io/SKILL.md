@@ -1,7 +1,7 @@
 ---
 name: media-io
-description: Importing user attachments (stl, obj, gltf, fbx, usd, svg, images, audio) into the scene and exporting deliverable files (blend, stl, obj, gltf/glb, fbx, usd, abc, svg/pdf) with the media_io tool — jail rules, collision handling, format notes.
-keywords: import, export, file, save, load, attachment, stl, obj, gltf, glb, fbx, usd, svg, image, png, audio, download, upload, deliverable
+description: Importing user attachments (stl, obj, gltf, fbx, usd, svg, images, audio), exporting deliverable files (blend, stl, obj, gltf/glb, fbx, usd, abc, svg/pdf), rendering frames for the user, and staging existing files — the media_io tool, jail rules, collision handling, format notes.
+keywords: import, export, render, screenshot, picture, file, save, load, attachment, stl, obj, gltf, glb, fbx, usd, svg, image, png, jpg, audio, download, upload, deliverable, stage
 ---
 
 # Media import & export
@@ -23,6 +23,15 @@ served to the user and won't survive the session.
    — omit `objects` to export the whole scene. Returns the actual
    filename written: collisions never overwrite, they suffix
    (`dragon-2.stl`), so ALWAYS relay the returned name to the user.
+4. Show an image: `media_io("render", {"frame": 12})` — renders one
+   frame straight to the media folder (works headless; no
+   window/viewport needed). Picks the scene camera, or the only camera,
+   or errors asking for one — it never invents a viewpoint. `format`
+   png (default) / jpg / webp / exr. `media_io("export", {"format":
+   "png"})` does the same thing.
+5. Already wrote a file somewhere else (a render output path, a baked
+   cache)? `media_io("stage", {"path": "/tmp/out.png"})` copies it into
+   the media folder — don't copy by hand in execute_blender_code.
 
 ## Import dispatch (by extension)
 

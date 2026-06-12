@@ -167,3 +167,92 @@ class TestExportImport(_MediaTestCase):
         open(path, "w").close()
         with self.assertRaises(ValueError):
             blmedia.import_file("notes.txt", self.jail)
+
+
+def _add_camera(name: str = "Cam") -> bpy.types.Object:
+    cam_data = bpy.data.cameras.new(name)
+    cam = bpy.data.objects.new(name, cam_data)
+    cam.location = (4.0, -4.0, 3.0)
+    bpy.context.scene.collection.objects.link(cam)
+    return cam
+
+
+class TestRenderFrame(_MediaTestCase):
+    """
+    media_io("render", ...): the one-call "show the user an image" path
+    (production gap 2026-06-12: the model had to hand-copy a render into
+    the jail because export had no image story).
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _make_cube()
+        scene = bpy.context.scene
+        scene.render.engine = "BLENDER_WORKBENCH"
+        scene.render.resolution_x = 64
+        scene.render.resolution_y = 64
+
+    def test_render_uses_sole_camera_and_restores_settings(self) -> None:
+        _add_camera()
+        self.assertIsNone(bpy.context.scene.camera)
+        previous_path = bpy.context.scene.render.filepath
+        report = blmedia.render_frame(self.jail, frame=7, filename="pose")
+        self.assertEqual(report["file"], "pose.png")
+        self.assertEqual(report["camera"], "Cam")
+        self.assertEqual(report["frame"], 7)
+        self.assertGreater(report["size"], 0)
+        self.assertTrue(os.path.isfile(os.path.join(report["folder"], "pose.png")))
+        # Output settings and the active camera were restored.
+        self.assertEqual(bpy.context.scene.render.filepath, previous_path)
+        self.assertIsNone(bpy.context.scene.camera)
+
+    def test_render_without_camera_is_actionable(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            blmedia.render_frame(self.jail)
+        self.assertIn("camera", str(caught.exception))
+
+    def test_render_named_camera(self) -> None:
+        _add_camera("A")
+        _add_camera("B")
+        report = blmedia.render_frame(self.jail, camera="B")
+        self.assertEqual(report["camera"], "B")
+
+    def test_export_image_format_delegates_to_render(self) -> None:
+        _add_camera()
+        report = blmedia.export_file("png", self.jail, filename="snap")
+        self.assertEqual(report["file"], "snap.png")
+        self.assertEqual(report["format"], "png")
+
+    def test_export_unknown_format_suggests_render_and_stage(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            blmedia.export_file("doc", self.jail)
+        message = str(caught.exception)
+        self.assertIn("png", message)
+        self.assertIn("stage", message)
+
+
+class TestStage(_MediaTestCase):
+
+    def test_stage_copies_with_collision_suffix(self) -> None:
+        outside = os.path.join(self._tmp.name, "elsewhere")
+        os.makedirs(outside)
+        source = os.path.join(outside, "frame.png")
+        with open(source, "wb") as fh:
+            fh.write(b"not-really-a-png")
+        first = blmedia.stage_file(source, self.jail)
+        self.assertEqual(first["file"], "frame.png")
+        self.assertEqual(first["kind"], "image")
+        self.assertEqual(first["staged_from"], source)
+        second = blmedia.stage_file(source, self.jail)
+        self.assertEqual(second["file"], "frame-2.png")
+
+    def test_stage_missing_file(self) -> None:
+        with self.assertRaises(ValueError):
+            blmedia.stage_file("/nonexistent/nowhere.png", self.jail)
+
+    def test_stage_rename(self) -> None:
+        source = os.path.join(self._tmp.name, "0001.png")
+        with open(source, "wb") as fh:
+            fh.write(b"x")
+        report = blmedia.stage_file(source, self.jail, filename="walk-frame12.png")
+        self.assertEqual(report["file"], "walk-frame12.png")

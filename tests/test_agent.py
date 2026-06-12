@@ -473,6 +473,62 @@ class TestTurnBudgetExhaustion(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
+class TestUnknownToolSuggestion(unittest.TestCase):
+    """
+    Production slip (2026-06-12): the model called "media" instead of
+    "media_io" and burned a round on a bare "unknown tool" error. Close
+    names get a did-you-mean.
+    """
+
+    def test_close_match_suggested(self) -> None:
+        _import_blagent()
+        from blagent.engine import AgentEngine
+        from blagent.llm import LlmChunk, LlmClient
+        from blagent.tools import Tool, ToolRegistry
+
+        class Stub(Tool):
+            def __init__(self, name: str) -> None:
+                self.name = name
+                self.description = ""
+
+            def input_schema(self):
+                return {"type": "object", "properties": {}}
+
+        events: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            events.append(event)
+
+        engine = AgentEngine(
+            registry=ToolRegistry([Stub("media_io"), Stub("rig")]),
+            media=None,
+            system_prompt="",
+            emit=emit,
+            append_record=lambda record: None,
+        )
+
+        class SlipsOnce(LlmClient):
+            def __init__(self) -> None:
+                self.round = 0
+
+            async def stream(self, request: dict[str, Any]) -> Any:
+                self.round += 1
+                if self.round == 1:
+                    yield LlmChunk(tool_calls=[{
+                        "index": 0, "id": "c1",
+                        "function": {"name": "media", "arguments": "{}"},
+                    }])
+                else:
+                    yield LlmChunk(content="ok")
+
+        asyncio.new_event_loop().run_until_complete(engine.run_turn(
+            "s1", "go", SlipsOnce(), "m", autonomy="auto", max_rounds=4))
+
+        record = next(r for r in engine.records if r.get("role") == "tool")
+        self.assertIn("did you mean media_io", str(record["content"]))
+
+
+@unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
 class TestBudgetReview(unittest.TestCase):
     """
     The orchestrator checkpoint: at budget exhaustion the worker
