@@ -1,0 +1,22 @@
+apiVersion: v2
+name: blender-mcp
+description: >-
+  Blender Agent - a web-based agent for Blender that drives the blender-mcp
+  tool surface, exposes an OpenAI-compatible chat-completions API, and bundles
+  a headless Blender as its own compute surface.
+type: application
+
+# Chart version is bumped by the helm-build CI component per release; appVersion
+# is overwritten there to track the published image tag. The committed values
+# are sensible defaults for local `helm template`/`helm install`.
+version: 0.1.0
+appVersion: "0.1.0"
+
+home: https://www.blender.org/lab/mcp-server/
+keywords:
+  - blender
+  - mcp
+  - agent
+  - llm
+maintainers:
+  - name: patapsco.ai

@@ -1,0 +1,60 @@
+workflow:
+  rules:
+    - if: "$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS"
+      when: "never"
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH && $CI_COMMIT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: "$CI_COMMIT_TAG"
+      when: "never"
+    - when: "never"
+
+variables:
+  NAMESPACE: patapsco.ai
+  COMPONENT: blender-mcp
+  VERSION: 0.1.0
+
+stages:
+  - "semver"
+  - "build"
+  - "distribute"
+
+# The docker-build component provides `build-docker` (per-arch buildkit build
+# with snapshot/main repo selection, semver tags, branch/MR tagging, registry
+# cache) and `build-manifest` (multi-arch manifest-tool push). It defaults to
+# image-name=$CI_PROJECT_NAME, dockerfile=$CI_PROJECT_DIR/Dockerfile,
+# context=$CI_PROJECT_DIR - all correct for this repo (project slug
+# `blender-mcp`, Dockerfile at the root), so no overrides needed.
+include:
+  - component: $CI_SERVER_FQDN/$CICD_PIPELINE_RESOURCES/cicd-components/simple-version@v1
+    inputs:
+      base-version: "$VERSION"
+      tag-mode: "true"
+  - component: $CI_SERVER_FQDN/$CICD_PIPELINE_RESOURCES/cicd-components-docker/docker-build@v3
+  - component: $CI_SERVER_FQDN/$CICD_PIPELINE_RESOURCES/cicd-components-helm/helm-build@v1
+  - component: $CI_SERVER_FQDN/$CICD_PIPELINE_RESOURCES/cicd-components-helm/helm-distribute@v1
+
+set-version:
+  extends: ".set-simple-version"
+  interruptible: true
+
+# -- Helm chart ---------------------------------------------------------------
+#
+# build-chart / distribute-chart are provided by the helm components and
+# auto-pick `charts/$CI_PROJECT_NAME` (charts/blender-mcp here). We only declare
+# needs: so they wait on the docker manifest (chart appVersion tracks the image
+# tag).
+
+build-chart:
+  needs:
+    - job: "build-manifest"
+      artifacts: false
+    - job: "set-version"
+      artifacts: true
+
+distribute-chart:
+  needs:
+    - job: "build-chart"
+      artifacts: false
+    - job: "set-version"
+      artifacts: true

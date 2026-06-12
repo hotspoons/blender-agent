@@ -1,0 +1,65 @@
+{{/*
+Expand the name of the chart.
+*/}}
+{{- define "blender-mcp.name" -}}
+{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Fully qualified app name.
+*/}}
+{{- define "blender-mcp.fullname" -}}
+{{- if .Values.fullnameOverride }}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- $name := default .Chart.Name .Values.nameOverride }}
+{{- if contains $name .Release.Name }}
+{{- .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- define "blender-mcp.chart" -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "blender-mcp.labels" -}}
+helm.sh/chart: {{ include "blender-mcp.chart" . }}
+{{ include "blender-mcp.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{- define "blender-mcp.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "blender-mcp.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{- define "blender-mcp.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create }}
+{{- default (include "blender-mcp.fullname" .) .Values.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.serviceAccount.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Name of the chart-managed Secret holding the LLM and chat API keys.
+*/}}
+{{- define "blender-mcp.secretName" -}}
+{{- printf "%s-secrets" (include "blender-mcp.fullname" .) }}
+{{- end }}
+
+{{/*
+Whether the chart needs to create its own Secret (i.e. a key value was given
+inline rather than referencing an existing Secret).
+*/}}
+{{- define "blender-mcp.createSecret" -}}
+{{- if or (and .Values.agent.llm.apiKey (not .Values.agent.llm.existingSecret)) (and .Values.agent.chatApiKey.value (not .Values.agent.chatApiKey.existingSecret)) -}}
+true
+{{- end -}}
+{{- end }}

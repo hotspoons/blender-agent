@@ -251,6 +251,21 @@ export class BaChatStage extends LitElement {
       font-family: var(--font-mono);
       color: var(--text-muted);
     }
+    /* Full, wrapping error text - the header summary is clipped, so the
+       expanded card is where the whole message must be readable. */
+    .tool-error {
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--danger);
+      background: rgba(239, 68, 68, 0.08);
+      border: 1px solid rgba(239, 68, 68, 0.25);
+      border-radius: var(--radius-sm);
+      padding: 8px 10px;
+      margin-top: 8px;
+    }
     .confirm {
       border: 1px solid var(--warning);
       border-radius: var(--radius-md);
@@ -444,13 +459,15 @@ export class BaChatStage extends LitElement {
         <div class="tool-head" @click=${() => this._toggleSet("_expanded", id)}>
           ${icon(open ? "chevron-down" : "chevron-right")}
           <span class="name">${call.name}</span>
-          <span class="summary">${call.summary}</span>
+          <span class="summary" title=${call.summary || ""}>${call.summary}</span>
           <span class="badge ${call.state}">${badgeIcon ? icon(badgeIcon) : nothing}
             ${call.state.replace("_", " ")}</span>
         </div>
         ${open ? html`
           <div class="tool-body">
             <ba-json label="Arguments" .data=${call.arguments}></ba-json>
+            ${(call.state === "error" || call.state === "rejected") && call.summary ? html`
+              <div class="tool-error">${call.summary}</div>` : nothing}
             ${call.data !== undefined && call.data !== null ? html`
               <div style="margin-top: 8px;">
                 <ba-json label="Result" .data=${call.data}></ba-json>
@@ -567,19 +584,29 @@ export class BaChatStage extends LitElement {
         // live-turn state is gone once the next turn starts, so cards
         // must re-derive their thumbnails from the transcript.
         let mediaIds = [];
+        let errorMessage = "";
         if (results[c.id]) {
-          try { mediaIds = JSON.parse(results[c.id]).media_ids || []; } catch {}
+          try {
+            const parsed = JSON.parse(results[c.id]);
+            mediaIds = parsed.media_ids || [];
+            // Error/declined records carry the full message; surface it
+            // in full rather than letting the tree preview clip it.
+            if ((parsed.status === "error" || parsed.status === "rejected") && parsed.message) {
+              errorMessage = String(parsed.message);
+            }
+          } catch {}
         }
         return html`
           <div class="tool-card">
             <div class="tool-head" @click=${() => this._toggleSet("_expanded", c.id)}>
               ${icon(open ? "chevron-down" : "chevron-right")}
               <span class="name">${c.name}</span>
-              <span class="summary">${(c.arguments || "").slice(0, 120)}</span>
+              <span class="summary" title=${errorMessage || (c.arguments || "")}>${errorMessage || (c.arguments || "").slice(0, 120)}</span>
             </div>
             ${open ? html`
               <div class="tool-body">
                 <ba-json label="Arguments" .data=${c.arguments}></ba-json>
+                ${errorMessage ? html`<div class="tool-error">${errorMessage}</div>` : nothing}
                 ${results[c.id] ? html`
                   <div style="margin-top: 8px;">
                     <ba-json label="Result" .data=${results[c.id]}></ba-json>

@@ -22,7 +22,10 @@ const PREVIEW_LIMIT = 64;
 // rendered markdown. Multiline strings under any other key render as
 // whitespace-preserving <pre> blocks.
 const CODE_KEYS = { code: "python" };
-const MARKDOWN_KEYS = new Set(["body", "memory"]);
+// String values under these keys are markdown - tools that emit
+// markdown bodies (skills `body`/`memory`, the welcome tool's
+// `instructions`) get rendered, not shown as a raw <pre> block.
+const MARKDOWN_KEYS = new Set(["body", "memory", "instructions"]);
 
 function previewOf(value) {
   if (value === null) return "null";
@@ -284,6 +287,7 @@ export class BaJson extends LitElement {
       tab-size: 4;
     }
     .zoombox .body pre code { background: transparent; }
+    .zoombox .body .zoomtree { padding: 12px 16px; }
     /* In the fullscreen modal the inline preview caps come off: rich
        blocks (code editors etc.) grow to their content and the modal
        body is the one scroll container. */
@@ -307,7 +311,7 @@ export class BaJson extends LitElement {
     const lang = CODE_KEYS[key] || "";
     const zoomButton = html`
       <span class="zoom" title="Expand"
-        @click=${() => { this._zoom = { title: `${this.label || "payload"} / ${key}`, text, lang, md }; }}>
+        @click=${() => { this._zoom = { view: "field", title: `${this.label || "payload"} / ${key}`, text, lang, md }; }}>
         ${icon("arrows-pointing-out")}</span>`;
     const block = md
       ? html`<div class="rich md">${unsafeHtml(renderMarkdown(text))}</div>`
@@ -318,20 +322,33 @@ export class BaJson extends LitElement {
   _renderZoom() {
     const z = this._zoom;
     if (!z) return nothing;
+    // "field" zooms one rich string (markdown or code). "tree"/"raw"
+    // mirror the bar tabs so Expand shows what you were looking at -
+    // the formatted tree (markdown fields rendered) or raw JSON.
+    let body;
+    let copyText;
+    if (z.view === "tree") {
+      body = html`<div class="zoomtree">${this._renderTree()}</div>`;
+      copyText = JSON.stringify(this._value, null, 2);
+    } else if (z.view === "raw") {
+      body = this._renderRaw();
+      copyText = JSON.stringify(this._value, null, 2);
+    } else {
+      body = z.md
+        ? html`<div class="mdpad">${unsafeHtml(renderMarkdown(z.text))}</div>`
+        : this._highlight(z.text, z.lang);
+      copyText = z.text;
+    }
     return html`
       <div class="zoombox" @click=${(e) => { if (e.target === e.currentTarget) this._zoom = null; }}>
         <div class="panel">
           <header>
             <span class="title">${z.title}</span>
-            <button title="Copy" @click=${() => navigator.clipboard?.writeText(z.text)}>
+            <button title="Copy" @click=${() => navigator.clipboard?.writeText(copyText)}>
               ${icon("clipboard")}</button>
             <button title="Close (Esc)" @click=${() => { this._zoom = null; }}>${icon("x-mark")}</button>
           </header>
-          <div class="body">
-            ${z.md
-              ? html`<div class="mdpad">${unsafeHtml(renderMarkdown(z.text))}</div>`
-              : this._highlight(z.text, z.lang)}
-          </div>
+          <div class="body">${body}</div>
         </div>
       </div>`;
   }
@@ -424,13 +441,11 @@ export class BaJson extends LitElement {
           <button class=${this._tab === "raw" ? "active" : ""}
             @click=${() => { this._tab = "raw"; }}>Raw</button>
           <button class="copy" title="Expand" @click=${() => {
-            const value = this._value;
-            this._zoom = {
-              title: this.label || "payload",
-              text: typeof value === "string" ? value : JSON.stringify(value, null, 2),
-              lang: typeof value === "string" ? "" : "json",
-              md: false,
-            };
+            // Mirror the active tab: a string payload always zooms as a
+            // field; an object zooms its tree (formatted) or raw JSON.
+            this._zoom = typeof this._value === "string"
+              ? { view: "field", title: this.label || "payload", text: this._value, lang: "", md: false }
+              : { view: this._tab, title: this.label || "payload" };
           }}>${icon("arrows-pointing-out")}</button>
           <button class="copy" title="Copy JSON" @click=${() => this._copy()}>${icon("clipboard")}</button>
         </div>

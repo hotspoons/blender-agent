@@ -1,0 +1,25 @@
+# Keep the build context lean - the image only needs mcp/, agent/, addon/,
+# the entrypoint, and .devcontainer/{blender.env,build-blender.sh}.
+.git
+**/__pycache__/
+**/*.pyc
+.mypy_cache/
+.ruff_cache/
+**/.ruff_cache/
+**/*.egg-info/
+**/build/
+.test_venv/
+.vscode/
+
+# Components not shipped in the runtime image.
+ext/
+chat_client/
+tests/
+_misc/
+rigging/
+mcp_ext/
+
+# Devcontainer: keep only the two files the Dockerfile copies.
+.devcontainer/*
+!.devcontainer/blender.env
+!.devcontainer/build-blender.sh

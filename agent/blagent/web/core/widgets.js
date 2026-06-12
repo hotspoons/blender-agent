@@ -468,17 +468,34 @@ export class BaModal extends LitElement {
   constructor() {
     super();
     this._onKey = (e) => { if (e.key === "Escape") this._close(); };
+    // Close only on a click that BOTH started and ended on the
+    // backdrop. A drag that begins inside the panel (e.g. selecting
+    // text in a field) and releases outside still fires a `click` on
+    // the host, but its press did not start on the backdrop - that
+    // must not close. `composedPath()[0]` is the true innermost target
+    // (events bubbling out of this element's own shadow root would
+    // otherwise retarget to the host, hiding the distinction). Capture
+    // phase so it runs before the panel's stopPropagation.
+    this._pressOnBackdrop = false;
+    this._onDown = (e) => { this._pressOnBackdrop = e.composedPath()[0] === this; };
+    this._onClick = (e) => {
+      if (e.composedPath()[0] === this && this._pressOnBackdrop) this._close();
+      this._pressOnBackdrop = false;
+    };
   }
 
   connectedCallback() {
     super.connectedCallback();
     document.addEventListener("keydown", this._onKey);
-    this.addEventListener("click", (e) => { if (e.target === this) this._close(); });
+    this.addEventListener("pointerdown", this._onDown, true);
+    this.addEventListener("click", this._onClick, true);
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     document.removeEventListener("keydown", this._onKey);
+    this.removeEventListener("pointerdown", this._onDown, true);
+    this.removeEventListener("click", this._onClick, true);
   }
 
   _close() {

@@ -1,0 +1,126 @@
+{{- if and .Values.agent.chatApi.enabled (or (not .Values.agent.llm.endpoint) (not .Values.agent.llm.model)) }}
+{{- fail "agent.chatApi.enabled requires both agent.llm.endpoint and agent.llm.model to be set (the chat API needs a remote LLM)." }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "blender-mcp.fullname" . }}
+  labels:
+    {{- include "blender-mcp.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  # Transcripts on a RWO volume can't be co-mounted by two pods mid-rollout.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "blender-mcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "blender-mcp.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "blender-mcp.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 10102
+              protocol: TCP
+            {{- if .Values.agent.mcpHttp.enabled }}
+            - name: mcp-http
+              containerPort: {{ .Values.service.mcpPort }}
+              protocol: TCP
+            {{- end }}
+          env:
+            - name: BLENDER_AGENT_HOST
+              value: "0.0.0.0"
+            - name: BLENDER_AGENT_PORT
+              value: "10102"
+            - name: XDG_DATA_HOME
+              value: /data
+            {{- if .Values.agent.chatApi.enabled }}
+            - name: BLENDER_AGENT_CHAT_API
+              value: "1"
+            {{- if .Values.agent.chatApi.inlineTools }}
+            - name: BLENDER_AGENT_CHAT_API_INLINE_TOOLS
+              value: "1"
+            {{- end }}
+            - name: BLENDER_AGENT_ENDPOINT
+              value: {{ .Values.agent.llm.endpoint | quote }}
+            - name: BLENDER_AGENT_MODEL
+              value: {{ .Values.agent.llm.model | quote }}
+            {{- end }}
+            {{- if .Values.agent.mcpHttp.enabled }}
+            - name: BLENDER_AGENT_MCP_PORT
+              value: {{ .Values.service.mcpPort | quote }}
+            {{- end }}
+            {{- with .Values.agent.title }}
+            - name: BLENDER_AGENT_TITLE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if or .Values.agent.llm.apiKey .Values.agent.llm.existingSecret }}
+            - name: BLENDER_AGENT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.agent.llm.existingSecret | default (include "blender-mcp.secretName" .) }}
+                  key: {{ .Values.agent.llm.existingSecretKey }}
+            {{- end }}
+            {{- if or .Values.agent.chatApiKey.value .Values.agent.chatApiKey.existingSecret }}
+            - name: BLENDER_AGENT_CHAT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.agent.chatApiKey.existingSecret | default (include "blender-mcp.secretName" .) }}
+                  key: {{ .Values.agent.chatApiKey.existingSecretKey }}
+            {{- end }}
+            {{- with .Values.agent.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "blender-mcp.fullname" .)) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

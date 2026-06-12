@@ -1,0 +1,144 @@
+# Default values for the blender-mcp (Blender Agent) chart.
+
+replicaCount: 1
+
+image:
+  # The docker-build CI component pushes to <registry>/<group>/blender-mcp.
+  # Override repository/tag at deploy time (CI's helm-distribute pins tag to
+  # the built image).
+  repository: blender-mcp
+  pullPolicy: IfNotPresent
+  tag: ""  # defaults to .Chart.AppVersion when empty
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  fsGroup: 10001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  # Agent web UI + OpenAI-compatible chat API.
+  port: 10102
+  # Optional MCP-over-HTTP listener. Enabled only when agent.mcpHttp.enabled.
+  mcpPort: 10101
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: blender-agent.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# -- Agent configuration ------------------------------------------------------
+agent:
+  # OpenAI-compatible chat-completions API (POST /v1/chat/completions). This is
+  # the primary headless entry point and REQUIRES a remote LLM (endpoint+model).
+  chatApi:
+    enabled: true
+    # Render tool calls inline as markdown blockquotes in assistant text.
+    inlineTools: false
+
+  # Remote LLM the agent talks to. endpoint + model are mandatory when
+  # chatApi.enabled is true.
+  llm:
+    endpoint: ""              # e.g. https://openrouter.ai/api/v1
+    model: ""                 # e.g. anthropic/claude-sonnet-4.6
+    # API key for the upstream LLM. Provide ONE of:
+    #   apiKey            - value stored in a chart-managed Secret, or
+    #   existingSecret    - name of a pre-existing Secret, and
+    #   existingSecretKey - the key within it (default: llm-api-key).
+    apiKey: ""
+    existingSecret: ""
+    existingSecretKey: "llm-api-key"
+
+  # Bearer token required on the chat API (Authorization: Bearer <key>).
+  # Empty means the API is open - gate it at the network/ingress layer.
+  chatApiKey:
+    value: ""
+    existingSecret: ""
+    existingSecretKey: "chat-api-key"
+
+  # Co-host the tools over streamable-HTTP MCP on service.mcpPort.
+  mcpHttp:
+    enabled: false
+
+  # Title shown in the browser tab of the web UI.
+  title: ""
+
+  # Extra environment variables passed straight through to the container.
+  extraEnv: []
+  #  - name: BLENDER_AGENT_CHAT_API_INLINE_TOOLS
+  #    value: "1"
+
+# -- Persistence --------------------------------------------------------------
+# Agent state (JSONL transcripts, skills, media) under /data. A PVC is
+# recommended so sessions survive restarts; with replicaCount > 1 use a
+# ReadWriteMany class or run a single replica (flock-guarded transcripts).
+persistence:
+  enabled: true
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 5Gi
+  existingClaim: ""
+
+# Blender source build / compute surface can be memory- and CPU-hungry; these
+# are conservative production defaults, tune for your workload.
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: "2"
+    memory: 4Gi
+
+livenessProbe:
+  httpGet:
+    path: /
+    port: http
+  initialDelaySeconds: 20
+  periodSeconds: 20
+  timeoutSeconds: 5
+  failureThreshold: 6
+
+readinessProbe:
+  httpGet:
+    path: /
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 6
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

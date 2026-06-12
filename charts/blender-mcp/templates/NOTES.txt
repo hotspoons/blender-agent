@@ -1,0 +1,29 @@
+{{ include "blender-mcp.fullname" . }} deployed.
+
+The Blender Agent serves its web UI and OpenAI-compatible chat-completions API
+on port {{ .Values.service.port }} (service "{{ include "blender-mcp.fullname" . }}").
+
+Reach it locally with:
+
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "blender-mcp.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+
+{{- if .Values.agent.chatApi.enabled }}
+
+Chat-completions API (talking to {{ .Values.agent.llm.model }} via {{ .Values.agent.llm.endpoint }}):
+
+  curl -N http://127.0.0.1:{{ .Values.service.port }}/v1/chat/completions \
+    {{- if or .Values.agent.chatApiKey.value .Values.agent.chatApiKey.existingSecret }}-H "Authorization: Bearer <chat-api-key>" \
+    {{ end }}-d '{"user":"pipeline-1","stream":true,"messages":[{"role":"user","content":"add a cube and render it"}]}'
+{{- else }}
+
+The chat-completions API is disabled (agent.chatApi.enabled=false); only the
+browser UI and (optionally) MCP-over-HTTP are exposed.
+{{- end }}
+{{- if .Values.agent.mcpHttp.enabled }}
+
+MCP-over-HTTP is exposed on port {{ .Values.service.mcpPort }}; point clients' .mcp.json at it
+("type": "http", "url": "http://<host>:{{ .Values.service.mcpPort }}").
+{{- end }}
+
+This pod spawns its own headless Blender as the compute surface, so no external
+Blender bridge is required.

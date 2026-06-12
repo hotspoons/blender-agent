@@ -30,40 +30,16 @@ export const TRANSFORMERS_MODELS = [
   { id: "onnx-community/gpt-oss-20b-ONNX", label: "GPT-OSS 20B MoE (~12.6GB)" },
 ];
 
-// WebLLM: Qwen3.5 entries are official mlc-ai conversions shipped in
-// web-llm 0.2.84's prebuilt catalog (model libs hosted by mlc-ai).
-// Gemma 4 has no official MLC port yet; these community builds bundle
-// their own compiled WebGPU wasm in the weights repo (a third-party
-// binary - see the repo's build-provenance.json) and were compiled
-// with a 4k context window.
+// WebLLM: official mlc-ai Qwen3.5 conversions shipped in web-llm
+// 0.2.84's prebuilt catalog (model libs hosted by mlc-ai). The
+// community Gemma 4 builds were dropped here - they fail to run under
+// MLC in the browser; the Transformers.js Gemma 4 exports above do
+// work. (Gemma 4 still has no official MLC port; revisit if one lands.)
 export const WEBLLM_MODELS = [
   { id: "Qwen3.5-0.8B-q4f16_1-MLC", label: "Qwen3.5 0.8B (~0.7GB)" },
   { id: "Qwen3.5-2B-q4f16_1-MLC", label: "Qwen3.5 2B (~1.5GB)" },
   { id: "Qwen3.5-4B-q4f16_1-MLC", label: "Qwen3.5 4B (~2.7GB)" },
   { id: "Qwen3.5-9B-q4f16_1-MLC", label: "Qwen3.5 9B (~5.5GB)" },
-  // The builds bake sliding_window_size: 512 (gemma-4's local-attention
-  // window) into mlc-chat-config.json, and MLC refuses a config where
-  // both that and context_window_size are positive. The official gemma
-  // catalog entries resolve the same conflict at the ModelRecord level,
-  // so these overrides force plain 4k-window KV (sliding window off).
-  {
-    id: "gemma-4-E2B-it-q4f16_1-MLC",
-    label: "Gemma 4 E2B (community build, 4k ctx)",
-    custom: {
-      model: "https://huggingface.co/welcoma/gemma-4-E2B-it-q4f16_1-MLC",
-      model_lib: "https://huggingface.co/welcoma/gemma-4-E2B-it-q4f16_1-MLC/resolve/main/libs/gemma-4-E2B-it-q4f16_1-MLC-webgpu.wasm",
-      overrides: { context_window_size: 4096, sliding_window_size: -1 },
-    },
-  },
-  {
-    id: "gemma-4-E4B-it-q4f16_1-MLC",
-    label: "Gemma 4 E4B (community build, 4k ctx)",
-    custom: {
-      model: "https://huggingface.co/welcoma/gemma-4-E4B-it-q4f16_1-MLC",
-      model_lib: "https://huggingface.co/welcoma/gemma-4-E4B-it-q4f16_1-MLC/resolve/main/libs/gemma-4-E4B-it-q4f16_1-MLC-webgpu.wasm",
-      overrides: { context_window_size: 4096, sliding_window_size: -1 },
-    },
-  },
 ];
 
 const ENGINE_KEY = "blender-agent.local-engine";

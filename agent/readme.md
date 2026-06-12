@@ -90,13 +90,14 @@ Settings (gear icon in the UI, persisted server-side):
   catalog via a curated list of onnx-community exports; **WebLLM**
   (MLC) runs models compiled to WebGPU kernels with paged attention -
   noticeably faster decode at agent-sized contexts, from a curated list
-  of MLC builds (official mlc-ai Qwen3.5 conversions plus
-  community-compiled Gemma 4). Either way inference streams to the backend
-  over the reverse tunnel and weights are downloaded once, then cached.
-  Raw model output is parsed per model family (Qwen XML tool calls,
-  Gemma 4's native grammar, or prompt-instructed JSON for everything
-  else - override in the panel when auto-detection guesses wrong), and
-  `<think>` reasoning renders as collapsible cards in the chat.
+  of official mlc-ai Qwen3.5 conversions (Gemma 4 runs on the
+  Transformers.js side, not WebLLM). Either way inference streams to the
+  backend over the reverse tunnel and weights are downloaded once, then
+  cached. Raw model output is parsed per model family (Qwen XML tool
+  calls, Gemma 4's native grammar, GPT-OSS harmony channels, or
+  prompt-instructed JSON for everything else - override in the panel
+  when auto-detection guesses wrong), and `<think>` reasoning renders as
+  collapsible cards in the chat.
 - **Autonomy**: ``ask`` (destructive tool calls pause for an
   Allow/Deny confirmation in the UI) or ``auto``.
 
