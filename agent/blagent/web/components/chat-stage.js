@@ -55,6 +55,7 @@ export class BaChatStage extends LitElement {
     _pending: { state: true },
     _error: { state: true },
     _busy: { state: true },
+    _drafting: { state: true },
     _expanded: { state: true },
     _openThinks: { state: true },
     _closedThinks: { state: true },
@@ -69,6 +70,7 @@ export class BaChatStage extends LitElement {
     this._pending = null;
     this._error = "";
     this._busy = false;
+    this._drafting = null;
     this._expanded = new Set();
     this._openThinks = new Set();
     this._closedThinks = new Set();
@@ -88,6 +90,7 @@ export class BaChatStage extends LitElement {
       if (keys.has("pendingConfirm")) this._pending = store.state.pendingConfirm;
       if (keys.has("error")) this._error = store.state.error;
       if (keys.has("busy")) this._busy = store.state.busy;
+      if (keys.has("drafting")) this._drafting = store.state.drafting;
       this._scrollSoon();
     });
   }
@@ -289,6 +292,16 @@ export class BaChatStage extends LitElement {
       font-size: 13px;
     }
     .thinking-row .spin { animation: spin 1.4s linear infinite; display: inline-flex; }
+    .thinking-row code {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text);
+    }
+    .thinking-row .drafting-size {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-muted);
+    }
     @keyframes spin { to { transform: rotate(360deg); } }
     .empty {
       margin: auto;
@@ -466,7 +479,12 @@ export class BaChatStage extends LitElement {
             ${this._unclaimedLiveToolIds(records).map((id) => this._renderToolCard(id))}
             ${this._pending ? this._renderConfirm() : nothing}
             ${this._streaming ? this._renderAssistantText(this._streaming, "stream") : nothing}
-            ${this._busy && !this._streaming ? html`
+            ${this._drafting ? html`
+              <div class="thinking-row"><span class="spin">${icon("arrow-path")}</span>
+                writing ${this._drafting.name ? html`<code>${this._drafting.name}</code>` : "tool call"}&hellip;
+                <span class="drafting-size">${(this._drafting.chars / 1024).toFixed(1)} kB</span>
+              </div>` : nothing}
+            ${this._busy && !this._streaming && !this._drafting ? html`
               <div class="thinking-row"><span class="spin">${icon("arrow-path")}</span> working...</div>` : nothing}
             ${this._error ? html`<div class="error-banner">${this._error}</div>` : nothing}
           </div>`}

@@ -633,6 +633,11 @@ class AgentEngine:
         content_parts: list[str] = []
         # index -> {id, name, arguments}
         calls: dict[int, dict[str, Any]] = {}
+        # While the model writes a long tool call (hundreds of lines of
+        # code in `arguments`) no token events flow, so the UI would sit
+        # visually frozen. Emit throttled progress so it can show a
+        # "writing <tool>..." heartbeat instead.
+        drafting_last = 0.0
 
         async for chunk in llm.stream(request):
             if chunk.content:
@@ -648,6 +653,16 @@ class AgentEngine:
                     slot["name"] += function["name"]
                 if function.get("arguments"):
                     slot["arguments"] += function["arguments"]
+            if chunk.tool_calls and _now() - drafting_last > 0.25:
+                drafting_last = _now()
+                active = calls[max(calls)] if calls else {}
+                await self._emit({
+                    "type": "tool_drafting",
+                    "session_id": session_id,
+                    "name": active.get("name", ""),
+                    "chars": sum(len(c["arguments"]) for c in calls.values()),
+                    "n_calls": len(calls),
+                })
 
         tool_calls = []
         for index in sorted(calls):

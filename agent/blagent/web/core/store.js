@@ -20,6 +20,7 @@ class Store extends EventTarget {
       records: [],       // persisted transcript records for the open session
       media: [],         // media items for the open session
       streaming: "",     // assistant text being streamed right now
+      drafting: null,    // {name, chars} while the model writes a long tool call
       busy: false,       // a turn is running
       toolCalls: {},     // call_id -> {name, arguments, state, summary, media_ids}
       toolOrder: [],     // call ids in arrival order (current turn)
@@ -128,8 +129,11 @@ class Store extends EventTarget {
           this._set({ records: this.state.records });
         }
         break;
+      case "tool_drafting":
+        if (forThisSession) this._set({ drafting: { name: msg.name, chars: msg.chars, n_calls: msg.n_calls }, busy: true });
+        break;
       case "token":
-        if (forThisSession) this._set({ streaming: this.state.streaming + msg.text, busy: true });
+        if (forThisSession) this._set({ streaming: this.state.streaming + msg.text, busy: true, drafting: null });
         break;
       case "assistant_done":
         if (forThisSession) {
@@ -138,7 +142,7 @@ class Store extends EventTarget {
             content: msg.content,
             tool_calls: msg.tool_calls || [],
           });
-          this._set({ records: this.state.records, streaming: "" });
+          this._set({ records: this.state.records, streaming: "", drafting: null });
         }
         break;
       case "tool_status": {
@@ -169,7 +173,7 @@ class Store extends EventTarget {
       }
       case "turn_done":
         if (forThisSession) {
-          this._set({ busy: false, streaming: "" });
+          this._set({ busy: false, streaming: "", drafting: null });
           this.send({ type: "list_sessions" });
           this._refreshMedia();
         }
@@ -213,7 +217,7 @@ class Store extends EventTarget {
   // Actions.
 
   chat(content, attachments = []) {
-    this._set({ streaming: "", toolCalls: {}, toolOrder: [], error: "" });
+    this._set({ streaming: "", drafting: null, toolCalls: {}, toolOrder: [], error: "" });
     this.send({ type: "chat", session_id: this.state.sessionId, content, attachments });
   }
 
