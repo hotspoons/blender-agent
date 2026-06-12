@@ -19,6 +19,11 @@ media = "blmcp_ext.media"
 
 [tool.setuptools.packages.find]
 where = ["."]
+# ONLY the real package: without this a stale build/ directory is
+# discovered as a package too, and each subsequent build embeds the
+# previous one (build.lib.build.lib...), which corrupts the editable
+# finder badly enough that blmcp_ext resolves as an empty namespace.
+include = ["blmcp_ext*"]
 # The dev/CI harness lives inside the package tree but stays repo-only.
 exclude = [
     "blmcp_ext.rigging.tests*",

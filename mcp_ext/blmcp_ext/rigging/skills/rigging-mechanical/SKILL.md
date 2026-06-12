@@ -2,6 +2,7 @@
 name: rigging-mechanical
 description: Parameters and behavior of the mechanical rigging skills — rig_chain, rig_rigid_assembly, rig_hinge, rig_piston, rig_wheel, rig_turret — with worked rig() tool-call examples including gap bridging and chain composition.
 keywords: chain, limb, leg, arm, tail, tentacle, boom, spider, insect, robot, robotic, hinge, door, lid, jaw, joint, piston, cylinder, wheel, tire, gear, fan, propeller, turret, vehicle, car, airplane, landing gear, crane, excavator, linkage, assembly, parts
+aliases: [rig_chain, rig_rigid_assembly, rig_hinge, rig_piston, rig_wheel, rig_turret]
 ---
 
 # Mechanical rigging skills
@@ -23,9 +24,9 @@ ball), `hinge_axis_hint`, `hinge_limits_deg` (default ±120),
 
 ```
 rig("run", {"skill": "rig_chain",
-            "objects": ["Leg0_Coxa", "Leg0_Femur", "Leg0_Tibia"],
+            "objects": ["Shoulder", "UpperArm", "Forearm"],
             "params": {"joint_types": ["ball", "hinge"],
-                       "armature": "Rig.Spider"}})
+                       "armature": "Rig.Robot"}})
 ```
 A knee-style hinge axis defaults to the cross product of the two
 segments' directions; pass `hinge_axis_hint` when segments are parallel.
@@ -93,9 +94,11 @@ rerun away. Params: `root_part`, `name`, `contact_tolerance`,
 
 ```
 rig("run", {"skill": "rig_rigid_assembly",
-            "objects": ["SpiderBody", "Leg0_Coxa", ...],
-            "params": {"bridge_gaps": 0.12}})
+            "objects": ["Body", "LimbSegment1", "LimbSegment2", ...],
+            "params": {"bridge_gaps": 0.05}})
 ```
+Take the `bridge_gaps` value from inspect's suggestion (it computes one
+from the measured gaps) rather than guessing.
 
 ## Direct library access (advanced)
 

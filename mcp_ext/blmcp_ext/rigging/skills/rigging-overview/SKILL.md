@@ -2,6 +2,7 @@
 name: rigging-overview
 description: How to rig ANYTHING in Blender with the rig(verb, args) tool — creatures with any number of legs, vehicles, robots, props. Decision table, gap bridging, the diagnose/run/verify contract, and every failure code with its fix.
 keywords: rig, rigging, armature, skeleton, bones, skinning, weights, creature, animal, spider, insect, arthropod, monster, legs, limbs, character, vehicle, car, airplane, plane, robot, mech, machine, prop, animate, animation
+aliases: [rig, rigging]
 ---
 
 # Rigging with the deterministic rigging tool

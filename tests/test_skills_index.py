@@ -22,13 +22,17 @@ from blmcp.skills import index as skills_index
 
 def _write_skill(root: str, dirname: str, name: str, description: str,
                  body: str = "Steps here.", files: dict | None = None,
-                 keywords: str = "") -> str:
+                 keywords: str = "", aliases: str = "") -> str:
     skill_dir = os.path.join(root, dirname)
     os.makedirs(skill_dir, exist_ok=True)
-    keyword_line = "keywords: {:s}\n".format(keywords) if keywords else ""
+    extra = ""
+    if keywords:
+        extra += "keywords: {:s}\n".format(keywords)
+    if aliases:
+        extra += "aliases: {:s}\n".format(aliases)
     with open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as fh:
         fh.write("---\nname: {:s}\ndescription: {:s}\n{:s}---\n\n# {:s}\n\n{:s}\n".format(
-            name, description, keyword_line, name, body))
+            name, description, extra, name, body))
     for rel, content in (files or {}).items():
         path = os.path.join(skill_dir, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -79,32 +83,40 @@ class TestParsing(_IndexTestCase):
 
     def test_frontmatter(self) -> None:
         skill_dir = _write_skill(self._tmp.name, "x", "my-skill", "Does a thing.")
-        name, description, keywords = skills_index.parse_skill_md(
+        name, description, keywords, aliases = skills_index.parse_skill_md(
             os.path.join(skill_dir, "SKILL.md"))
         self.assertEqual(name, "my-skill")
         self.assertEqual(description, "Does a thing.")
         self.assertEqual(keywords, "")
+        self.assertEqual(aliases, ())
 
     def test_frontmatter_keywords(self) -> None:
         skill_dir = _write_skill(self._tmp.name, "k", "kw-skill", "K.",
                                  keywords="spider, arthropod, legs")
-        _name, _description, keywords = skills_index.parse_skill_md(
+        _name, _description, keywords, _aliases = skills_index.parse_skill_md(
             os.path.join(skill_dir, "SKILL.md"))
         self.assertEqual(keywords, "spider, arthropod, legs")
 
     def test_frontmatter_keywords_list(self) -> None:
         skill_dir = _write_skill(self._tmp.name, "kl", "kw-list", "K.",
                                  keywords="[alpha, beta]")
-        _name, _description, keywords = skills_index.parse_skill_md(
+        _name, _description, keywords, _aliases = skills_index.parse_skill_md(
             os.path.join(skill_dir, "SKILL.md"))
         self.assertEqual(keywords, "alpha, beta")
+
+    def test_frontmatter_aliases(self) -> None:
+        skill_dir = _write_skill(self._tmp.name, "al", "doc-name", "D.",
+                                 aliases="[rig_thing, thing]")
+        _name, _description, _keywords, aliases = skills_index.parse_skill_md(
+            os.path.join(skill_dir, "SKILL.md"))
+        self.assertEqual(aliases, ("rig_thing", "thing"))
 
     def test_no_frontmatter_falls_back(self) -> None:
         skill_dir = os.path.join(self._tmp.name, "bare-skill")
         os.makedirs(skill_dir)
         with open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as fh:
             fh.write("# Title\n\nFirst body line.\n")
-        name, description, _keywords = skills_index.parse_skill_md(
+        name, description, _keywords, _aliases = skills_index.parse_skill_md(
             os.path.join(skill_dir, "SKILL.md"))
         self.assertEqual(name, "bare-skill")
         self.assertEqual(description, "First body line.")
@@ -259,6 +271,31 @@ class TestMcpToolSurface(_IndexTestCase):
         result = self._call(self._mcp(), "skills_read",
                             {"name": "locked", "file": "../../etc/passwd"})
         self.assertIn("error", result)
+
+    def test_read_resolves_alias(self) -> None:
+        # The production confusion (2026-06-12): the rig tool's skill
+        # names and the doc names share the word "skill" — a read of
+        # "rig_thing" must land on the doc that documents it.
+        _write_skill(os.environ["BLENDER_MCP_SKILLS_DIR"], "m", "mech-doc",
+                     "Mechanical skills.", aliases="[rig_thing, rig_other]")
+        skills_index.ensure_index(refresh=True)
+        result = self._call(self._mcp(), "skills_read", {"name": "rig_thing"})
+        self.assertEqual(result["name"], "mech-doc")
+        self.assertIn("alias", result["note"])
+        # A real skill name always beats an alias.
+        _write_skill(os.environ["BLENDER_MCP_SKILLS_DIR"], "r", "rig_thing", "Real doc.")
+        skills_index.ensure_index(refresh=True)
+        result = self._call(self._mcp(), "skills_read", {"name": "rig_thing"})
+        self.assertEqual(result["name"], "rig_thing")
+        self.assertNotIn("note", result)
+
+    def test_search_ranks_alias_like_name(self) -> None:
+        drop = os.environ["BLENDER_MCP_SKILLS_DIR"]
+        _write_skill(drop, "a", "mech-doc", "Machines.", aliases="[rig_widget]")
+        _write_skill(drop, "b", "other-doc", "Mentions rig widget once in passing.")
+        index = skills_index.ensure_index(refresh=True)
+        matches = index.search("rig_widget")
+        self.assertEqual(matches[0].name, "mech-doc")
 
     def test_search_miss_returns_catalog(self) -> None:
         _write_skill(os.environ["BLENDER_MCP_SKILLS_DIR"], "s", "only-skill", "The only one.")

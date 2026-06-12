@@ -101,7 +101,7 @@ def register(mcp: FastMCP) -> None:
         to the scene; nothing runs automatically.
         """
         index = ensure_index()
-        skill = index.skills.get(name)
+        skill = index.resolve(name)
         if skill is None:
             close = index.search(name, max_results=3)
             result: dict[str, object] = {
@@ -115,12 +115,16 @@ def register(mcp: FastMCP) -> None:
                 ]
             return result
         if file is None:
-            return {
+            result = {
                 "name": skill.name,
                 "source": skill.source,
                 "body": skill.body(),
                 "files": skill.files(),
             }
+            if skill.name != name:
+                result["note"] = "{!r} resolved as an alias of {!r}".format(
+                    name, skill.name)
+            return result
 
         target = os.path.abspath(os.path.join(skill.path, file))
         if not target.startswith(os.path.abspath(skill.path) + os.sep):

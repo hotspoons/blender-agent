@@ -2,6 +2,7 @@
 name: media-io
 description: Importing user attachments (stl, obj, gltf, fbx, usd, svg, images, audio), exporting deliverable files (blend, stl, obj, gltf/glb, fbx, usd, abc, svg/pdf), rendering frames for the user, and staging existing files — the media_io tool, jail rules, collision handling, format notes.
 keywords: import, export, render, screenshot, picture, file, save, load, attachment, stl, obj, gltf, glb, fbx, usd, svg, image, png, jpg, audio, download, upload, deliverable, stage
+aliases: [media_io, media]
 ---
 
 # Media import & export

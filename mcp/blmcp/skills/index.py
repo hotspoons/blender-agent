@@ -61,6 +61,10 @@ class Skill:
     path: str        # directory containing SKILL.md
     source: str      # human-readable source label ("drop-folder", "repo:...", "extension:...")
     keywords: str = ""   # frontmatter `keywords:` — search synonyms ("spider, arthropod, ...")
+    # Frontmatter `aliases:` — other identifiers this doc answers for
+    # (e.g. the rig tool's skill names: skills_read("rig_chain") should
+    # land on the doc that documents rig_chain).
+    aliases: tuple[str, ...] = ()
 
     @property
     def skill_md(self) -> str:
@@ -89,12 +93,21 @@ class Skill:
         return found
 
 
-def parse_skill_md(path: str) -> tuple[str, str, str]:
+def _meta_list(raw: object) -> list[str]:
     """
-    Return ``(name, description, keywords)`` from a SKILL.md's YAML
-    frontmatter. Falls back to the directory name / first body line when
-    absent; ``keywords`` (search synonyms — a list or comma string) is
-    optional and defaults to "".
+    A frontmatter value that may be a YAML list or a comma string.
+    """
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    return [part.strip() for part in str(raw or "").split(",") if part.strip()]
+
+
+def parse_skill_md(path: str) -> tuple[str, str, str, tuple[str, ...]]:
+    """
+    Return ``(name, description, keywords, aliases)`` from a SKILL.md's
+    YAML frontmatter. Falls back to the directory name / first body line
+    when absent; ``keywords`` (search synonyms, comma string) and
+    ``aliases`` (alternate lookup identifiers) are optional.
     """
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
@@ -102,6 +115,7 @@ def parse_skill_md(path: str) -> tuple[str, str, str]:
     name = os.path.basename(os.path.dirname(os.path.abspath(path)))
     description = ""
     keywords = ""
+    aliases: tuple[str, ...] = ()
     body = text
     if text.startswith("---"):
         parts = text.split("---", 2)
@@ -113,11 +127,8 @@ def parse_skill_md(path: str) -> tuple[str, str, str]:
             if isinstance(meta, dict):
                 name = str(meta.get("name", name))
                 description = str(meta.get("description", ""))
-                raw = meta.get("keywords", "")
-                if isinstance(raw, list):
-                    keywords = ", ".join(str(k) for k in raw)
-                else:
-                    keywords = str(raw)
+                keywords = ", ".join(_meta_list(meta.get("keywords", "")))
+                aliases = tuple(_meta_list(meta.get("aliases", "")))
             body = parts[2]
     if not description:
         for line in body.splitlines():
@@ -125,7 +136,7 @@ def parse_skill_md(path: str) -> tuple[str, str, str]:
             if stripped and not stripped.startswith("#"):
                 description = stripped
                 break
-    return name, description, keywords
+    return name, description, keywords, aliases
 
 
 def scan_collection(directory: str, source: str) -> list[Skill]:
@@ -142,12 +153,12 @@ def scan_collection(directory: str, source: str) -> list[Skill]:
         if "SKILL.md" in names:
             skill_md = os.path.join(root, "SKILL.md")
             try:
-                name, description, keywords = parse_skill_md(skill_md)
+                name, description, keywords, aliases = parse_skill_md(skill_md)
             except OSError:
                 continue
             skills.append(Skill(
                 name=name, description=description, path=root, source=source,
-                keywords=keywords))
+                keywords=keywords, aliases=aliases))
             # A skill dir's subfolders are ancillary, not nested skills.
             dirs[:] = []
     return skills
@@ -298,6 +309,20 @@ class SkillIndex:
             self.sources.append({"source": source, "n_skills": len(found),
                                  "path": directory})
 
+    def resolve(self, name: str) -> "Skill | None":
+        """
+        Look *name* up as a skill name first, then as a frontmatter
+        alias (e.g. a rig-tool skill name resolving to the doc that
+        documents it). Real names always win over aliases.
+        """
+        skill = self.skills.get(name)
+        if skill is not None:
+            return skill
+        for candidate in self.skills.values():
+            if name in candidate.aliases:
+                return candidate
+        return None
+
     def search(self, query: str, max_results: int = 8) -> list[Skill]:
         terms = set(_tokens(query))
         if not terms:
@@ -305,10 +330,12 @@ class SkillIndex:
         scored: list[tuple[int, Skill]] = []
         for skill in self.skills.values():
             name_tokens = set(_tokens(skill.name))
+            alias_tokens = set(_tokens(" ".join(skill.aliases)))
             keyword_tokens = set(_tokens(skill.keywords))
             desc_tokens = _tokens(skill.description)
             score = 0
             score += 8 * len(terms & name_tokens)
+            score += 8 * len(terms & alias_tokens)
             score += 6 * len(terms & keyword_tokens)
             score += 3 * sum(1 for t in desc_tokens if t in terms)
             if score == 0:

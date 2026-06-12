@@ -2,6 +2,7 @@
 name: rigging-characters
 description: Character rigging with rig_biped_rigify and rig_quadruped_rigify — Rigify-generated control rigs with bone-heat automatic weights, symmetry/health gates, IK/FK, and deformation verification.
 keywords: character, humanoid, human, person, figure, biped, quadruped, dog, cat, horse, wolf, deer, creature, animal, rigify, ik, fk, walk, pose, organic
+aliases: [rig_biped_rigify, rig_quadruped_rigify]
 ---
 
 # Character rigging skills
