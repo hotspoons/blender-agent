@@ -1,6 +1,7 @@
 ---
 name: fillets-and-bevels
 description: Round edges and corners predictably - the Bevel modifier (non-destructive, preferred) or bmesh bevel (destructive, scriptable).
+keywords: bevel, fillet, chamfer, round, rounded, edge, corner, smooth, soften
 ---
 
 # Fillets, rounded corners, and bevels

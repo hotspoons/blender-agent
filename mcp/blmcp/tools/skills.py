@@ -62,12 +62,26 @@ def register(mcp: FastMCP) -> None:
 
         ALWAYS search before non-trivial geometry, rigging, texturing or
         repair work — skills encode deterministic recipes and their gotchas.
+        A miss returns the FULL catalog (it is small) — pick by
+        description instead of giving up.
         """
         index = ensure_index()
+        matches = index.search(query, max_results=max_results)
+        if not matches:
+            return {
+                "matches": [],
+                "note": "no keyword match for {!r}; the full catalog is "
+                        "small — pick the closest by description".format(query),
+                "all_skills": [
+                    {"name": s.name, "description": s.description}
+                    for s in sorted(index.skills.values(), key=lambda s: s.name)
+                ],
+            }
         return {
             "matches": [
-                {"name": s.name, "description": s.description, "source": s.source}
-                for s in index.search(query, max_results=max_results)
+                {"name": s.name, "description": s.description,
+                 "keywords": s.keywords, "source": s.source}
+                for s in matches
             ],
         }
 
@@ -90,10 +104,16 @@ def register(mcp: FastMCP) -> None:
         skill = index.skills.get(name)
         if skill is None:
             close = index.search(name, max_results=3)
-            return {
+            result: dict[str, object] = {
                 "error": "unknown skill {!r}".format(name),
                 "did_you_mean": [s.name for s in close],
             }
+            if not close:
+                result["all_skills"] = [
+                    {"name": s.name, "description": s.description}
+                    for s in sorted(index.skills.values(), key=lambda s: s.name)
+                ]
+            return result
         if file is None:
             return {
                 "name": skill.name,

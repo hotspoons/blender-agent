@@ -1,6 +1,7 @@
 ---
 name: rigging-overview
 description: How to rig ANYTHING in Blender with the rig(verb, args) tool — creatures with any number of legs, vehicles, robots, props. Decision table, gap bridging, the diagnose/run/verify contract, and every failure code with its fix.
+keywords: rig, rigging, armature, skeleton, bones, skinning, weights, creature, animal, spider, insect, arthropod, monster, legs, limbs, character, vehicle, car, airplane, plane, robot, mech, machine, prop, animate, animation
 ---
 
 # Rigging with the deterministic rigging tool
@@ -10,16 +11,27 @@ and pass semantic parameters; deterministic geometry code inside Blender
 computes every coordinate. Never compute bone positions yourself, and
 never hand-build armatures via `execute_blender_code` for cases below.
 
-## Workflow (always this order)
+## Fast path
 
-1. `rig("inspect", {"objects": [...]})` — read-only. Returns health,
-   parts, symmetry, contacts, disconnected groups WITH their gaps, and
-   `suggested`: ranked skills with ready-to-use params. START HERE.
+`rig("auto", {"objects": [...]})` — inspects, picks the best skill,
+diagnoses, builds and verifies in ONE call; the result is a staged
+transcript ending in `ok` + `armature`. Pass `skill` to override its
+routing and `params` for extras; suggested params still fill in as
+defaults. When `auto` fails it stops at the failing stage with the
+failure code — fall back to the step-by-step flow below.
+
+## Workflow (step-by-step, always this order)
+
+1. `rig("inspect", {"objects": [...]})` — read-only COMPACT summary:
+   `suggested` ranked skills with ready-to-use params and a `next` call
+   to make come FIRST, then one line of health/size per object and the
+   component structure with gaps. `{"detail": true}` for raw OBBs,
+   per-part breakdowns and contact points. START HERE.
 2. `rig("diagnose", {"skill": ..., "objects": [...], "params": {...}})`
    — dry-run; read the plan or the failure code.
 3. `rig("run", {...same...})` — builds the rig; rolls back on failure.
 4. `rig("verify", {"skill": ..., "armature": ...})` — REQUIRED before
-   reporting success.
+   reporting success (`auto` already includes it).
 
 ## Skill selection
 

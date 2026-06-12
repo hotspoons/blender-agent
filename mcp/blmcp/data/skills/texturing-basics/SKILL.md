@@ -1,6 +1,7 @@
 ---
 name: texturing-basics
 description: Set up a PBR material with image textures, including UV unwrap and correct color spaces.
+keywords: texture, texturing, material, pbr, shader, uv, unwrap, albedo, roughness, normal map, color, paint
 ---
 
 # Texturing: UVs and a principled material

@@ -1,6 +1,7 @@
 ---
 name: lighting-setups
 description: Two dependable lighting starts: a classic three-point rig scaled to the subject, and HDRI world lighting.
+keywords: light, lighting, lamp, key, fill, rim, three-point, hdri, environment, world, render, studio, illumination
 ---
 
 # Lighting: three-point and HDRI environment setups

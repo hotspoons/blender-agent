@@ -1,6 +1,7 @@
 ---
 name: rigging-standard
 description: The rig standard every blrig skill enforces — DEF/CTL/MCH naming, single-root hierarchy, deform/control separation — and how to validate any armature against it with rig("validate", {"armature": ...}).
+keywords: validate, validation, audit, standard, conventions, naming, hierarchy, deform, vertex groups, bone names, lint
 ---
 
 # The rig standard

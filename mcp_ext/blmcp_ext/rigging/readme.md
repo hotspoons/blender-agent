@@ -46,9 +46,10 @@ blender --background --factory-startup --python tests/bl_run_all.py -- -v
 
 ## Using from an agent
 
-Agents use the `rigging_*` MCP tools (inspect/diagnose/run/verify/validate)
-registered by the `blender-mcp-extensions` package, guided by the bundled
-`rigging-*` skills (`skills_search` / `skills_read`). Direct library use
+Agents use the single polymorphic `rig(verb, args)` MCP tool
+(auto/inspect/diagnose/run/verify/validate — `auto` does the whole flow
+in one call) registered by the `blender-mcp-extensions` package, guided
+by the bundled `rigging-*` skills (`skills_search` / `skills_read`). Direct library use
 from `execute_blender_code`:
 
 ```python

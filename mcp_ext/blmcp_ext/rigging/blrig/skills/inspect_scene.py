@@ -8,6 +8,10 @@ before any rigging skill. Beyond raw perception (health, parts, symmetry,
 contacts) it reports structure — connected groups, gaps between them,
 appendage chains — and suggests the skill(s) plus concrete params, so the
 agent never has to translate geometry into a skill choice by itself.
+
+The default report is COMPACT (suggestions first, one summary line per
+object): a 40-part scene must not bury the routing under 40 OBB dumps.
+``detail=True`` restores the full perception output.
 """
 
 __all__ = (
@@ -163,17 +167,46 @@ def _suggest(objects: list, infos: dict, graph: dict | None,
     return suggestions
 
 
-def inspect(object_names: list[str], contact_tolerance: float | None = None) -> dict:
+def _summarize_object(info: dict) -> dict:
     """
-    Read-only perception + routing over *object_names*.
+    One readable line per object: enough to sanity-check the routing,
+    nothing the skills don't recompute themselves anyway.
     """
-    out: dict = {"objects": {}, "missing": [],
-                 "contact_graph": None, "structure": None, "suggested": []}
+    health = info["health"]
+    return {
+        "health": "ok" if health["ok"] else health["issues"],
+        "size": [round(2.0 * h, 4) for h in info["obb"]["half_extents"]],
+        "n_loose_parts": len(info["loose_parts"]),
+        "symmetric": bool(info["symmetry"].get("found")),
+    }
+
+
+def _next_hint(suggested: list[dict]) -> str:
+    if not suggested:
+        return ("no skill suggestion for this object set — adjust the set, "
+                "or consult skills_read('rigging-overview')")
+    top = suggested[0]
+    return ("rig('auto', {{'objects': [...same list...]}}) picks "
+            "{skill!r}, diagnoses, builds and verifies in ONE call; or step "
+            "through manually: rig('diagnose', {{'skill': {skill!r}, "
+            "'objects': [...], 'params': {params!r}}})").format(
+                skill=top["skill"], params=top["params"])
+
+
+def inspect(object_names: list[str], contact_tolerance: float | None = None,
+            detail: bool = False) -> dict:
+    """
+    Read-only perception + routing over *object_names*. Compact by
+    default; *detail* returns full OBBs (axes/centers), per-part
+    breakdowns and contact points.
+    """
+    infos: dict = {}
+    missing: list[str] = []
     objects = []
     for name in object_names:
         obj = bpy.data.objects.get(name)
         if obj is None or obj.type != "MESH":
-            out["missing"].append(name)
+            missing.append(name)
             continue
         objects.append(obj)
         parts = perception.loose_parts(obj)
@@ -181,7 +214,7 @@ def inspect(object_names: list[str], contact_tolerance: float | None = None) -> 
             del part["vert_indices"]
         symmetry = perception.symmetry_plane(obj)
         symmetry.pop("candidates", None)
-        out["objects"][name] = {
+        infos[name] = {
             "health": perception.mesh_health(obj),
             "obb": perception.part_obb(obj),
             "loose_parts": parts,
@@ -189,10 +222,24 @@ def inspect(object_names: list[str], contact_tolerance: float | None = None) -> 
         }
 
     graph = None
+    structure = None
     if len(objects) > 1:
         graph = perception.contact_graph(objects, tol=contact_tolerance)
+        structure = _component_structure(objects, graph)
+    suggested = _suggest(objects, infos, graph, structure) if objects else []
+
+    # Suggestions and the call-to-action lead; raw perception follows.
+    out: dict = {"suggested": suggested, "next": _next_hint(suggested)}
+    if detail:
+        out["objects"] = infos
         out["contact_graph"] = graph
-        out["structure"] = _component_structure(objects, graph)
-    if objects:
-        out["suggested"] = _suggest(objects, out["objects"], graph, out["structure"])
+    else:
+        out["objects"] = {name: _summarize_object(info)
+                          for name, info in infos.items()}
+        if graph is not None:
+            out["contacts"] = {"n_edges": len(graph["edges"])}
+        out["detail_hint"] = ("pass {'detail': true} for full OBBs, "
+                              "loose-part breakdowns and contact points")
+    out["structure"] = structure
+    out["missing"] = missing
     return out

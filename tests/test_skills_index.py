@@ -21,12 +21,14 @@ from blmcp.skills import index as skills_index
 
 
 def _write_skill(root: str, dirname: str, name: str, description: str,
-                 body: str = "Steps here.", files: dict | None = None) -> str:
+                 body: str = "Steps here.", files: dict | None = None,
+                 keywords: str = "") -> str:
     skill_dir = os.path.join(root, dirname)
     os.makedirs(skill_dir, exist_ok=True)
+    keyword_line = "keywords: {:s}\n".format(keywords) if keywords else ""
     with open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as fh:
-        fh.write("---\nname: {:s}\ndescription: {:s}\n---\n\n# {:s}\n\n{:s}\n".format(
-            name, description, name, body))
+        fh.write("---\nname: {:s}\ndescription: {:s}\n{:s}---\n\n# {:s}\n\n{:s}\n".format(
+            name, description, keyword_line, name, body))
     for rel, content in (files or {}).items():
         path = os.path.join(skill_dir, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -77,17 +79,32 @@ class TestParsing(_IndexTestCase):
 
     def test_frontmatter(self) -> None:
         skill_dir = _write_skill(self._tmp.name, "x", "my-skill", "Does a thing.")
-        name, description = skills_index.parse_skill_md(
+        name, description, keywords = skills_index.parse_skill_md(
             os.path.join(skill_dir, "SKILL.md"))
         self.assertEqual(name, "my-skill")
         self.assertEqual(description, "Does a thing.")
+        self.assertEqual(keywords, "")
+
+    def test_frontmatter_keywords(self) -> None:
+        skill_dir = _write_skill(self._tmp.name, "k", "kw-skill", "K.",
+                                 keywords="spider, arthropod, legs")
+        _name, _description, keywords = skills_index.parse_skill_md(
+            os.path.join(skill_dir, "SKILL.md"))
+        self.assertEqual(keywords, "spider, arthropod, legs")
+
+    def test_frontmatter_keywords_list(self) -> None:
+        skill_dir = _write_skill(self._tmp.name, "kl", "kw-list", "K.",
+                                 keywords="[alpha, beta]")
+        _name, _description, keywords = skills_index.parse_skill_md(
+            os.path.join(skill_dir, "SKILL.md"))
+        self.assertEqual(keywords, "alpha, beta")
 
     def test_no_frontmatter_falls_back(self) -> None:
         skill_dir = os.path.join(self._tmp.name, "bare-skill")
         os.makedirs(skill_dir)
         with open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as fh:
             fh.write("# Title\n\nFirst body line.\n")
-        name, description = skills_index.parse_skill_md(
+        name, description, _keywords = skills_index.parse_skill_md(
             os.path.join(skill_dir, "SKILL.md"))
         self.assertEqual(name, "bare-skill")
         self.assertEqual(description, "First body line.")
@@ -193,6 +210,17 @@ class TestSearch(_IndexTestCase):
         matches = index.search("zanzibar")
         self.assertEqual([m.name for m in matches], ["alpha"])
 
+    def test_keywords_beat_description(self) -> None:
+        # The production miss: "spider" must find the rigging skill even
+        # though no skill is NAMED spider — keywords carry the synonyms.
+        drop = os.environ["BLENDER_MCP_SKILLS_DIR"]
+        _write_skill(drop, "a", "rigging-things", "Rig creatures and machines.",
+                     keywords="spider, arthropod, robot, legs")
+        _write_skill(drop, "b", "web-design", "Spider webs as wireframes.")
+        index = skills_index.ensure_index(refresh=True)
+        matches = index.search("rig a spider")
+        self.assertEqual(matches[0].name, "rigging-things")
+
 
 class TestMcpToolSurface(_IndexTestCase):
 
@@ -231,6 +259,14 @@ class TestMcpToolSurface(_IndexTestCase):
         result = self._call(self._mcp(), "skills_read",
                             {"name": "locked", "file": "../../etc/passwd"})
         self.assertIn("error", result)
+
+    def test_search_miss_returns_catalog(self) -> None:
+        _write_skill(os.environ["BLENDER_MCP_SKILLS_DIR"], "s", "only-skill", "The only one.")
+        skills_index.ensure_index(refresh=True)
+        result = self._call(self._mcp(), "skills_search", {"query": "xyzzy"})
+        self.assertEqual(result["matches"], [])
+        self.assertEqual([s["name"] for s in result["all_skills"]], ["only-skill"])
+        self.assertIn("note", result)
 
     def test_unknown_skill_suggests(self) -> None:
         _write_skill(os.environ["BLENDER_MCP_SKILLS_DIR"], "s", "rig-doors", "Doors.")

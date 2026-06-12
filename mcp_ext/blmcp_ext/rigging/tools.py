@@ -30,7 +30,7 @@ _SKILLS = (
     "rig_quadruped_rigify",
 )
 
-_VERBS = ("inspect", "diagnose", "run", "verify", "validate")
+_VERBS = ("auto", "inspect", "diagnose", "run", "verify", "validate")
 
 _BOOTSTRAP = (
     "import sys\n"
@@ -52,13 +52,28 @@ def _code_for(verb: str, args: dict) -> dict[str, object] | str:
     skill = args.get("skill")
     params = args.get("params")
 
+    if verb == "auto":
+        if not isinstance(objects, list) or not objects:
+            return _error("auto needs args={'objects': [mesh names], "
+                          "'skill'?, 'params'?, 'contact_tolerance'?}")
+        if skill is not None and skill not in _SKILLS:
+            return _error("unknown skill {!r}; valid: {!r}".format(skill, list(_SKILLS)))
+        return _BOOTSTRAP + (
+            "from blrig.skills import auto_rig as _a\n"
+            "result = _a.auto({objects!r}, skill={skill!r}, params={params!r},\n"
+            "                 contact_tolerance={tol!r})\n"
+        ).format(objects=objects, skill=skill, params=params,
+                 tol=args.get("contact_tolerance"))
+
     if verb == "inspect":
         if not isinstance(objects, list) or not objects:
             return _error("inspect needs args={'objects': [mesh names]}")
         return _BOOTSTRAP + (
             "from blrig.skills import inspect_scene as _i\n"
-            "result = _i.inspect({objects!r}, contact_tolerance={tol!r})\n"
-        ).format(objects=objects, tol=args.get("contact_tolerance"))
+            "result = _i.inspect({objects!r}, contact_tolerance={tol!r}, "
+            "detail={detail!r})\n"
+        ).format(objects=objects, tol=args.get("contact_tolerance"),
+                 detail=bool(args.get("detail")))
 
     if verb == "validate":
         armature = args.get("armature")
@@ -109,21 +124,33 @@ def register(mcp: FastMCP) -> None:
     )
     def rig(verb: str, args: dict) -> dict[str, object]:
         """
-        Deterministic rigging for ANY model — creatures, vehicles, robots,
-        props. You pick a verb and a skill; coordinate-level decisions
-        (axes, pivots, weights) are computed from the geometry. One tool,
-        verb-dispatched:
+        Rig ANYTHING — creatures with any number of legs, vehicles,
+        robots, props — WITHOUT writing armature code by hand. The
+        deterministic geometry code inside Blender computes every
+        coordinate (pivots, axes, rolls, weights), rolls back cleanly on
+        failure and pose-tests the result; hand-building armatures via
+        execute_blender_code forfeits all of that. ALWAYS try this tool
+        first for any rigging task.
 
-        - rig("inspect", {objects: [names]}) — READ-ONLY first step:
-          health, parts, symmetry, contacts, disconnected groups with
-          their gaps, and `suggested` skills WITH ready-to-use params.
-        - rig("diagnose", {skill, objects, params?}) — dry-run check;
-          returns the plan, or a failure code + `suggest` (act on it).
-        - rig("run", {skill, objects, params?}) — build the rig (armature,
-          constraints, skinning); rolls back cleanly on failure.
-        - rig("verify", {skill, armature, objects?}) — REQUIRED before
-          reporting success: pose-tests the rig through the depsgraph.
-        - rig("validate", {armature}) — rig-standard report for any
+        FAST PATH — usually the only call you need:
+        - rig("auto", {objects: [names]}) — inspects the parts, picks the
+          skill, diagnoses, builds AND verifies in one shot; returns a
+          staged transcript. Optional args: skill (override its routing),
+          params, contact_tolerance.
+
+        Step-by-step verbs (when auto fails, or for fine control):
+        - rig("inspect", {objects}) — read-only COMPACT summary: ranked
+          `suggested` skills with ready-to-use params, a `next` call to
+          make, one line of health/size per object. Pass detail:true only
+          if you need raw OBBs and contact points.
+        - rig("diagnose", {skill, objects, params?}) — dry-run; returns
+          the plan, or a failure code + `suggest` (act on it).
+        - rig("run", {...same...}) — build the rig (armature, constraints,
+          skinning); rolls back cleanly on failure.
+        - rig("verify", {skill, armature, objects?}) — pose-tests through
+          the depsgraph; REQUIRED before reporting success (auto already
+          includes it).
+        - rig("validate", {armature}) — rig-standard report for ANY
           armature, including imported/hand-built ones.
 
         Skills: rig_chain (ORDERED parts -> ball/hinge joint chain;
@@ -133,8 +160,7 @@ def register(mcp: FastMCP) -> None:
         `bridge_gaps`), rig_hinge, rig_piston, rig_wheel, rig_turret,
         rig_biped_rigify, rig_quadruped_rigify.
 
-        Typical flow: inspect -> follow `suggested` -> diagnose -> run ->
-        verify. Param/failure-code reference: skills_read("rigging-overview").
+        Param/failure-code reference: skills_read("rigging-overview").
         """
         code = _code_for(str(verb), args if isinstance(args, dict) else {})
         if isinstance(code, dict):

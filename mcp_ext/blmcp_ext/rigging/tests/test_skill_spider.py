@@ -209,6 +209,76 @@ class TestInspectRouting(BlenderTestCase):
             c for c in report["structure"]["components"] if not c["is_main"])
         self.assertLess(component["nearest"]["gap"], 0.1)
 
+    def test_compact_by_default(self) -> None:
+        """
+        Production feedback (2026-06-12): a 40-part inspect buried the
+        routing under per-object OBB dumps and the agent bailed to raw
+        bpy. Suggestions lead; objects are one line each.
+        """
+        from blrig.skills import inspect_scene
+
+        manifest = corpus.build("cartoon_spider")
+        report = inspect_scene.inspect(manifest["objects"])
+        self.assertEqual(list(report)[:2], ["suggested", "next"])
+        self.assertIn("rig_rigid_assembly", report["next"])
+        summary = report["objects"]["SpiderBody"]
+        self.assertEqual(set(summary),
+                         {"health", "size", "n_loose_parts", "symmetric"})
+        self.assertNotIn("contact_graph", report)
+        self.assertGreater(report["contacts"]["n_edges"], 0)
+
+    def test_detail_restores_full_perception(self) -> None:
+        from blrig.skills import inspect_scene
+
+        manifest = corpus.build("cartoon_spider")
+        report = inspect_scene.inspect(manifest["objects"], detail=True)
+        self.assertIn("axes", report["objects"]["SpiderBody"]["obb"])
+        self.assertTrue(report["contact_graph"]["edges"])
+
+
+class TestAuto(BlenderTestCase):
+
+    def test_spider_in_one_call(self) -> None:
+        from blrig.skills import auto_rig
+
+        manifest = corpus.build("cartoon_spider")
+        result = auto_rig.auto(manifest["objects"])
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["skill"], "rig_rigid_assembly")
+        self.assertIn(result["armature"], bpy.data.objects)
+        self.assertEqual([s["stage"] for s in result["stages"]],
+                         ["inspect", "diagnose", "run", "verify"])
+        # bridge_gaps was inherited from the inspect suggestion.
+        self.assertIn("bridge_gaps", result["stages"][0]["params"])
+
+    def test_door_in_one_call(self) -> None:
+        from blrig.skills import auto_rig
+
+        manifest = corpus.build("door_and_frame")
+        result = auto_rig.auto(manifest["objects"])
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["skill"], "rig_hinge")
+
+    def test_skill_override_keeps_suggested_defaults(self) -> None:
+        from blrig.skills import auto_rig
+
+        corpus.build("cartoon_spider")
+        result = auto_rig.auto(
+            _LEG0, skill="rig_chain",
+            params={"joint_types": ["ball", "hinge"]})
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["skill"], "rig_chain")
+        self.assertEqual(result["stages"][0]["reason"], "caller override")
+
+    def test_missing_object_fails_fast(self) -> None:
+        from blrig.skills import auto_rig
+
+        corpus.build("cartoon_spider")
+        result = auto_rig.auto(["Nonexistent"])
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["fail"], "object_not_found")
+        self.assertEqual(result["missing"], ["Nonexistent"])
+
 
 class TestWeightHole(BlenderTestCase):
 
