@@ -21,6 +21,7 @@ class Store extends EventTarget {
       media: [],         // media items for the open session
       streaming: "",     // assistant text being streamed right now
       drafting: null,    // {name, chars} while the model writes a long tool call
+      quiet: 0,          // seconds of LLM-stream silence (backend buffering)
       busy: false,       // a turn is running
       toolCalls: {},     // call_id -> {name, arguments, state, summary, media_ids}
       toolOrder: [],     // call ids in arrival order (current turn)
@@ -130,10 +131,15 @@ class Store extends EventTarget {
         }
         break;
       case "tool_drafting":
-        if (forThisSession) this._set({ drafting: { name: msg.name, chars: msg.chars, n_calls: msg.n_calls }, busy: true });
+        if (forThisSession) this._set({ drafting: { name: msg.name, chars: msg.chars, n_calls: msg.n_calls }, quiet: 0, busy: true });
+        break;
+      case "llm_quiet":
+        // The stream is alive but the backend is buffering (e.g. vLLM
+        // parsing a long tool call) — nothing else will repaint.
+        if (forThisSession) this._set({ quiet: msg.seconds, busy: true });
         break;
       case "token":
-        if (forThisSession) this._set({ streaming: this.state.streaming + msg.text, busy: true, drafting: null });
+        if (forThisSession) this._set({ streaming: this.state.streaming + msg.text, busy: true, drafting: null, quiet: 0 });
         break;
       case "assistant_done":
         if (forThisSession) {
@@ -142,7 +148,7 @@ class Store extends EventTarget {
             content: msg.content,
             tool_calls: msg.tool_calls || [],
           });
-          this._set({ records: this.state.records, streaming: "", drafting: null });
+          this._set({ records: this.state.records, streaming: "", drafting: null, quiet: 0 });
         }
         break;
       case "tool_status": {
@@ -173,7 +179,7 @@ class Store extends EventTarget {
       }
       case "turn_done":
         if (forThisSession) {
-          this._set({ busy: false, streaming: "", drafting: null });
+          this._set({ busy: false, streaming: "", drafting: null, quiet: 0 });
           this.send({ type: "list_sessions" });
           this._refreshMedia();
         }
@@ -217,7 +223,7 @@ class Store extends EventTarget {
   // Actions.
 
   chat(content, attachments = []) {
-    this._set({ streaming: "", drafting: null, toolCalls: {}, toolOrder: [], error: "" });
+    this._set({ streaming: "", drafting: null, quiet: 0, toolCalls: {}, toolOrder: [], error: "" });
     this.send({ type: "chat", session_id: this.state.sessionId, content, attachments });
   }
 

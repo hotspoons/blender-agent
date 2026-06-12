@@ -413,6 +413,65 @@ class TestAgentTurn(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
+class TestTurnBudgetExhaustion(unittest.TestCase):
+    """
+    Production bug (2026-06-12): when the round budget ran out, the
+    assistant record kept its tool calls but they were never executed
+    NOR recorded — a silent "dead" tool call in the UI and a dangling
+    call in the LLM transcript. They must be recorded as skipped, with
+    a visible error-state tool_status.
+    """
+
+    def test_unrun_calls_get_skipped_records(self) -> None:
+        _import_blagent()
+        from blagent.engine import AgentEngine
+        from blagent.llm import LlmChunk, LlmClient
+        from blagent.tools import ToolRegistry
+
+        events: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            events.append(event)
+
+        engine = AgentEngine(
+            registry=ToolRegistry([]),
+            media=None,
+            system_prompt="",
+            emit=emit,
+            append_record=lambda record: None,
+        )
+
+        class EndlessCaller(LlmClient):
+            def __init__(self) -> None:
+                self.round = 0
+
+            async def stream(self, request: dict[str, Any]) -> Any:
+                self.round += 1
+                yield LlmChunk(content="round {:d}".format(self.round))
+                yield LlmChunk(tool_calls=[{
+                    "index": 0, "id": "call_{:d}".format(self.round),
+                    "function": {"name": "some_tool", "arguments": "{}"},
+                }])
+
+        asyncio.new_event_loop().run_until_complete(engine.run_turn(
+            "s1", "go", EndlessCaller(), "m", autonomy="auto", max_rounds=1))
+
+        # The final round's call is recorded as skipped, not lost.
+        tool_records = [r for r in engine.records if r.get("role") == "tool"]
+        last = tool_records[-1]
+        parsed = json.loads(str(last["content"]))
+        self.assertEqual(parsed["status"], "skipped")
+        self.assertIn("round budget", parsed["message"])
+
+        # And it surfaced visibly: an error-state tool_status plus the
+        # turn-level error, before turn_done.
+        statuses = [e for e in events if e["type"] == "tool_status" and e["state"] == "error"]
+        self.assertTrue(any("round budget" in str(e.get("summary", "")) for e in statuses))
+        self.assertTrue(any(e["type"] == "error" for e in events))
+        self.assertEqual(events[-1]["type"], "turn_done")
+
+
+@unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
 class TestContextBudget(unittest.TestCase):
     """
     The context_tokens budget trims old tool results first, then whole
@@ -620,8 +679,13 @@ class TestCompaction(unittest.TestCase):
         summary = engine.records[-1]
         self.assertEqual(summary["role"], "summary")
         self.assertGreater(summary["covers_count"], 0)
-        # The summarizer saw the old history.
-        self.assertIn("msg 0", json.dumps(llm.requests[0]["messages"]))
+        # The summarizer saw the old history, and the briefing request
+        # asks for the scaled word budget (floor at small contexts) and
+        # the technical-lessons section.
+        prompt = json.dumps(llm.requests[0]["messages"])
+        self.assertIn("msg 0", prompt)
+        self.assertIn("at most 400 words", prompt)
+        self.assertIn("Technical lessons", prompt)
         # Projection: summary present, covered content absent, tail intact.
         messages = engine._llm_messages()  # pylint: disable=protected-access
         joined = json.dumps(messages)
@@ -630,6 +694,36 @@ class TestCompaction(unittest.TestCase):
         self.assertIn("reply 9", joined)
         # Below threshold afterwards: no second compaction.
         self.assertFalse(asyncio.run(engine.maybe_compact(llm, "m", 8_192)))
+
+    def test_summary_budget_scales_with_context(self) -> None:
+        """
+        Production feedback (2026-06-12): a fixed 400-word summary is
+        far too brief for a large-context session — the word target
+        scales with the budget (capped at 2500).
+        """
+        from blagent.llm import LlmChunk, LlmClient
+
+        class Summarizer(LlmClient):
+            def __init__(self) -> None:
+                self.requests: list[dict[str, Any]] = []
+
+            async def stream(self, request: dict[str, Any]) -> Any:
+                self.requests.append(request)
+                yield LlmChunk(content="SUMMARY.")
+
+        engine = self._engine()
+        for index in range(24):
+            engine.records.append(
+                {"role": "user", "content": "msg {:d} ".format(index) + "x" * 25_000})
+            engine.records.append(
+                {"role": "assistant", "content": "reply {:d} ".format(index) + "y" * 25_000})
+
+        llm = Summarizer()
+        self.assertTrue(asyncio.run(engine.maybe_compact(llm, "m", 150_000)))
+        prompt = str(llm.requests[0]["messages"][1]["content"])
+        self.assertIn("at most 2500 words", prompt)
+        # The history shown to the summarizer also scales past the floor.
+        self.assertGreater(len(prompt), 100_000)
 
     def test_no_compaction_under_threshold(self) -> None:
         from blagent.llm import LlmClient

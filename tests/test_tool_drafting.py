@@ -79,6 +79,49 @@ class TestToolDrafting(unittest.TestCase):
         self.assertEqual(chars, sorted(chars))
         self.assertGreater(chars[-1], 0)
 
+    def test_quiet_watchdog_reports_silent_stream(self) -> None:
+        """
+        Production gap (2026-06-12): vLLM's tool-call parsers buffer the
+        whole call server-side, so NO deltas arrive while the model
+        writes — drafting can't fire. The watchdog must report the
+        silence itself.
+        """
+        from blagent.engine import AgentEngine
+        from blagent.llm import LlmChunk, LlmClient
+        from blagent.tools import ToolRegistry
+
+        events = []
+
+        async def emit(event):
+            events.append(event)
+
+        engine = AgentEngine(
+            registry=ToolRegistry([]),
+            media=None,
+            system_prompt="",
+            emit=emit,
+            append_record=lambda record: None,
+        )
+
+        class BufferingBackend(LlmClient):
+            async def stream(self, request):
+                yield LlmChunk(content="Thinking. ")
+                await asyncio.sleep(3.5)  # server-side buffering: dead air
+                yield LlmChunk(tool_calls=[{
+                    "index": 0, "id": "call_1",
+                    "function": {"name": "execute_blender_code",
+                                 "arguments": json.dumps({"code": "pass"})},
+                }])
+
+        content, calls = asyncio.new_event_loop().run_until_complete(
+            engine._stream_round("s1", {"messages": []}, BufferingBackend()))
+
+        self.assertEqual(content, "Thinking. ")
+        self.assertEqual(len(calls), 1)
+        quiet = [e for e in events if e["type"] == "llm_quiet"]
+        self.assertGreaterEqual(len(quiet), 1, events)
+        self.assertGreaterEqual(quiet[-1]["seconds"], 2.0)
+
 
 if __name__ == "__main__":
     unittest.main()

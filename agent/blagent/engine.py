@@ -62,8 +62,20 @@ _MAX_CONTEXT_IMAGES = 3
 # share of the context budget; the kept tail targets the keep share.
 _COMPACT_TRIGGER_RATIO = 0.7
 _COMPACT_KEEP_RATIO = 0.35
-# Cap on the history text handed to the summarizer request.
+# Floor on the history text handed to the summarizer request (the
+# actual cap scales with the context budget — see ``maybe_compact``).
 _COMPACT_INPUT_CHAR_LIMIT = 60_000
+# Summary length scales with the context budget between these bounds: a
+# briefing replacing ~half of a 128k context deserves far more than a
+# fixed 400 words, or it silently drops names/values the agent needs.
+_COMPACT_WORDS_MIN = 400
+_COMPACT_WORDS_MAX = 2500
+
+# The LLM-silence watchdog: some streaming backends (vLLM tool-call
+# parsers, reasoning passthroughs) buffer server-side and emit nothing
+# for long stretches; report the silence so the UI can show life.
+_QUIET_AFTER_SECONDS = 2.0
+_QUIET_EMIT_INTERVAL = 1.0
 
 _TRIM_NOTICE = "[Note: earlier conversation was trimmed to fit the context window.]"
 
@@ -94,12 +106,18 @@ _SUMMARY_SYSTEM_PROMPT = (
 )
 
 _SUMMARY_USER_PROMPT = (
-    "Summarize this conversation history in at most 400 words, structured as:\n"
+    "Summarize this conversation history in at most {words:d} words, structured as:\n"
     "## Scene state (what exists in the .blend NOW)\n"
     "## Decisions & user preferences\n"
     "## Completed work\n"
+    "## Technical lessons (APIs that errored and the fix that worked, "
+    "tool parameters that worked)\n"
     "## Open items\n\n"
-    "History:\n{:s}"
+    "Use the word budget — a too-short summary loses state the agent "
+    "needs. Prefer dropping pleasantries over specifics: keep exact "
+    "object/bone/material names, parameter values, file paths, media "
+    "ids and frame numbers that may be referenced later.\n\n"
+    "History:\n{history:s}"
 )
 
 EngineEvents = Callable[[dict[str, Any]], Awaitable[None]]
@@ -398,12 +416,21 @@ class AgentEngine:
         if covers <= previous_covers or covers >= len(self.records):
             return False
 
-        history = self._render_history_for_summary(previous, previous_covers, covers)
+        # Both the summary length and the history shown to the
+        # summarizer scale with the context budget: a 128k-context
+        # session compacted into 400 words loses too much state.
+        target_words = max(_COMPACT_WORDS_MIN,
+                           min(_COMPACT_WORDS_MAX, context_tokens // 50))
+        input_chars = max(_COMPACT_INPUT_CHAR_LIMIT,
+                          min(context_tokens * _CHARS_PER_TOKEN // 2, 400_000))
+        history = self._render_history_for_summary(
+            previous, previous_covers, covers, input_chars)
         request = {
             "model": model,
             "messages": [
                 {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
-                {"role": "user", "content": _SUMMARY_USER_PROMPT.format(history)},
+                {"role": "user", "content": _SUMMARY_USER_PROMPT.format(
+                    words=target_words, history=history)},
             ],
         }
         parts: list[str] = []
@@ -422,6 +449,7 @@ class AgentEngine:
             previous: dict[str, Any] | None,
             previous_covers: int,
             covers: int,
+            char_limit: int = _COMPACT_INPUT_CHAR_LIMIT,
     ) -> str:
         """
         Plain-text rendering of the records a new summary will replace.
@@ -446,8 +474,8 @@ class AgentEngine:
             else:
                 lines.append("USER: {:s}".format(content))
         text = "\n".join(lines)
-        if len(text) > _COMPACT_INPUT_CHAR_LIMIT:
-            text = text[-_COMPACT_INPUT_CHAR_LIMIT:]
+        if len(text) > char_limit:
+            text = text[-char_limit:]
         return text
 
     def _content_with_images(self, text: str, media_ids: list[str]) -> object:
@@ -577,10 +605,30 @@ class AgentEngine:
                 break
             turn_had_tool_calls = True
             if budget.rounds_left <= 0:
+                # The assistant message above already carries these tool
+                # calls — leaving them unanswered would both render as a
+                # silent dead call in the UI and hand the next LLM round
+                # an assistant message with no tool replies. Record each
+                # as not-executed, visibly.
+                message = ("not executed: the turn's round budget ({:d} rounds) "
+                           "was exhausted; send a follow-up to continue".format(budget.rounds_max))
+                for call in tool_calls:
+                    self._push_tool_record(
+                        call["id"], {"status": "skipped", "message": message}, call["name"])
+                    await self._emit({
+                        "type": "tool_status",
+                        "session_id": session_id,
+                        "call_id": call["id"],
+                        "name": call["name"],
+                        "arguments": call["arguments"],
+                        "state": "error",
+                        "summary": message,
+                    })
                 await self._emit({
                     "type": "error",
                     "session_id": session_id,
-                    "message": "Turn round budget exhausted; stopping. Send a follow-up to continue.",
+                    "message": "Turn round budget exhausted; stopping. Send a follow-up "
+                               "(e.g. \"continue\") to let the agent pick up where it stopped.",
                 })
                 break
             budget.rounds_left -= 1
@@ -638,31 +686,46 @@ class AgentEngine:
         # visually frozen. Emit throttled progress so it can show a
         # "writing <tool>..." heartbeat instead.
         drafting_last = 0.0
+        # And when the backend sends NOTHING at all (vLLM's tool-call
+        # parsers buffer the whole call server-side and flush the deltas
+        # in one burst at the end), even drafting can't fire — a
+        # watchdog measures the dead air itself.
+        last_chunk_at = [_now()]
+        watchdog = asyncio.create_task(
+            self._quiet_watchdog(session_id, last_chunk_at))
 
-        async for chunk in llm.stream(request):
-            if chunk.content:
-                content_parts.append(chunk.content)
-                await self._emit({"type": "token", "session_id": session_id, "text": chunk.content})
-            for delta in chunk.tool_calls:
-                index = int(delta.get("index", 0))
-                slot = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
-                if delta.get("id"):
-                    slot["id"] = delta["id"]
-                function = delta.get("function") or {}
-                if function.get("name"):
-                    slot["name"] += function["name"]
-                if function.get("arguments"):
-                    slot["arguments"] += function["arguments"]
-            if chunk.tool_calls and _now() - drafting_last > 0.25:
-                drafting_last = _now()
-                active = calls[max(calls)] if calls else {}
-                await self._emit({
-                    "type": "tool_drafting",
-                    "session_id": session_id,
-                    "name": active.get("name", ""),
-                    "chars": sum(len(c["arguments"]) for c in calls.values()),
-                    "n_calls": len(calls),
-                })
+        try:
+            async for chunk in llm.stream(request):
+                last_chunk_at[0] = _now()
+                if chunk.content:
+                    content_parts.append(chunk.content)
+                    await self._emit({"type": "token", "session_id": session_id, "text": chunk.content})
+                for delta in chunk.tool_calls:
+                    index = int(delta.get("index", 0))
+                    slot = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                    if delta.get("id"):
+                        slot["id"] = delta["id"]
+                    function = delta.get("function") or {}
+                    if function.get("name"):
+                        slot["name"] += function["name"]
+                    if function.get("arguments"):
+                        slot["arguments"] += function["arguments"]
+                if chunk.tool_calls and _now() - drafting_last > 0.25:
+                    drafting_last = _now()
+                    active = calls[max(calls)] if calls else {}
+                    await self._emit({
+                        "type": "tool_drafting",
+                        "session_id": session_id,
+                        "name": active.get("name", ""),
+                        "chars": sum(len(c["arguments"]) for c in calls.values()),
+                        "n_calls": len(calls),
+                    })
+        finally:
+            watchdog.cancel()
+            try:
+                await watchdog
+            except asyncio.CancelledError:
+                pass
 
         tool_calls = []
         for index in sorted(calls):
@@ -672,6 +735,23 @@ class AgentEngine:
             if slot["name"]:
                 tool_calls.append(slot)
         return "".join(content_parts), tool_calls
+
+    async def _quiet_watchdog(self, session_id: str, last_chunk_at: list[float]) -> None:
+        """
+        Emit ``llm_quiet`` once per second while the LLM stream has been
+        silent past the threshold — the generation is running but the
+        backend is buffering (tool-call parsing, server-side reasoning).
+        Cancelled by ``_stream_round`` when the stream ends.
+        """
+        while True:
+            await asyncio.sleep(_QUIET_EMIT_INTERVAL)
+            quiet = _now() - last_chunk_at[0]
+            if quiet >= _QUIET_AFTER_SECONDS:
+                await self._emit({
+                    "type": "llm_quiet",
+                    "session_id": session_id,
+                    "seconds": round(quiet, 1),
+                })
 
     async def _dispatch_tool(
             self,
