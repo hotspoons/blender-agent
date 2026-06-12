@@ -31,7 +31,7 @@ import time
 import traceback
 from collections.abc import Callable
 
-from .mcp_to_blender_server import _encode_response
+from .mcp_to_blender_server import send_response
 
 # Total wall-time in seconds allowed for a background task (e.g. rendering) to complete.
 # When exceeded, an error response is sent and the connection is closed.
@@ -77,9 +77,12 @@ _deferred_clients: list[_DeferredClient] = []
 
 def _send_and_close(dc: _DeferredClient, response: dict[str, object]) -> None:
     try:
-        dc.conn.sendall(_encode_response(response))
-    except OSError:
-        pass
+        # Blocking flush with timeout: deferred payloads (screenshots,
+        # renders) are exactly the ones large enough to truncate on a
+        # non-blocking partial write. See `send_response`.
+        send_response(dc.conn, response)
+    except OSError as ex:
+        print("blender_mcp: failed to send deferred response: {!s}".format(ex))
     try:
         dc.conn.close()
     except OSError:

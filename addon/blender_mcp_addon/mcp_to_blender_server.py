@@ -130,6 +130,8 @@ _LISTEN_BACKLOG = 5
 _RECV_BUFFER_SIZE = 4096
 # Seconds before a client that has not sent a complete request is closed.
 _CLIENT_TIMEOUT = 10.0
+# Seconds allowed to flush a response to a client (see `send_response`).
+_SEND_TIMEOUT = 30.0
 # How often `poll_blocking` checks for shutdown.
 _POLL_BLOCKING_TIMEOUT = 1.0
 _DEFERRED_UNSUPPORTED_MESSAGE = (
@@ -204,6 +206,25 @@ def _encode_response(response: dict[str, object]) -> bytes:
     Serialize a response dict as null-byte-delimited JSON bytes.
     """
     return (json.dumps(response) + "\0").encode("utf-8")
+
+
+def send_response(conn: socket.socket, response: dict[str, object]) -> None:
+    """
+    Flush a complete response to *conn*, then leave it for the caller to
+    close.
+
+    The interactive server keeps client sockets NON-blocking for request
+    reads — but ``sendall`` on a non-blocking socket raises
+    ``BlockingIOError`` after a PARTIAL write once the payload exceeds
+    the kernel send buffer (~64-128 KiB). Swallowing that and closing
+    used to truncate every large response (screenshots, renders) into an
+    "Invalid response ... Unterminated string" client error. The final
+    flush is a one-shot operation, so switch to blocking with a bounded
+    timeout — same behavior the background-mode handler always had.
+    """
+    conn.setblocking(True)
+    conn.settimeout(_SEND_TIMEOUT)
+    conn.sendall(_encode_response(response))
 
 
 def _execute_code(
@@ -386,9 +407,9 @@ def _service_clients() -> bool:
                     "status": "error",
                     "message": "Client timed out",
                 }
-                client.conn.sendall(_encode_response(err))
-            except OSError:
-                pass
+                send_response(client.conn, err)
+            except OSError as ex:
+                print("blender_mcp: failed to send timeout response: {!s}".format(ex))
             _close_client(client)
             continue
 
@@ -415,9 +436,9 @@ def _service_clients() -> bool:
                     "status": "error",
                     "message": "Request exceeds {:d} byte limit".format(_MAX_REQUEST_BYTES),
                 }
-                client.conn.sendall(_encode_response(err))
-            except OSError:
-                pass
+                send_response(client.conn, err)
+            except OSError as ex:
+                print("blender_mcp: failed to send overflow response: {!s}".format(ex))
             _close_client(client)
             continue
 
@@ -450,9 +471,9 @@ def _service_clients() -> bool:
                 pass
         else:
             try:
-                client.conn.sendall(_encode_response(exec_result.response))
-            except OSError:
-                pass
+                send_response(client.conn, exec_result.response)
+            except OSError as ex:
+                print("blender_mcp: failed to send response: {!s}".format(ex))
             _close_client(client)
         did_work = True
 
