@@ -85,10 +85,11 @@ WORKDIR /app
 # source (built into an extension below). Tests, ext/, chat_client are omitted.
 COPY mcp/ /app/mcp/
 COPY agent/ /app/agent/
+COPY mcp_ext/ /app/mcp_ext/
 COPY addon/ /app/addon/
 
 RUN python -m pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir ./mcp ./agent \
+    && pip install --no-cache-dir ./mcp ./agent ./mcp_ext \
     && chown -R ${APP_USER}:${APP_USER} /app
 
 # Build and install the blender-mcp extension into the runtime user's
@@ -96,7 +97,11 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
 # enabled in user prefs, a later `blender --background --command blender_mcp`
 # (which the agent spawns) loads it without --factory-startup.
 USER ${APP_USER}
-RUN blender --command extension build \
+# NOTE: `extension build` does NOT create --output-dir (it writes the
+# archive as a dotfile inside it first, failing with a confusing
+# ".mcp-*.zip: No such file or directory" when the dir is missing).
+RUN mkdir -p /tmp/ext \
+    && blender --command extension build \
         --source-dir=/app/addon/blender_mcp_addon \
         --output-dir=/tmp/ext \
     && blender --online-mode --background --factory-startup \

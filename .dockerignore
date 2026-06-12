@@ -17,7 +17,14 @@ chat_client/
 tests/
 _misc/
 rigging/
-mcp_ext/
+
+# mcp_ext ships (the rig/media_io tools ARE the agent's value-add), but
+# its dev fixtures stay out of the context.
+mcp_ext/blmcp_ext/rigging/tests/
+mcp_ext/blmcp_ext/rigging/corpus/
+mcp_ext/blmcp_ext/rigging/evals/
+mcp_ext/blmcp_ext/rigging/logs/
+mcp_ext/blmcp_ext/media/tests/
 
 # Devcontainer: keep only the two files the Dockerfile copies.
 .devcontainer/*
