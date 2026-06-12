@@ -138,6 +138,20 @@ class Store extends EventTarget {
         // parsing a long tool call) — nothing else will repaint.
         if (forThisSession) this._set({ quiet: msg.seconds, busy: true });
         break;
+      case "orchestrator_review":
+        // Budget checkpoint: the reviewer's verdict becomes a record so
+        // it persists in the conversation like compaction summaries do.
+        if (forThisSession) {
+          this.state.records.push({
+            role: "review",
+            content: msg.summary,
+            verdict: msg.verdict,
+            granted_rounds: msg.granted_rounds,
+            detail: msg.detail,
+          });
+          this._set({ records: this.state.records });
+        }
+        break;
       case "token":
         if (forThisSession) this._set({ streaming: this.state.streaming + msg.text, busy: true, drafting: null, quiet: 0 });
         break;

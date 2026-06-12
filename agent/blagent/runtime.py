@@ -211,6 +211,7 @@ class AgentRuntime:
                     max_rounds=config.max_rounds,
                     media_ids=media_ids,
                     context_tokens=config.context_tokens,
+                    budget_review=config.budget_review,
                 )
                 # Between-turns compaction: one bounded request that
                 # summarizes the older history when the projection has
@@ -293,6 +294,8 @@ class AgentRuntime:
             config.use_local_llm = bool(updates["use_local_llm"])
         if "max_rounds" in updates:
             config.max_rounds = max(1, int(updates["max_rounds"]))
+        if "budget_review" in updates:
+            config.budget_review = bool(updates["budget_review"])
         if "context_tokens" in updates:
             config.context_tokens = max(2_048, int(updates["context_tokens"]))
         self.store.save_config()

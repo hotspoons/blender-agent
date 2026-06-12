@@ -387,6 +387,43 @@ export class BaChatStage extends LitElement {
     }
     .compacted-body :first-child { margin-top: 0; }
     .compacted-body :last-child { margin-bottom: 0; }
+    .review-card {
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      padding: 8px 12px 10px;
+    }
+    .review-card.stopped { border-left-color: var(--danger); }
+    .review-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      user-select: none;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+    }
+    .review-verdict {
+      margin-left: auto;
+      font-weight: 600;
+      text-transform: none;
+      letter-spacing: 0;
+      color: var(--accent);
+    }
+    .review-card.stopped .review-verdict { color: var(--danger); }
+    .review-summary {
+      margin-top: 6px;
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--text);
+      overflow-wrap: anywhere;
+    }
+    .review-summary :first-child { margin-top: 0; }
+    .review-summary :last-child { margin-bottom: 0; }
+    .review-card ba-json-view { display: block; margin-top: 8px; }
   `;
 
   _toggleSet(setName, id) {
@@ -560,6 +597,31 @@ export class BaChatStage extends LitElement {
         </div>
         ${open ? html`
           <div class="compacted-body">${unsafeHtml(renderMarkdown(r.content || ""))}</div>` : nothing}`;
+    }
+    if (r.role === "review") {
+      // Budget checkpoint: the orchestrator's verdict on the worker's
+      // self-report. Summary up front; the full review (self-report,
+      // assessment, evidence checks) expands below — ba-json-view's
+      // fullscreen control doubles as the modal view.
+      const open = this._expanded.has(`review-${recordIndex}`);
+      const granted = r.granted_rounds > 0;
+      return html`
+        <div class="review-card ${granted ? "granted" : "stopped"}">
+          <div class="review-head" @click=${() => this._toggleSet("_expanded", `review-${recordIndex}`)}>
+            ${icon(open ? "chevron-down" : "chevron-right")}
+            <span class="review-title">budget review</span>
+            <span class="review-verdict">${granted
+              ? `granted ${r.granted_rounds} more rounds`
+              : "stopped — needs your input"}</span>
+          </div>
+          <div class="review-summary">${unsafeHtml(renderMarkdown(r.content || ""))}</div>
+          ${open ? html`
+            <ba-json-view .data=${{
+              verdict: r.verdict,
+              granted_rounds: r.granted_rounds,
+              ...(r.detail || {}),
+            }} label="review"></ba-json-view>` : nothing}
+        </div>`;
     }
     if (r.role === "user") {
       return html`<div class="msg user"><span class="txt">${r.content}</span>${r.media_ids?.length ? html`

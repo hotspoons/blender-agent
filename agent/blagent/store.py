@@ -137,6 +137,9 @@ class AgentConfig:
     # Use the in-browser (Transformers.js) model when no endpoint is configured.
     use_local_llm: bool = True
     max_rounds: int = 16
+    # At round-budget exhaustion, a context-blind reviewer judges the
+    # worker's self-report and may replenish rounds (engine._budget_review).
+    budget_review: bool = True
     # Context budget (tokens) for the conversation sent to the model;
     # the engine trims old exchanges to fit. Matters doubly for local
     # models: ORT-web decode slows with sequence length, so a tight
@@ -179,6 +182,7 @@ class AgentConfig:
             "autonomy": self.autonomy,
             "use_local_llm": self.use_local_llm,
             "max_rounds": self.max_rounds,
+            "budget_review": self.budget_review,
             "context_tokens": self.context_tokens,
         }
 

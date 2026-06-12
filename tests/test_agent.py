@@ -454,7 +454,8 @@ class TestTurnBudgetExhaustion(unittest.TestCase):
                 }])
 
         asyncio.new_event_loop().run_until_complete(engine.run_turn(
-            "s1", "go", EndlessCaller(), "m", autonomy="auto", max_rounds=1))
+            "s1", "go", EndlessCaller(), "m", autonomy="auto", max_rounds=1,
+            budget_review=False))
 
         # The final round's call is recorded as skipped, not lost.
         tool_records = [r for r in engine.records if r.get("role") == "tool"]
@@ -468,6 +469,112 @@ class TestTurnBudgetExhaustion(unittest.TestCase):
         statuses = [e for e in events if e["type"] == "tool_status" and e["state"] == "error"]
         self.assertTrue(any("round budget" in str(e.get("summary", "")) for e in statuses))
         self.assertTrue(any(e["type"] == "error" for e in events))
+        self.assertEqual(events[-1]["type"], "turn_done")
+
+
+@unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
+class TestBudgetReview(unittest.TestCase):
+    """
+    The orchestrator checkpoint: at budget exhaustion the worker
+    self-reports out of band, a context-blind reviewer judges it via
+    its two tools, and the verdict either replenishes rounds (the
+    pending calls then RUN) or stops the turn.
+    """
+
+    def _engine(self, events: list[dict[str, Any]]) -> Any:
+        _import_blagent()
+        from blagent.engine import AgentEngine
+        from blagent.tools import ToolRegistry
+
+        async def emit(event: dict[str, Any]) -> None:
+            events.append(event)
+
+        return AgentEngine(
+            registry=ToolRegistry([]),
+            media=None,
+            system_prompt="",
+            emit=emit,
+            append_record=lambda record: None,
+        )
+
+    def _llm(self, verdict_json: str) -> Any:
+        from blagent.llm import LlmChunk, LlmClient
+
+        class Orchestrated(LlmClient):
+            """Dispatches by request shape: reviewer / self-report / worker."""
+
+            def __init__(self) -> None:
+                self.worker_rounds = 0
+                self.reviewer_called = False
+
+            async def stream(self, request: dict[str, Any]) -> Any:
+                messages = request["messages"]
+                system = str(messages[0].get("content", "")) if messages else ""
+                last = str(messages[-1].get("content", "")) if messages else ""
+                if "strict but fair reviewer" in system:
+                    self.reviewer_called = True
+                    yield LlmChunk(content=verdict_json)
+                    return
+                if "Budget checkpoint" in last:
+                    yield LlmChunk(content="Objective: rig the cube. Evidence: "
+                                           "DEF-Cube bone exists per tool output. "
+                                           "One more round finishes the IK.")
+                    return
+                self.worker_rounds += 1
+                if self.worker_rounds <= 2:
+                    yield LlmChunk(content="working {:d}. ".format(self.worker_rounds))
+                    yield LlmChunk(tool_calls=[{
+                        "index": 0, "id": "call_{:d}".format(self.worker_rounds),
+                        "function": {"name": "some_tool", "arguments": "{}"},
+                    }])
+                else:
+                    yield LlmChunk(content="All done.")
+
+        return Orchestrated()
+
+    def test_grant_resumes_pending_calls(self) -> None:
+        events: list[dict[str, Any]] = []
+        engine = self._engine(events)
+        llm = self._llm('{"verdict": "continue", "grant_rounds": 2, '
+                        '"summary": "Evidence is concrete; one round remains."}')
+        asyncio.new_event_loop().run_until_complete(engine.run_turn(
+            "s1", "rig the cube", llm, "m", autonomy="auto", max_rounds=1))
+
+        self.assertTrue(llm.reviewer_called)
+        review = next(r for r in engine.records if r.get("role") == "review")
+        self.assertEqual(review["verdict"], "continue")
+        # The requested 2 rounds clamp to max_grant (= max_rounds = 1).
+        self.assertEqual(review["granted_rounds"], 1)
+        self.assertIn("self_report", review["detail"])
+        # The pending call RAN after the grant (unknown-tool error, not
+        # budget-skipped) and the turn closed normally.
+        tool_contents = [json.loads(str(r["content"]))
+                         for r in engine.records if r.get("role") == "tool"]
+        self.assertFalse(any(c.get("status") == "skipped" for c in tool_contents))
+        # The worker was told about the grant.
+        notes = [r for r in engine.records
+                 if r.get("synthetic") and "Budget review" in str(r.get("content"))]
+        self.assertEqual(len(notes), 1)
+        self.assertTrue(any(e["type"] == "orchestrator_review" for e in events))
+        self.assertEqual(events[-1]["type"], "turn_done")
+
+    def test_stop_keeps_skip_records_and_self_report(self) -> None:
+        events: list[dict[str, Any]] = []
+        engine = self._engine(events)
+        llm = self._llm('{"verdict": "stop", "grant_rounds": 0, '
+                        '"summary": "No evidence of progress; stopping."}')
+        asyncio.new_event_loop().run_until_complete(engine.run_turn(
+            "s1", "rig the cube", llm, "m", autonomy="auto", max_rounds=1))
+
+        review = next(r for r in engine.records if r.get("role") == "review")
+        self.assertEqual(review["granted_rounds"], 0)
+        # Pending call recorded as skipped; the worker's self-report
+        # closes the turn as a normal assistant message.
+        tool_contents = [json.loads(str(r["content"]))
+                         for r in engine.records if r.get("role") == "tool"]
+        self.assertTrue(any(c.get("status") == "skipped" for c in tool_contents))
+        self.assertIn("DEF-Cube", str(engine.records[-1].get("content")))
+        self.assertEqual(engine.records[-1].get("role"), "assistant")
         self.assertEqual(events[-1]["type"], "turn_done")
 
 

@@ -77,6 +77,26 @@ _COMPACT_WORDS_MAX = 2500
 _QUIET_AFTER_SECONDS = 2.0
 _QUIET_EMIT_INTERVAL = 1.0
 
+# Budget reviews per turn: the orchestrator can replenish at most this
+# many times — the backstop against a reviewer too generous to a
+# worker stuck in a loop.
+_MAX_BUDGET_REVIEWS = 2
+
+_SELF_REPORT_PROMPT = (
+    "(Budget checkpoint - your tool-round budget is exhausted; your "
+    "pending tool calls have NOT run. Before more rounds can be granted, "
+    "report to the reviewer:\n"
+    "1. OBJECTIVES: what the user asked for in this conversation, as "
+    "they stated it.\n"
+    "2. EVIDENCE: for each objective, whether it is met or NOT met - "
+    "plainly, citing concrete names/numbers from tool results you "
+    "actually received. Do not embellish; unmet is a valid answer.\n"
+    "3. VERDICT REQUEST: whether another block of tool rounds would let "
+    "you finish (state exactly what remains), or whether you should "
+    "stop here.\n"
+    "Plain text only - no tool calls.)"
+)
+
 _TRIM_NOTICE = "[Note: earlier conversation was trimmed to fit the context window.]"
 
 # Model reasoning embedded in assistant content as <think>/<thinking>
@@ -506,6 +526,7 @@ class AgentEngine:
             max_rounds: int,
             media_ids: list[str] | None = None,
             context_tokens: int = 0,
+            budget_review: bool = True,
     ) -> None:
         """
         Run one full turn. Events are emitted through the runtime's
@@ -533,6 +554,7 @@ class AgentEngine:
         # Nudge them to wrap up for the user - a bounded number of times.
         nudges_left = 2
         turn_had_tool_calls = False
+        reviews_done = 0
 
         while True:
             if feedback_media:
@@ -604,34 +626,73 @@ class AgentEngine:
                     continue
                 break
             turn_had_tool_calls = True
+            # A note for the worker that must NOT split the assistant
+            # message from its tool replies — it is pushed after the
+            # dispatch loop below.
+            post_dispatch_note = ""
             if budget.rounds_left <= 0:
-                # The assistant message above already carries these tool
-                # calls — leaving them unanswered would both render as a
-                # silent dead call in the UI and hand the next LLM round
-                # an assistant message with no tool replies. Record each
-                # as not-executed, visibly.
-                message = ("not executed: the turn's round budget ({:d} rounds) "
-                           "was exhausted; send a follow-up to continue".format(budget.rounds_max))
-                for call in tool_calls:
-                    self._push_tool_record(
-                        call["id"], {"status": "skipped", "message": message}, call["name"])
+                # Budget gone with calls still pending. Run the
+                # orchestrator review (worker self-reports, a blind
+                # reviewer judges and may replenish) before giving up.
+                granted, self_report, review_summary = 0, "", ""
+                final_review = False
+                if budget_review and reviews_done < _MAX_BUDGET_REVIEWS:
+                    reviews_done += 1
+                    final_review = reviews_done >= _MAX_BUDGET_REVIEWS
+                    granted, self_report, review_summary = await self._budget_review(
+                        session_id, llm, model, tool_calls,
+                        max_grant=max_rounds, context_tokens=context_tokens)
+                if granted <= 0:
+                    # The assistant message above already carries these
+                    # tool calls — leaving them unanswered would both
+                    # render as a silent dead call in the UI and hand
+                    # the next LLM round an assistant message with no
+                    # tool replies. Record each as not-executed, visibly.
+                    message = ("not executed: the turn's round budget "
+                               "was exhausted; send a follow-up to continue")
+                    for call in tool_calls:
+                        self._push_tool_record(
+                            call["id"], {"status": "skipped", "message": message}, call["name"])
+                        await self._emit({
+                            "type": "tool_status",
+                            "session_id": session_id,
+                            "call_id": call["id"],
+                            "name": call["name"],
+                            "arguments": call["arguments"],
+                            "state": "error",
+                            "summary": message,
+                        })
+                    if self_report:
+                        # The worker's own accounting closes the turn
+                        # (the out-of-band round would otherwise be lost).
+                        self.push_record({"role": "assistant", "content": self_report})
+                        await self._emit({
+                            "type": "assistant_done",
+                            "session_id": session_id,
+                            "content": self_report,
+                            "tool_calls": [],
+                        })
                     await self._emit({
-                        "type": "tool_status",
+                        "type": "error",
                         "session_id": session_id,
-                        "call_id": call["id"],
-                        "name": call["name"],
-                        "arguments": call["arguments"],
-                        "state": "error",
-                        "summary": message,
+                        "message": "Turn round budget exhausted; stopping. Send a follow-up "
+                                   "(e.g. \"continue\") to let the agent pick up where it stopped.",
                     })
-                await self._emit({
-                    "type": "error",
-                    "session_id": session_id,
-                    "message": "Turn round budget exhausted; stopping. Send a follow-up "
-                               "(e.g. \"continue\") to let the agent pick up where it stopped.",
-                })
-                break
+                    break
+                budget.rounds_left = granted
+                post_dispatch_note = (
+                    "(Budget review: the reviewer granted {:d} more tool rounds. "
+                    "Reviewer's note: {:s}{:s})").format(
+                        granted, review_summary,
+                        " This is the FINAL extension - finish or report."
+                        if final_review else "")
             budget.rounds_left -= 1
+            if budget.rounds_left == 1 and not post_dispatch_note:
+                # Forewarn the worker instead of cutting it off cold.
+                post_dispatch_note = (
+                    "(Budget notice: only 1 tool round remains before a budget "
+                    "review. Prioritize what completes the user's request, or "
+                    "prepare to report your progress with concrete evidence.)")
 
             declined = False
             for index, call in enumerate(tool_calls):
@@ -654,6 +715,12 @@ class AgentEngine:
                 feedback_media.extend(media_ids)
                 declined = declined or was_declined
                 del index
+
+            if post_dispatch_note:
+                # Now that every tool reply is recorded, the note can
+                # follow without splitting the call/reply sequence.
+                self.push_record({
+                    "role": "user", "content": post_dispatch_note, "synthetic": True})
 
             if declined:
                 # Pause the whole turn instead of letting the model retry
@@ -735,6 +802,71 @@ class AgentEngine:
             if slot["name"]:
                 tool_calls.append(slot)
         return "".join(content_parts), tool_calls
+
+    async def _budget_review(
+            self,
+            session_id: str,
+            llm: LlmClient,
+            model: str,
+            pending_calls: list[dict[str, Any]],
+            max_grant: int,
+            context_tokens: int,
+    ) -> tuple[int, str, str]:
+        """
+        The orchestrator checkpoint at budget exhaustion. The worker
+        self-reports OUT OF BAND (the request gets placeholder tool
+        replies for the pending calls; nothing enters the transcript),
+        a context-blind reviewer judges it (see ``reviewer.py``), and
+        the verdict is recorded as a ``review`` record + event for the
+        UI. Returns ``(granted_rounds, self_report, summary)`` — the
+        caller owns transcript placement of both texts, because they
+        must not split an assistant message from its tool replies.
+        Fails safe: any error means no grant.
+        """
+        from .reviewer import review_budget
+
+        try:
+            # 1. Elicit the worker's self-report.
+            messages = self._llm_messages(context_tokens)
+            for call in pending_calls:
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "name": call["name"],
+                    "content": "(not executed yet - budget review in progress)",
+                })
+            messages.append({"role": "user", "content": _SELF_REPORT_PROMPT})
+            parts: list[str] = []
+            async for chunk in llm.stream({"model": model, "messages": messages}):
+                if chunk.content:
+                    parts.append(chunk.content)
+            self_report = _strip_thinking("".join(parts))
+
+            # 2. Blind review.
+            result = await review_budget(llm, model, self_report, self.records, max_grant)
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            _log.warning("budget review failed (falling back to stop): %s", ex)
+            return 0, "", ""
+
+        granted = result.grant_rounds if result.verdict == "continue" else 0
+        self.push_record({
+            "role": "review",
+            "content": result.summary,
+            "verdict": result.verdict,
+            "granted_rounds": granted,
+            "detail": result.detail,
+        })
+        await self._emit({
+            "type": "orchestrator_review",
+            "session_id": session_id,
+            "verdict": result.verdict,
+            "granted_rounds": granted,
+            "summary": result.summary,
+            "detail": result.detail,
+        })
+        _log.info("budget review session=%s verdict=%s granted=%d",
+                  session_id, result.verdict, granted)
+        return granted, self_report, result.summary
 
     async def _quiet_watchdog(self, session_id: str, last_chunk_at: list[float]) -> None:
         """
