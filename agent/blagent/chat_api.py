@@ -157,10 +157,14 @@ def client_session_id(body: dict[str, Any], request: Request) -> str:
     return "api-{:s}-{:s}".format(slug, digest)
 
 
-def extract_user_input(messages: list) -> tuple[str, list[tuple[bytes, str]]]:
+def extract_user_input(messages: list) -> tuple[str, list[tuple[bytes, str, str | None]]]:
     """
     The newest user message becomes the turn input: joined text parts
-    plus decoded ``image_url`` data-URL attachments as ``(bytes, mime)``.
+    plus decoded attachments as ``(bytes, mime, filename|None)``.
+    ``image_url`` data URLs carry images; ``file`` parts
+    (``{"type": "file", "file": {"name", "b64"|"data", "mime"?}}``)
+    carry anything else — meshes, audio, documents — destined for the
+    session media folder where the ``media_io`` tool can import them.
     """
     last_user = None
     for message in messages or ():
@@ -174,7 +178,7 @@ def extract_user_input(messages: list) -> tuple[str, list[tuple[bytes, str]]]:
         return content, []
 
     texts: list[str] = []
-    attachments: list[tuple[bytes, str]] = []
+    attachments: list[tuple[bytes, str, str | None]] = []
     for part in content or ():
         if not isinstance(part, dict):
             continue
@@ -191,7 +195,17 @@ def extract_user_input(messages: list) -> tuple[str, list[tuple[bytes, str]]]:
             except (binascii.Error, ValueError):
                 continue
             if len(data) <= _MAX_ATTACHMENT:
-                attachments.append((data, match.group("mime")))
+                attachments.append((data, match.group("mime"), None))
+        elif part.get("type") == "file":
+            spec = part.get("file") or {}
+            b64 = str(spec.get("b64") or spec.get("data") or "")
+            try:
+                data = base64.b64decode(b64, validate=True)
+            except (binascii.Error, ValueError):
+                continue
+            if data and len(data) <= _MAX_ATTACHMENT:
+                name = str(spec.get("name") or "attachment.bin")
+                attachments.append((data, str(spec.get("mime") or ""), name))
     return "\n".join(t for t in texts if t), attachments
 
 
@@ -353,8 +367,10 @@ def routes(runtime) -> list[Route]:
                 "a turn is already running for this client", status=409)
 
         media_ids = [
-            session.media.register_bytes(data, mime=mime, label="api attachment")
-            for data, mime in attachments
+            (session.media.register_named_bytes(data, name, mime=mime or None)
+             if name else
+             session.media.register_bytes(data, mime=mime, label="api attachment"))
+            for data, mime, name in attachments
         ]
 
         queue = runtime.subscribe()

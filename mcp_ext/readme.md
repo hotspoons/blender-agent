@@ -50,6 +50,17 @@ clearance gaps, composes into existing rigs), `rig_rigid_assembly`
 Bundled docs: `rigging-overview`, `rigging-mechanical`,
 `rigging-characters`, `rigging-standard`.
 
+### media
+
+Asset traffic between the user and the scene through ONE jailed media
+folder per conversation (the agent injects its session folder; standalone
+MCP uses ``BLENDER_MCP_MEDIA_DIR``, default
+``~/.local/share/blender-mcp/media``). `media_io(verb, args)`:
+`list` / `import` (stl obj ply gltf glb fbx usd abc svg images audio) /
+`export` (blend stl obj ply gltf glb fbx usd abc + grease-pencil svg/pdf)
+/ `info`. Written filenames never overwrite — collisions suffix `-2`.
+Bundled skill: `media-io`. Tests: `cd mcp_ext/blmcp_ext/media && make test`.
+
 The extension is fully self-contained — library, tests, corpus and evals
 all live under [`blmcp_ext/rigging/`](blmcp_ext/rigging/):
 `cd mcp_ext/blmcp_ext/rigging && make test` runs all tiers headless

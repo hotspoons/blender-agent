@@ -74,21 +74,34 @@ def create_app(runtime: AgentRuntime) -> Starlette:
 
     async def media_upload(request: Request) -> JSONResponse:
         """
-        Accept a pasted/dropped image (raw body) and register it in the
-        session's media library. ``session_id`` of ``new`` creates a
+        Accept a pasted/dropped attachment (raw body) and register it in
+        the session's media library. ``session_id`` of ``new`` creates a
         session. Returns ``{"session_id", "id"}``.
+
+        Images keep the short-id scheme (``i<N>``, fed to vision models).
+        Everything else (meshes, audio, documents — the ``X-File-Name``
+        header carries the original name) lands in the session's media
+        folder under its own collision-suffixed filename, where the
+        ``media_io`` tool can import it into the scene.
         """
         session_id = request.path_params["session_id"]
         if session_id == "new":
             session_id = runtime.new_session()
+        from urllib.parse import unquote
         mime = request.headers.get("content-type", "application/octet-stream")
-        if not mime.startswith("image/"):
-            return JSONResponse({"error": "only image attachments are supported"}, status_code=415)
+        filename = unquote(request.headers.get("x-file-name", ""))
         body = await request.body()
-        if len(body) > 8 * 1024 * 1024:
-            return JSONResponse({"error": "attachment too large (8 MiB max)"}, status_code=413)
+        if len(body) > 64 * 1024 * 1024:
+            return JSONResponse({"error": "attachment too large (64 MiB max)"}, status_code=413)
         library = runtime._get_or_load_session(session_id).media  # pylint: disable=protected-access
-        media_id = library.register_bytes(body, mime=mime, label="user attachment")
+        if mime.startswith("image/") and not mime.startswith("image/svg"):
+            media_id = library.register_bytes(body, mime=mime, label=filename or "user attachment")
+        else:
+            from .media import mime_for_name
+            name = filename or "attachment.bin"
+            media_id = library.register_named_bytes(
+                body, name,
+                mime=mime if mime != "application/octet-stream" else mime_for_name(name))
         return JSONResponse({"session_id": session_id, "id": media_id})
 
     async def media(request: Request) -> Response:

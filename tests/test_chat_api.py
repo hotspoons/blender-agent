@@ -192,7 +192,24 @@ class TestParsing(_ChatApiTestCase):
         self.assertIn("what is this?", text)
         self.assertIn("skipped", text)  # remote URLs are not fetched
         self.assertEqual(len(attachments), 1)
-        self.assertEqual(attachments[0], (_TINY_PNG, "image/png"))
+        self.assertEqual(attachments[0], (_TINY_PNG, "image/png", None))
+
+    def test_extract_file_part(self) -> None:
+        from blagent import chat_api
+
+        _text, attachments = chat_api.extract_user_input([
+            {"role": "user", "content": [
+                {"type": "text", "text": "rig this"},
+                {"type": "file", "file": {
+                    "name": "dragon.stl",
+                    "b64": base64.b64encode(b"solid x\nendsolid x\n").decode(),
+                }},
+            ]},
+        ])
+        self.assertEqual(len(attachments), 1)
+        data, _mime, name = attachments[0]
+        self.assertEqual(name, "dragon.stl")
+        self.assertTrue(data.startswith(b"solid"))
 
 
 class TestEventTranslator(_ChatApiTestCase):

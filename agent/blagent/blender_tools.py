@@ -83,6 +83,12 @@ class BlenderTool(Tool):
         return self._schema
 
     async def call(self, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+        if self.name == "media_io":
+            # Jail the media tool to THIS session's media folder. The
+            # injection happens here — server-side of the LLM — so the
+            # model never chooses the root.
+            args = {**args, "args": {**(args.get("args") or {}), "jail_root": ctx.media.directory}}
+
         result = await self._mcp.call_tool(self.name, args)
 
         # The SDK returns either a content-block sequence or a
@@ -116,6 +122,16 @@ class BlenderTool(Tool):
                 data = json.loads(joined)
             except ValueError:
                 data = joined
+
+        if self.name == "media_io":
+            # Exports were written into the session media folder by
+            # Blender directly; index them so the UI can serve/preview
+            # them and the user can download.
+            ctx.media.refresh()
+            payload = data.get("result") if isinstance(data, dict) else None
+            for name in (payload or {}).get("jail_files", []) if isinstance(payload, dict) else []:
+                if ctx.media.get(name) is not None and name not in media_ids:
+                    media_ids.append(name)
 
         return ToolResult(
             summary=_summarize(self.name, data, media_ids),

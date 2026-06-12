@@ -805,6 +805,51 @@ EXPECTED_TOOLS = [
         }
     },
     {
+        "name": "media_io",
+        "description": "\n"
+        "        Move assets between the user and the Blender scene through the\n"
+        "        session media folder (user attachments land there; exports appear\n"
+        "        there for the user to download). One tool, verb-dispatched:\n"
+        "\n"
+        "        - media_io(\"list\", {}) \u2014 files available to import (user\n"
+        "          attachments of any type: stl, obj, gltf/glb, fbx, usd, abc,\n"
+        "          svg, images, audio) and previous exports.\n"
+        "        - media_io(\"import\", {name}) \u2014 bring a listed file into the\n"
+        "          scene: meshes via the native importers, svg as curves, images\n"
+        "          as reference image-empties, audio as a speaker. Returns the\n"
+        "          created object names.\n"
+        "        - media_io(\"export\", {format, objects?, filename?}) \u2014 write the\n"
+        "          scene (or just the named objects) to the media folder as\n"
+        "          blend/stl/obj/ply/gltf/glb/fbx/usd/abc (svg/pdf render\n"
+        "          grease-pencil strokes). Filenames never overwrite \u2014 collisions\n"
+        "          get a -2/-3 suffix. The user can then download the file.\n"
+        "        - media_io(\"info\", {name}) \u2014 size/kind of one file.\n"
+        "\n"
+        "        When the user attaches a file or asks for a deliverable file,\n"
+        "        THIS is the tool \u2014 never read or write files via\n"
+        "        execute_blender_code. Run `welcome` first if you have not.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "verb": {
+                    "title": "Verb",
+                    "type": "string"
+                },
+                "args": {
+                    "additionalProperties": True,
+                    "title": "Args",
+                    "type": "object"
+                }
+            },
+            "required": [
+                "verb",
+                "args"
+            ],
+            "title": "media_ioArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "rig",
         "description": "\n"
         "        Deterministic rigging for ANY model \u2014 creatures, vehicles, robots,\n"

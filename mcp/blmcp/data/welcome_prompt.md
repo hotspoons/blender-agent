@@ -50,7 +50,9 @@ tuned to how these tools are designed to be used together.
 
 Optional tools extensions add domain toolsets as SINGLE polymorphic
 tools (e.g. `rig(verb, args)` for deterministic rigging of creatures,
-vehicles, robots and props: inspect/diagnose/run/verify/validate).
+vehicles, robots and props, and `media_io(verb, args)` for importing
+user attachments — stl/obj/gltf/svg/images/audio — into the scene and
+exporting deliverable files: blend, stl, glb, fbx, ...).
 Extension tools come with matching skills — when you see both, read the
 skill first; it documents the verbs, params and failure codes. ALWAYS
 prefer an extension's purpose-built tool over hand-writing the same

@@ -15,6 +15,7 @@ dependencies = [
 # module exposing register(mcp) and optionally skills_dir().
 [project.entry-points."blender_mcp.extensions"]
 rigging = "blmcp_ext.rigging"
+media = "blmcp_ext.media"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -22,6 +23,7 @@ where = ["."]
 exclude = [
     "blmcp_ext.rigging.tests*",
     "blmcp_ext.rigging.corpus*",
+    "blmcp_ext.media.tests*",
 ]
 
 [tool.setuptools.package-data]
@@ -31,4 +33,6 @@ exclude = [
     "rigging/skills/**/*",
     "rigging/blrig/**/*.py",
     "rigging/blrig/**/*.md",
+    "media/skills/**/*",
+    "media/blmedia/**/*.py",
 ]
