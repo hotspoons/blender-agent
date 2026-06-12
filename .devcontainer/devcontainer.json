@@ -11,16 +11,13 @@
 	"containerEnv": {
 		"XDG_RUNTIME_DIR": "/tmp/xdg-runtime"
 	},
-	// Publish the server ports to the host so MCP clients (Claude
-	// Code/Desktop) and browsers on the host can reach a server started
-	// inside the container: 9876 = Blender MCP bridge, 10101 = MCP over
-	// HTTP, 10102 = agent web UI.
-	"forwardPorts": [9876, 10101, 10102],
-	"portsAttributes": {
-		"9876": { "label": "Blender MCP bridge" },
-		"10101": { "label": "MCP over HTTP" },
-		"10102": { "label": "Agent web UI", "onAutoForward": "openBrowserOnce" }
-	},
+	// Share the host's network namespace so tools in the container can
+	// reach Blender + the agent running on the HOST (e.g. localhost:9876
+	// bridge). On Docker Desktop (macOS/Windows) this requires "Enable
+	// host networking" in Settings > Resources > Network; if you'd rather
+	// not toggle that, drop runArgs and connect via host.docker.internal
+	// instead (set BLENDER_MCP_HOST=host.docker.internal).
+	"runArgs": ["--network=host"],
     "initializeCommand": "cmd.exe /c powershell -NoProfile -Command \"$ErrorActionPreference='SilentlyContinue'; New-Item -ItemType Directory -Force -Path $env:USERPROFILE\\.kube, $env:USERPROFILE\\.claude | Out-Null; if (!(Test-Path $env:USERPROFILE\\.claude.json)) { Set-Content -Path $env:USERPROFILE\\.claude.json -Value '{}' }\" || sh -c 'mkdir -p \"$HOME/.kube\" \"$HOME/.claude\" && touch \"$HOME/.claude.json\"'",
     
 	"mounts": [

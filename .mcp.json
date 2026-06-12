@@ -2,7 +2,7 @@
   "mcpServers": {
     "blender-session-10101": {
       "type": "http",
-      "url": "http://127.0.0.1:10101"
+      "url": "http://host.docker.internal:10101"
     }
   }
 }
