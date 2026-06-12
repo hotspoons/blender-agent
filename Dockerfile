@@ -21,7 +21,11 @@ ARG PYTHON_VERSION=3.12
 # normalises whatever it produced (official portable tree on amd64, a
 # from-source install tree on arm64) into a single relocatable /opt/blender.
 # ---------------------------------------------------------------------------
-FROM python:${PYTHON_VERSION}-bookworm AS blender-build
+# Trixie, not bookworm: Blender 5.1's CMake requires GCC >= 14 for the
+# arm64 source build (bookworm ships 12.2; trixie 14.2 — same base the
+# devcontainer builds with). The runtime stage must track the SAME
+# Debian release: the built binary links the builder's glibc.
+FROM python:${PYTHON_VERSION}-trixie AS blender-build
 
 # build-blender.sh shells out to `sudo apt-get`; as root in the builder a
 # trivial passthrough satisfies that without pulling in real sudo.
@@ -56,7 +60,7 @@ RUN bash /opt/devcontainer/build-blender.sh \
 # the agent packages, and the blender-mcp extension pre-installed into the
 # runtime user's Blender config so `--command blender_mcp` resolves.
 # ---------------------------------------------------------------------------
-FROM python:${PYTHON_VERSION}-slim-bookworm AS runtime
+FROM python:${PYTHON_VERSION}-slim-trixie AS runtime
 
 # Shared libraries Blender links against (superset of build-blender.sh's
 # amd64 runtime set, plus the windowing libs a from-source arm64 build wants).

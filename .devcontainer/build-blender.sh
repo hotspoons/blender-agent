@@ -101,6 +101,16 @@ sudo apt-get install -y -qq --no-install-recommends \
     libxinerama-dev libegl-dev libwayland-dev wayland-protocols \
     libxkbcommon-dev libdbus-1-dev linux-libc-dev libsm-dev libvulkan-dev
 
+# Fail fast with a clear message instead of minutes into CMake: Blender
+# 5.x requires GCC >= 14 (Debian trixie / Ubuntu 24.04+; bookworm's 12
+# will not do).
+GCC_MAJOR="$(gcc -dumpversion | cut -d. -f1)"
+if [ "${GCC_MAJOR}" -lt 14 ]; then
+    echo "ERROR: Blender ${BLENDER_GIT_TAG} needs GCC >= 14, found $(gcc -dumpversion)." \
+         "Use a Debian trixie / Ubuntu 24.04+ base image." >&2
+    exit 1
+fi
+
 mkdir -p "$SOURCE_DIR"
 SRC="$SOURCE_DIR/blender"
 
