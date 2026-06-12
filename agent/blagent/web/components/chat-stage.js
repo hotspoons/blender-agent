@@ -409,7 +409,7 @@ export class BaChatStage extends LitElement {
           </div>` : html`
           <div class="col">
             ${records.map((r, i) => this._renderRecord(r, i))}
-            ${this._toolOrder.map((id) => this._renderToolCard(id))}
+            ${this._unclaimedLiveToolIds(records).map((id) => this._renderToolCard(id))}
             ${this._pending ? this._renderConfirm() : nothing}
             ${this._streaming ? this._renderAssistantText(this._streaming, "stream") : nothing}
             ${this._busy && !this._streaming ? html`
@@ -421,6 +421,20 @@ export class BaChatStage extends LitElement {
         <ba-lightbox .src=${this._lightbox.src} .alt=${this._lightbox.alt}
           @close=${() => { this._lightbox = null; }}></ba-lightbox>` : nothing}
     `;
+  }
+
+  /**
+   * Live tool calls not yet claimed by an assistant record. Normally
+   * empty (the engine appends the assistant record BEFORE dispatching
+   * its tools, and the record renders its own calls inline) — this is
+   * the defensive tail so a card is never silently dropped.
+   */
+  _unclaimedLiveToolIds(records) {
+    const claimed = new Set();
+    for (const record of records) {
+      for (const call of record.tool_calls || []) claimed.add(call.id);
+    }
+    return this._toolOrder.filter((id) => !claimed.has(id));
   }
 
   /** Tool results from the transcript, keyed by tool_call_id. */
@@ -448,13 +462,18 @@ export class BaChatStage extends LitElement {
                   @click=${() => { this._lightbox = { src: `/media/${store.state.sessionId}/${m}`, alt: m }; }}>`)}
             </div>` : nothing}</div>`;
     }
-    const liveIds = new Set(this._toolOrder);
-    const historic = (r.tool_calls || []).filter((c) => !liveIds.has(c.id));
-    if (!r.content && historic.length === 0) return nothing;
+    // Tool cards render INLINE at their owning record, in conversation
+    // order: live calls (current turn, status chip from the event stream)
+    // use the live card; everything else re-derives from the transcript.
+    const live = store.state.toolCalls;
+    const calls = r.tool_calls || [];
+    if (!r.content && calls.length === 0) return nothing;
+    const historic = calls.filter((c) => !live[c.id]);
     const results = historic.length ? this._toolResultsByCallId() : {};
     return html`
       ${r.content ? this._renderAssistantText(r.content, `r${recordIndex}`) : nothing}
-      ${historic.map((c) => {
+      ${calls.map((c) => {
+        if (live[c.id]) return this._renderToolCard(c.id);
         const open = this._expanded.has(c.id);
         // Media ids live inside the persisted tool-result JSON - the
         // live-turn state is gone once the next turn starts, so cards
