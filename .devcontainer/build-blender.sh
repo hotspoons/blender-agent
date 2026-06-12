@@ -45,13 +45,25 @@ BIN_DIR="$PREFIX/bin"
 SOURCE_DIR="${BLENDER_SOURCE_DIR:-$HOME/.cache/blender-source}"
 JOBS="${BLENDER_BUILD_JOBS:-$(nproc)}"
 
+# PATH-independent: docker build stages don't have $HOME/.local/bin on
+# PATH (the devcontainer's profile does), so always prefer the explicit
+# install location and only fall back to whatever PATH provides.
+blender_bin() {
+    if [ -x "$BIN_DIR/blender" ]; then
+        echo "$BIN_DIR/blender"
+    else
+        command -v blender || true
+    fi
+}
+
 installed_version() {
-    command -v blender >/dev/null 2>&1 &&
-        blender --version 2>/dev/null | head -n1 | awk '{print $2}' || true
+    local bin
+    bin="$(blender_bin)"
+    [ -n "$bin" ] && "$bin" --version 2>/dev/null | head -n1 | awk '{print $2}' || true
 }
 
 if [ "$(installed_version)" = "${BLENDER_VERSION}" ]; then
-    echo "Blender ${BLENDER_VERSION} already installed: $(command -v blender)"
+    echo "Blender ${BLENDER_VERSION} already installed: $(blender_bin)"
     exit 0
 fi
 
@@ -70,7 +82,7 @@ if [ "$(uname -m)" = "x86_64" ] && [ "${BLENDER_FORCE_SOURCE_BUILD:-0}" != "1" ]
     url="https://download.blender.org/release/${BLENDER_RELEASE_DIR}/blender-${BLENDER_VERSION}-linux-x64.tar.xz"
     curl -sL "$url" | tar -xJ -C "$PREFIX"
     ln -sf "$PREFIX/blender-${BLENDER_VERSION}-linux-x64/blender" "$BIN_DIR/blender"
-    blender --version | head -n1
+    "$BIN_DIR/blender" --version | head -n1
     exit 0
 fi
 
@@ -133,5 +145,5 @@ if [ -z "$BUILD_BIN" ]; then
 fi
 
 ln -sf "$BUILD_BIN" "$BIN_DIR/blender"
-blender --version | head -n1
+"$BIN_DIR/blender" --version | head -n1
 echo "Blender ${BLENDER_VERSION} built and installed (symlink: $BIN_DIR/blender)"
