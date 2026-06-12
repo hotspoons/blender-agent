@@ -225,7 +225,12 @@ class Store extends EventTarget {
     const sessionId = this.state.sessionId || "new";
     const response = await fetch(`/upload/${sessionId}`, {
       method: "POST",
-      headers: { "Content-Type": file.type || "application/octet-stream" },
+      headers: {
+        "Content-Type": file.type || "application/octet-stream",
+        // Original name: non-image attachments keep it (sanitized) in
+        // the session media folder so the agent can import by name.
+        "X-File-Name": encodeURIComponent(file.name || ""),
+      },
       body: file,
     });
     if (!response.ok) {

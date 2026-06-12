@@ -284,6 +284,11 @@ export class BaJson extends LitElement {
       tab-size: 4;
     }
     .zoombox .body pre code { background: transparent; }
+    /* In the fullscreen modal the inline preview caps come off: rich
+       blocks (code editors etc.) grow to their content and the modal
+       body is the one scroll container. */
+    .zoombox .body .rich { max-height: none; }
+    .zoombox .body .scroll { max-height: none; }
     .zoombox .body .mdpad { padding: 14px 18px; font-size: 13.5px; line-height: 1.55; }
   `;
 

@@ -7,6 +7,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { store } from "/static/core/store.js";
 import { icon } from "/static/core/icons.js";
 import "/static/core/widgets.js";
+import "/static/components/stl-viewer.js";
 
 export class BaArtifactPanel extends LitElement {
   static properties = {
@@ -64,6 +65,15 @@ export class BaArtifactPanel extends LitElement {
     }
     .card:hover { border-color: var(--accent); }
     .card img { width: 100%; display: block; }
+    .card ba-stl-viewer { width: 100%; height: 110px; display: block; }
+    .card .filelink {
+      display: block;
+      padding: 14px 10px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--accent);
+      text-decoration: none;
+    }
     .card .cap {
       font-size: 11px;
       color: var(--text-muted);
@@ -84,14 +94,21 @@ export class BaArtifactPanel extends LitElement {
           <div class="grid">
             ${this._media.map((m) => html`
               <div class="card" @click=${() => {
+                if (!(m.mime || "").startsWith("image/")) return;
                 this._lightbox = { src: `/media/${this._sessionId}/${m.id}`, alt: `${m.id} · ${m.label || m.mime}` };
               }}>
-                <img src="/media/${this._sessionId}/${m.id}" alt=${m.id} loading="lazy">
+                ${(m.mime || "").startsWith("image/")
+                  ? html`<img src="/media/${this._sessionId}/${m.id}" alt=${m.id} loading="lazy">`
+                  : m.mime === "model/stl"
+                    ? html`<ba-stl-viewer thumb .src=${`/media/${this._sessionId}/${m.id}`} .label=${m.id}
+                        @zoom=${(e) => { this._lightbox = e.detail; }}></ba-stl-viewer>`
+                    : html`<a class="filelink" href="/media/${this._sessionId}/${m.id}" download=${m.id}>download</a>`}
                 <div class="cap">${m.id} · ${m.label || m.mime}</div>
               </div>`)}
           </div>`}
       ${this._lightbox ? html`
         <ba-lightbox .src=${this._lightbox.src} .alt=${this._lightbox.alt}
+          .kind=${this._lightbox.kind || ""}
           @close=${() => { this._lightbox = null; }}></ba-lightbox>` : nothing}
     `;
   }

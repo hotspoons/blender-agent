@@ -84,8 +84,8 @@ export class BaComposer extends LitElement {
 
   async _addFiles(files) {
     for (const file of files) {
-      if (!file.type.startsWith("image/")) continue;
-      const staged = { id: "", sessionId: "", uploading: true, name: file.name || "pasted image" };
+      if (file.size > 64 * 1024 * 1024) continue; // server cap
+      const staged = { id: "", sessionId: "", uploading: true, name: file.name || "pasted file" };
       this._attachments = [...this._attachments, staged];
       try {
         const uploaded = await store.uploadAttachment(file);
@@ -303,7 +303,7 @@ export class BaComposer extends LitElement {
           <button class="attach" title="Attach image"
             @click=${() => this.renderRoot.querySelector("input[type=file]").click()}>
             ${icon("plus")}</button>
-          <input type="file" accept="image/*" multiple
+          <input type="file" multiple
             @change=${(e) => { this._addFiles([...e.target.files]); e.target.value = ""; }}>
           <textarea rows="1" placeholder="Ask the Blender agent..."
             @paste=${this._onPaste}

@@ -12,6 +12,7 @@ import { brandMark } from "/static/core/brand.js";
 import { adoptHighlightStyles, ensureMarkdownReady, renderMarkdown } from "/static/core/markdown.js";
 import "/static/components/json-view.js";
 import "/static/core/widgets.js";
+import "/static/components/stl-viewer.js";
 
 function unsafeHtml(htmlText) {
   const template = document.createElement("template");
@@ -320,6 +321,41 @@ export class BaChatStage extends LitElement {
       border: 1px solid var(--border);
       cursor: pointer;
     }
+    .media-strip ba-stl-viewer {
+      width: 160px;
+      height: 120px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      overflow: hidden;
+    }
+    .file-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      color: var(--text);
+      text-decoration: none;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+    }
+    .file-chip:hover { border-color: var(--accent); }
+    .compacted { cursor: pointer; }
+    .compacted-body {
+      margin: 4px 0 8px;
+      padding: 10px 12px;
+      font-size: 12.5px;
+      line-height: 1.55;
+      color: var(--text-muted);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      overflow-wrap: anywhere;
+    }
+    .compacted-body :first-child { margin-top: 0; }
+    .compacted-body :last-child { margin-bottom: 0; }
   `;
 
   _toggleSet(setName, id) {
@@ -356,6 +392,26 @@ export class BaChatStage extends LitElement {
     });
   }
 
+  /**
+   * One media-strip entry, by id: images render inline, STL gets a 3D
+   * thumbnail (interactive in the lightbox), anything else is a
+   * download chip. Named ids carry their extension; short ids
+   * (i<N>) are always images.
+   */
+  _renderMediaThumb(m) {
+    const src = `/media/${store.state.sessionId}/${m}`;
+    if (/\.stl$/i.test(m)) {
+      return html`<ba-stl-viewer thumb .src=${src} .label=${m}
+        @zoom=${(e) => { this._lightbox = e.detail; }}></ba-stl-viewer>`;
+    }
+    if (/^i\d+$/.test(m) || /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(m)) {
+      return html`<img src=${src} alt=${m} title=${m}
+        @click=${() => { this._lightbox = { src, alt: m }; }}>`;
+    }
+    return html`<a class="file-chip" href=${src} download=${m} title=${m}>
+      ${icon("arrow-down-tray")} ${m}</a>`;
+  }
+
   _renderToolCard(id) {
     const call = store.state.toolCalls[id];
     if (!call) return nothing;
@@ -386,9 +442,7 @@ export class BaChatStage extends LitElement {
           </div>` : nothing}
         ${call.media_ids?.length ? html`
           <div class="tool-body media-strip">
-            ${call.media_ids.map((m) => html`
-              <img src="/media/${store.state.sessionId}/${m}" alt=${m} title=${m}
-                @click=${() => { this._lightbox = { src: `/media/${store.state.sessionId}/${m}`, alt: m }; }}>`)}
+            ${call.media_ids.map((m) => this._renderMediaThumb(m))}
           </div>` : nothing}
       </div>
     `;
@@ -419,6 +473,7 @@ export class BaChatStage extends LitElement {
       </div>
       ${this._lightbox ? html`
         <ba-lightbox .src=${this._lightbox.src} .alt=${this._lightbox.alt}
+          .kind=${this._lightbox.kind || ""}
           @close=${() => { this._lightbox = null; }}></ba-lightbox>` : nothing}
     `;
   }
@@ -452,14 +507,19 @@ export class BaChatStage extends LitElement {
     if (r.role === "summary") {
       // Compaction marker: older history above this point was folded
       // into a summary for the model; the transcript itself is intact.
-      return html`<div class="compacted" title=${r.content}>context compacted</div>`;
+      // Click to expand the summary itself, like a tool card.
+      const open = this._expanded.has(`compacted-${recordIndex}`);
+      return html`
+        <div class="compacted" @click=${() => this._toggleSet("_expanded", `compacted-${recordIndex}`)}>
+          ${icon(open ? "chevron-down" : "chevron-right")} context compacted
+        </div>
+        ${open ? html`
+          <div class="compacted-body">${unsafeHtml(renderMarkdown(r.content || ""))}</div>` : nothing}`;
     }
     if (r.role === "user") {
       return html`<div class="msg user"><span class="txt">${r.content}</span>${r.media_ids?.length ? html`
             <div class="media-strip" style="margin-top: 6px;">
-              ${r.media_ids.map((m) => html`
-                <img src="/media/${store.state.sessionId}/${m}" alt=${m}
-                  @click=${() => { this._lightbox = { src: `/media/${store.state.sessionId}/${m}`, alt: m }; }}>`)}
+              ${r.media_ids.map((m) => this._renderMediaThumb(m))}
             </div>` : nothing}</div>`;
     }
     // Tool cards render INLINE at their owning record, in conversation
@@ -499,9 +559,7 @@ export class BaChatStage extends LitElement {
               </div>` : nothing}
             ${mediaIds.length ? html`
               <div class="tool-body media-strip">
-                ${mediaIds.map((m) => html`
-                  <img src="/media/${store.state.sessionId}/${m}" alt=${m} title=${m}
-                    @click=${() => { this._lightbox = { src: `/media/${store.state.sessionId}/${m}`, alt: m }; }}>`)}
+                ${mediaIds.map((m) => this._renderMediaThumb(m))}
               </div>` : nothing}
           </div>`;
       })}

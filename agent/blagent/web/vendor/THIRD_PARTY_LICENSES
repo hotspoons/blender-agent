@@ -44,3 +44,7 @@ fonts/jost-*.woff2
   Font: Jost (see fonts/JOST-LICENSE.txt)
   License: SIL Open Font License 1.1
   URL: https://github.com/indestructible-type/Jost
+
+three.module.js, three-stl-loader.js (STLLoader), three-orbit-controls.js (OrbitControls)
+  three.js r180 — MIT License — Copyright 2010-2025 Three.js Authors
+  https://github.com/mrdoob/three.js — addon imports rewritten to relative paths.

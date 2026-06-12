@@ -298,6 +298,8 @@ export class BaLightbox extends LitElement {
   static properties = {
     src: { type: String },
     alt: { type: String },
+    // "stl" swaps the <img> for an interactive 3D viewer.
+    kind: { type: String },
   };
 
   static styles = css`
@@ -329,6 +331,14 @@ export class BaLightbox extends LitElement {
       padding: 10px;
       box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), var(--shadow-panel);
     }
+    .stage3d {
+      width: min(80vw, 900px);
+      height: min(75vh, 700px);
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      overflow: hidden;
+    }
+    .stage3d ba-stl-viewer { width: 100%; height: 100%; display: block; }
     img {
       max-width: calc(92vw - 20px);
       max-height: 80vh;
@@ -387,7 +397,9 @@ export class BaLightbox extends LitElement {
   render() {
     return html`
       <figure @click=${(e) => e.stopPropagation()}>
-        <img src=${this.src} alt=${this.alt}>
+        ${this.kind === "stl"
+            ? html`<div class="stage3d"><ba-stl-viewer .src=${this.src} .label=${this.alt}></ba-stl-viewer></div>`
+            : html`<img src=${this.src} alt=${this.alt}>`}
         <figcaption>
           <span>${this.alt}</span>
           <span class="spacer"></span>
