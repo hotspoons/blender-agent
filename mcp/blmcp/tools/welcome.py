@@ -27,13 +27,16 @@ def register(mcp: FastMCP) -> None:
     )
     def welcome() -> dict[str, object]:
         """
-        RUN THIS FIRST, once per session, before any other tool.
+        Call FIRST, once per session, before any other tool.
 
-        Returns the working instructions this Blender toolset is designed
-        around: inspection-before-action workflow, API verification, the
-        skills library (`skills_search`/`skills_read`), code-execution
-        conventions, and any installed extension toolsets. Adopt the
-        returned instructions for the rest of the session.
+        This is the ONLY way to see what is actually installed in this
+        session: the live list of skills - reusable, tested recipes for
+        whole tasks (e.g. rigging any creature or mechanism, rendering
+        and encoding media) reached via `skills_search`/`skills_read` -
+        plus the conventions these tools assume (inspect before acting,
+        verify the API, code-execution rules). Skip it and you will not
+        know which skills exist or how this toolset expects to be driven.
+        Adopt the returned instructions for the rest of the session.
         """
         with open(_PROMPT_PATH, encoding="utf-8") as fh:
             prompt = fh.read()

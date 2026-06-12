@@ -36,7 +36,7 @@ EXPECTED_TOOLS = [
         "        interactive addon server, and is rejected in background mode.\n"
         "        \n"
         "\n"
-        "If you have not yet this session: call the `welcome` tool first \u2014 it loads the working instructions this Blender toolset is designed around.",
+        "FIRST ACTION this session: call the `welcome` tool before this one. It lists the skills installed right now (rigging, media, ...) and the conventions these tools assume - skipping it means you won't know those skills exist or how this toolset expects to be driven.",
         "inputSchema": {
             "properties": {
                 "code": {
@@ -60,7 +60,7 @@ EXPECTED_TOOLS = [
         "        Assign a dict to ``result`` to return data.\n"
         "        \n"
         "\n"
-        "If you have not yet this session: call the `welcome` tool first \u2014 it loads the working instructions this Blender toolset is designed around.",
+        "FIRST ACTION this session: call the `welcome` tool before this one. It lists the skills installed right now (rigging, media, ...) and the conventions these tools assume - skipping it means you won't know those skills exist or how this toolset expects to be driven.",
         "inputSchema": {
             "properties": {
                 "blend_file": {
@@ -262,7 +262,7 @@ EXPECTED_TOOLS = [
         "        selection, visibility) and nested child collections.\n"
         "        \n"
         "\n"
-        "If you have not yet this session: call the `welcome` tool first \u2014 it loads the working instructions this Blender toolset is designed around.",
+        "FIRST ACTION this session: call the `welcome` tool before this one. It lists the skills installed right now (rigging, media, ...) and the conventions these tools assume - skipping it means you won't know those skills exist or how this toolset expects to be driven.",
         "inputSchema": {
             "properties": {},
             "title": "get_objects_summaryArguments",
@@ -792,13 +792,16 @@ EXPECTED_TOOLS = [
     {
         "name": "welcome",
         "description": "\n"
-        "        RUN THIS FIRST, once per session, before any other tool.\n"
+        "        Call FIRST, once per session, before any other tool.\n"
         "\n"
-        "        Returns the working instructions this Blender toolset is designed\n"
-        "        around: inspection-before-action workflow, API verification, the\n"
-        "        skills library (`skills_search`/`skills_read`), code-execution\n"
-        "        conventions, and any installed extension toolsets. Adopt the\n"
-        "        returned instructions for the rest of the session.\n"
+        "        This is the ONLY way to see what is actually installed in this\n"
+        "        session: the live list of skills - reusable, tested recipes for\n"
+        "        whole tasks (e.g. rigging any creature or mechanism, rendering\n"
+        "        and encoding media) reached via `skills_search`/`skills_read` -\n"
+        "        plus the conventions these tools assume (inspect before acting,\n"
+        "        verify the API, code-execution rules). Skip it and you will not\n"
+        "        know which skills exist or how this toolset expects to be driven.\n"
+        "        Adopt the returned instructions for the rest of the session.\n"
         "        ",
         "inputSchema": {
             "properties": {},
@@ -831,6 +834,14 @@ EXPECTED_TOOLS = [
         "          filename. The way to SHOW the user an image; works headless.\n"
         "          Uses the scene camera (or the only camera) and current render\n"
         "          settings.\n"
+        "        - media_io(\"video\", {start?, end?, step?, fps?, format?,\n"
+        "          filename?, camera?, quality?, ffmpeg?}) \u2014 render a frame range\n"
+        "          and encode it to ONE video (mp4/mov/webm/gif) with ffmpeg.\n"
+        "          The way to SHOW the user an animation (e.g. a looping walk\n"
+        "          cycle); works headless. Defaults to the scene frame range and\n"
+        "          24fps; quality is high/medium/low. ffmpeg is auto-located on\n"
+        "          PATH and common OS paths \u2014 pass {ffmpeg: \"/path/to/ffmpeg\"}\n"
+        "          only if it lives somewhere unusual.\n"
         "        - media_io(\"stage\", {path, filename?}) \u2014 copy a file that\n"
         "          already exists on disk (a render output, a baked cache) into\n"
         "          the media folder so the user gets it.\n"

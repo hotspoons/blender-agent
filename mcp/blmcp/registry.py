@@ -42,8 +42,10 @@ _WELCOME_NUDGE_TOOLS = (
     "get_objects_summary",
 )
 _WELCOME_NUDGE = (
-    "\n\nIf you have not yet this session: call the `welcome` tool first — "
-    "it loads the working instructions this Blender toolset is designed around."
+    "\n\nFIRST ACTION this session: call the `welcome` tool before this one. "
+    "It lists the skills installed right now (rigging, media, ...) and the "
+    "conventions these tools assume - skipping it means you won't know those "
+    "skills exist or how this toolset expects to be driven."
 )
 
 

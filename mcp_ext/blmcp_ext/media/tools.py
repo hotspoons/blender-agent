@@ -19,7 +19,7 @@ from mcp.types import ToolAnnotations  # pylint: disable=import-error,no-name-in
 
 from . import BLMEDIA_PARENT_DIR
 
-_VERBS = ("list", "import", "export", "render", "stage", "info")
+_VERBS = ("list", "import", "export", "render", "video", "stage", "info")
 
 _BOOTSTRAP = (
     "import sys\n"
@@ -91,6 +91,23 @@ def _code_for(verb: str, args: dict) -> dict[str, object] | str:
                  fmt=str(args.get("format") or "png"),
                  camera=args.get("camera"))
 
+    if verb == "video":
+        fmt = str(args.get("format") or "mp4")
+        ffmpeg = args.get("ffmpeg")
+        if ffmpeg is not None and not isinstance(ffmpeg, str):
+            return _error("ffmpeg must be a string path to the ffmpeg binary")
+        return _BOOTSTRAP + (
+            "import blmedia\n"
+            "_out = blmedia.render_video({jail!r}, start={start!r}, end={end!r}, "
+            "step={step!r}, fps={fps!r}, format={fmt!r}, filename={filename!r}, "
+            "camera={camera!r}, quality={quality!r}, ffmpeg={ffmpeg!r})\n"
+            "_out['jail_files'] = [_out['file']]\n"
+            "result = _out\n"
+        ).format(jail=jail, start=args.get("start"), end=args.get("end"),
+                 step=args.get("step") or 1, fps=args.get("fps") or 24,
+                 fmt=fmt, filename=args.get("filename"), camera=args.get("camera"),
+                 quality=str(args.get("quality") or "medium"), ffmpeg=ffmpeg)
+
     if verb == "stage":
         path = args.get("path")
         if not path:
@@ -136,6 +153,14 @@ def register(mcp: FastMCP) -> None:
           filename. The way to SHOW the user an image; works headless.
           Uses the scene camera (or the only camera) and current render
           settings.
+        - media_io("video", {start?, end?, step?, fps?, format?,
+          filename?, camera?, quality?, ffmpeg?}) — render a frame range
+          and encode it to ONE video (mp4/mov/webm/gif) with ffmpeg.
+          The way to SHOW the user an animation (e.g. a looping walk
+          cycle); works headless. Defaults to the scene frame range and
+          24fps; quality is high/medium/low. ffmpeg is auto-located on
+          PATH and common OS paths — pass {ffmpeg: "/path/to/ffmpeg"}
+          only if it lives somewhere unusual.
         - media_io("stage", {path, filename?}) — copy a file that
           already exists on disk (a render output, a baked cache) into
           the media folder so the user gets it.

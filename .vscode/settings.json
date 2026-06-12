@@ -31,5 +31,14 @@
 	],
 	"[python]": {
 		"editor.defaultFormatter": "charliermarsh.ruff"
-	}
+	},
+	// Paste a screenshot (Cmd/Ctrl+V) into ANY Markdown file and VS Code
+	// saves the PNG and inserts the link - no extension needed. Route
+	// every doc's pasted/dropped images into docs/images/ so they don't
+	// scatter next to each .md.
+	"markdown.copyFiles.destination": {
+		"**/*.md": "${documentWorkspaceFolder}/docs/images/${fileName}"
+	},
+	"markdown.editor.filePaste.copyIntoWorkspace": "mediaFiles",
+	"markdown.editor.drop.copyIntoWorkspace": "mediaFiles"
 }

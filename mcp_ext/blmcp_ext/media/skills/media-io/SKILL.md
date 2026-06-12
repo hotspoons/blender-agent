@@ -1,7 +1,7 @@
 ---
 name: media-io
-description: Importing user attachments (stl, obj, gltf, fbx, usd, svg, images, audio), exporting deliverable files (blend, stl, obj, gltf/glb, fbx, usd, abc, svg/pdf), rendering frames for the user, and staging existing files — the media_io tool, jail rules, collision handling, format notes.
-keywords: import, export, render, screenshot, picture, file, save, load, attachment, stl, obj, gltf, glb, fbx, usd, svg, image, png, jpg, audio, download, upload, deliverable, stage
+description: Importing user attachments (stl, obj, gltf, fbx, usd, svg, images, audio), exporting deliverable files (blend, stl, obj, gltf/glb, fbx, usd, abc, svg/pdf), rendering frames and encoding videos (mp4/webm/gif via ffmpeg) for the user, and staging existing files — the media_io tool, jail rules, collision handling, format notes.
+keywords: import, export, render, screenshot, picture, file, save, load, attachment, stl, obj, gltf, glb, fbx, usd, svg, image, png, jpg, audio, video, movie, clip, animation, walk cycle, turntable, mp4, webm, gif, ffmpeg, encode, download, upload, deliverable, stage
 aliases: [media_io, media]
 ---
 
@@ -30,7 +30,15 @@ served to the user and won't survive the session.
    or errors asking for one — it never invents a viewpoint. `format`
    png (default) / jpg / webp / exr. `media_io("export", {"format":
    "png"})` does the same thing.
-5. Already wrote a file somewhere else (a render output path, a baked
+5. Show an animation: `media_io("video", {"start": 1, "end": 48, "fps":
+   24})` — renders the frame range and encodes ONE clip
+   (`mp4` default / `mov` / `webm` / `gif`) straight to the media folder
+   (works headless). Defaults to the scene frame range and 24fps; `step`
+   subsamples, `quality` is high/medium/low, `camera` overrides. This is
+   the way to deliver a turntable or a looping walk cycle. Needs a
+   system `ffmpeg` (auto-located on PATH / common OS paths); pass
+   `{"ffmpeg": "/path/to/ffmpeg"}` only if it lives somewhere unusual.
+6. Already wrote a file somewhere else (a render output path, a baked
    cache)? `media_io("stage", {"path": "/tmp/out.png"})` copies it into
    the media folder — don't copy by hand in execute_blender_code.
 

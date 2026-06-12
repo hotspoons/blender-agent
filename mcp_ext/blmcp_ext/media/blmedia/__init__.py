@@ -15,6 +15,8 @@ collision-suffixed (``name-2.ext``) rather than overwritten.
 
 __all__ = (
     "export_file",
+    "find_ffmpeg",
+    "render_video",
     "import_file",
     "info_file",
     "list_files",
@@ -24,8 +26,12 @@ __all__ = (
     "unique_path",
 )
 
+import glob
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 
 import bpy
 
@@ -50,6 +56,25 @@ _IMAGE_RENDER_FORMATS = {
     "webp": "WEBP",
     "exr": "OPEN_EXR",
 }
+
+# Container formats the video verb encodes (frames -> clip via ffmpeg).
+_VIDEO_FORMATS = ("mp4", "mov", "webm", "gif")
+
+# Where ffmpeg commonly lives, checked AFTER $PATH so an explicit/PATH
+# binary always wins. Covers Linux distros, Homebrew (Intel + Apple
+# Silicon), MacPorts, snap, and the usual Windows drops.
+_FFMPEG_COMMON = (
+    "/usr/bin/ffmpeg",
+    "/usr/local/bin/ffmpeg",
+    "/opt/homebrew/bin/ffmpeg",
+    "/opt/local/bin/ffmpeg",
+    "/snap/bin/ffmpeg",
+    r"C:\ffmpeg\bin\ffmpeg.exe",
+    r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+    r"C:\Program Files\ffmpeg\ffmpeg.exe",
+)
+
+_VIDEO_CRF = {"high": 18, "medium": 23, "low": 28}
 
 
 def kind_of(name: str) -> str:
@@ -421,4 +446,147 @@ def export_file(format: str, jail: str | None = None,
         "size": os.path.getsize(path),
         "format": format,
         "objects": [o.name for o in targets] if targets else "scene",
+    }
+
+
+def find_ffmpeg(explicit: str | None = None) -> str | None:
+    """
+    Locate the ``ffmpeg`` binary. Priority: an explicit path (a file, or
+    a directory containing the binary), then ``$PATH``, then the common
+    per-OS install locations. Returns the path or ``None``. Blender
+    bundles libav for *encoding* but not the ffmpeg CLI, so the agent
+    relies on a system ffmpeg here.
+    """
+    exe = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    if explicit:
+        cand = os.path.expanduser(explicit)
+        if os.path.isdir(cand):
+            cand = os.path.join(cand, exe)
+        return cand if (os.path.isfile(cand) and os.access(cand, os.X_OK)) else None
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    for cand in _FFMPEG_COMMON:
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def _ffmpeg_encode_cmd(binary: str, pattern: str, fps: int, fmt: str,
+                       quality: str, out_path: str) -> list:
+    """Argv to encode the zero-padded PNG sequence *pattern* to *out_path*."""
+    crf = _VIDEO_CRF.get(quality, _VIDEO_CRF["medium"])
+    cmd = [binary, "-y", "-loglevel", "error", "-framerate", str(fps), "-i", pattern]
+    # h264/vp9 need even dimensions and a broadly-playable pixel format.
+    even = "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+    if fmt in ("mp4", "mov"):
+        return cmd + ["-vf", even, "-c:v", "libx264", "-crf", str(crf),
+                      "-pix_fmt", "yuv420p", out_path]
+    if fmt == "webm":
+        return cmd + ["-vf", even, "-c:v", "libvpx-vp9", "-crf", str(crf),
+                      "-b:v", "0", "-pix_fmt", "yuv420p", out_path]
+    # gif: build a palette in one filtergraph for decent color.
+    return cmd + ["-vf", "split[a][b];[a]palettegen[p];[b][p]paletteuse", out_path]
+
+
+def render_video(jail: str | None = None, start: int | None = None,
+                 end: int | None = None, step: int = 1, fps: int = 24,
+                 format: str = "mp4", filename: str | None = None,
+                 camera: str | None = None, quality: str = "medium",
+                 ffmpeg: str | None = None) -> dict:
+    """
+    Render the frame range ``start..end`` (current scene settings) and
+    encode it into a single video in the jail with ffmpeg — the
+    headless "show the user a clip" path (e.g. a looping walk cycle).
+
+    Frames render to sequential PNGs in a temp dir, then ffmpeg stitches
+    them; the intermediate frames are discarded. *ffmpeg* optionally
+    overrides binary discovery (see :func:`find_ffmpeg`). Render
+    settings (engine, resolution, frame range) are used as-is and
+    restored afterwards.
+    """
+    format = (format or "mp4").lower().lstrip(".")
+    if format not in _VIDEO_FORMATS:
+        raise ValueError("unsupported video format {!r}; supported: {}".format(
+            format, ", ".join(_VIDEO_FORMATS)))
+    quality = (quality or "medium").lower()
+
+    binary = find_ffmpeg(ffmpeg)
+    if binary is None:
+        if ffmpeg:
+            raise RuntimeError("no ffmpeg binary at {!r}".format(ffmpeg))
+        raise RuntimeError(
+            "ffmpeg not found on PATH or in common locations. Install it "
+            "(e.g. `apt install ffmpeg`, `brew install ffmpeg`) or pass "
+            "{'ffmpeg': '/path/to/ffmpeg'}.")
+
+    scene = bpy.context.scene
+    cam = bpy.data.objects.get(camera) if camera else scene.camera
+    if camera and (cam is None or cam.type != "CAMERA"):
+        raise ValueError("no camera object named {!r}".format(camera))
+    if cam is None:
+        cameras = [o for o in bpy.data.objects if o.type == "CAMERA"]
+        if len(cameras) == 1:
+            cam = cameras[0]
+        else:
+            raise ValueError(
+                "the scene has no active camera ({:d} camera objects); add one "
+                "or pass {{'camera': name}}".format(len(cameras)))
+
+    start = scene.frame_start if start is None else int(start)
+    end = scene.frame_end if end is None else int(end)
+    step = max(1, int(step))
+    fps = max(1, int(fps))
+    if end < start:
+        raise ValueError("end frame {:d} is before start frame {:d}".format(end, start))
+
+    root = resolve_jail(jail)
+    stem = safe_name(filename or "render")
+    if not stem.lower().endswith("." + format):
+        stem += "." + format
+    out_path = unique_path(root, stem)
+
+    tmpdir = tempfile.mkdtemp(prefix="blmedia_frames_")
+    previous = (scene.camera, scene.frame_current,
+                scene.render.filepath, scene.render.image_settings.file_format)
+    try:
+        scene.camera = cam
+        scene.render.image_settings.file_format = "PNG"
+        # Sequential names (seq_00000.png ...) so ffmpeg reads a clean
+        # consecutive pattern regardless of the actual frame numbers or
+        # step - write_still uses the path literally + the format ext.
+        n_frames = 0
+        for frame in range(start, end + 1, step):
+            scene.frame_set(frame)
+            scene.render.filepath = os.path.join(tmpdir, "seq_{:05d}".format(n_frames))
+            bpy.ops.render.render(write_still=True)
+            n_frames += 1
+        if n_frames == 0:
+            raise RuntimeError("no frames to encode in range {:d}..{:d}".format(start, end))
+        if not glob.glob(os.path.join(tmpdir, "seq_*.png")):
+            raise RuntimeError("render produced no frame images")
+
+        cmd = _ffmpeg_encode_cmd(
+            binary, os.path.join(tmpdir, "seq_%05d.png"), fps, format, quality, out_path)
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if proc.returncode != 0 or not os.path.isfile(out_path):
+            raise RuntimeError("ffmpeg encode failed: {}".format(
+                (proc.stderr or proc.stdout or "no output").strip()[-800:]))
+    finally:
+        (scene.camera, scene.frame_current,
+         scene.render.filepath,
+         scene.render.image_settings.file_format) = previous
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    return {
+        "file": os.path.relpath(out_path, root),
+        "folder": root,
+        "size": os.path.getsize(out_path),
+        "format": format,
+        "fps": fps,
+        "frames": n_frames,
+        "range": [start, end],
+        "step": step,
+        "camera": cam.name,
+        "ffmpeg": binary,
     }

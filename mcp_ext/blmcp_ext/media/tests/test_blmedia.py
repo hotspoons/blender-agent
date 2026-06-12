@@ -256,3 +256,80 @@ class TestStage(_MediaTestCase):
             fh.write(b"x")
         report = blmedia.stage_file(source, self.jail, filename="walk-frame12.png")
         self.assertEqual(report["file"], "walk-frame12.png")
+
+
+class TestFindFfmpeg(unittest.TestCase):
+    """find_ffmpeg discovery (pure - no rendering, no real ffmpeg needed)."""
+
+    def test_explicit_file_path(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            fake = os.path.join(d, "ffmpeg")
+            with open(fake, "w") as fh:
+                fh.write("#!/bin/sh\n")
+            os.chmod(fake, 0o755)
+            self.assertEqual(blmedia.find_ffmpeg(fake), fake)
+            # A directory containing the binary resolves too.
+            self.assertEqual(blmedia.find_ffmpeg(d), fake)
+
+    def test_explicit_bad_path_is_none(self) -> None:
+        self.assertIsNone(blmedia.find_ffmpeg("/no/such/ffmpeg"))
+
+    def test_path_discovery(self) -> None:
+        # Whatever the environment has (or not) - just exercise the call.
+        found = blmedia.find_ffmpeg()
+        self.assertTrue(found is None or os.path.isfile(found))
+
+
+class TestRenderVideo(_MediaTestCase):
+    """
+    media_io("video", ...): render a frame range and encode to a clip.
+    The encode needs a real ffmpeg; rendering tests skip when absent.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _make_cube()
+        _add_camera()
+        scene = bpy.context.scene
+        scene.render.engine = "BLENDER_WORKBENCH"
+        scene.render.resolution_x = 64
+        scene.render.resolution_y = 64
+
+    def test_unsupported_format_rejected(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            blmedia.render_video(self.jail, start=1, end=1, format="avi")
+        self.assertIn("avi", str(caught.exception))
+
+    def test_missing_ffmpeg_is_actionable(self) -> None:
+        with self.assertRaises(RuntimeError) as caught:
+            blmedia.render_video(self.jail, start=1, end=1, ffmpeg="/no/such/ffmpeg")
+        self.assertIn("ffmpeg", str(caught.exception))
+
+    def test_encodes_mp4_and_restores_settings(self) -> None:
+        if blmedia.find_ffmpeg() is None:
+            self.skipTest("ffmpeg not available")
+        scene = bpy.context.scene
+        prev_path, prev_fmt = scene.render.filepath, scene.render.image_settings.file_format
+        report = blmedia.render_video(
+            self.jail, start=1, end=3, fps=12, format="mp4", filename="walk")
+        self.assertEqual(report["file"], "walk.mp4")
+        self.assertEqual(report["frames"], 3)
+        self.assertEqual(report["fps"], 12)
+        self.assertEqual(report["range"], [1, 3])
+        self.assertGreater(report["size"], 0)
+        self.assertTrue(os.path.isfile(os.path.join(report["folder"], "walk.mp4")))
+        # Render settings restored; only the video lands in the jail
+        # (intermediate frames go to a temp dir and are cleaned up).
+        self.assertEqual(scene.render.filepath, prev_path)
+        self.assertEqual(scene.render.image_settings.file_format, prev_fmt)
+        names = [f["name"] for f in blmedia.list_files(self.jail)["files"]]
+        self.assertEqual(names, ["walk.mp4"])
+
+    def test_step_subsamples_frames(self) -> None:
+        if blmedia.find_ffmpeg() is None:
+            self.skipTest("ffmpeg not available")
+        report = blmedia.render_video(
+            self.jail, start=1, end=5, step=2, format="gif", filename="loop")
+        self.assertEqual(report["file"], "loop.gif")
+        self.assertEqual(report["frames"], 3)   # frames 1, 3, 5
+        self.assertGreater(report["size"], 0)

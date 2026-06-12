@@ -5,6 +5,13 @@ initial_instructions: |
   You have access to Blender tools to interact with a Blender scene directly.
   Blender must be running with the MCP add-on enabled and connected.
 
+  FIRST, once per session: call the `welcome` tool. It returns the live
+  list of skills installed in THIS session - reusable, tested recipes
+  (e.g. rigging creatures and mechanisms, rendering and encoding media)
+  - plus the conventions these tools assume. It is the only way to
+  discover those skills; skip it and you will not know they exist or
+  that `skills_search` / `skills_read` have anything to offer.
+
   IMPORTANT: Respect existing structure and naming conventions.
   NEVER assume missing values - inspect the scene first.
   Do not destructively modify objects without confirmation.
