@@ -22,6 +22,20 @@ Targets
    * format:            Auto-format Python sources with autopep8.
    * readme_update:     Regenerate the tools listing in readme.rst.
 
+Dev install (no make needed - these just call the scripts below)
+   * install-dev:       Full plugin install: pip-install mcp + agent +
+                        mcp_ext into Blender's bundled Python AND build +
+                        install the add-on extension into Blender.
+                        Override discovery with BLENDER_PYTHON
+                        (interpreter path) or BLENDER_BIN (Blender binary).
+   * uninstall-dev:     Remove the packages and the add-on again.
+
+     Without make:      Linux / macOS / WSL2:  ./scripts/install.sh
+                        Windows PowerShell:    scripts\install.ps1
+                        Both take --uninstall / -Uninstall,
+                        --packages-only / -PackagesOnly,
+                        --extension-only / -ExtensionOnly.
+
 Static Source Code Checking
    * check_license:   Verify SPDX headers in all Python files.
    * check_ascii:     Reject non-ASCII characters in sources.
@@ -108,6 +122,15 @@ format:
 	@for d in mcp addon _misc tests chat_client; do \
 		autopep8 --in-place --recursive $$d || exit 1; \
 	done
+
+# The actual logic lives in scripts/install.sh (and scripts/install.ps1
+# for native Windows) so people WITHOUT make can run those directly; the
+# make targets are thin aliases.
+install-dev:
+	@bash scripts/install.sh
+
+uninstall-dev:
+	@bash scripts/install.sh --uninstall
 
 check_license:
 	@$(PYTHON) _misc/check_license.py

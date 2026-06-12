@@ -5,3 +5,6 @@ build/
 *.mcpb
 ext/
 .devcontainer/typings/
+
+# Extension build output (scripts/install.*)
+/dist/
