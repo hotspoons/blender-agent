@@ -52,9 +52,20 @@
   re-rooting); NEW rig_chain (ordered parts, ball/hinge, auto-bridging,
   composes into existing armatures); inspect routes (appendage detection,
   gap report, ranked suggestions with params); E_NO_DEFORM_GROUPS closes
-  the silent unskinned-rig hole; cartoon_spider corpus + 16 tests (suite
-  114). Validated live on the original failing scene: 28 joints, verify
-  green, posed render confirmed.
+  the silent unskinned-rig hole. Validated live on the original failing
+  scene: 28 joints, verify green, posed render confirmed.
+
+- **Generalized the legged-creature corpus (2026-06-12)** — the exact
+  `cartoon_spider()` asset (and the spider-named test file) were
+  overfit to the "cartoon spider walk cycle" eval prompt: a memorised
+  configuration baked into code with hardcoded ground truth. Replaced
+  by a parametric `corpus.legged_creature(n_legs, leg_segments,
+  leg_clearance, detail=...)` generator that builds ANY radial creature
+  (arachnid/crab/hexapod/quadruped), with `truth` computed from the
+  params. `test_skill_legged.py` exercises the appendage/assembly path
+  across a family of configs (4/6/8 legs, 2/3 segments, with/without a
+  floating head) so a fix has to hold for the family, not one creature.
+  No exact creature configuration lives in code. Suite 118, green.
 
 ## Next / open
 - rig_creature_rigify (variable leg count via programmatic metarig

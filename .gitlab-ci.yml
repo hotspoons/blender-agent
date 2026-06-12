@@ -11,7 +11,7 @@ workflow:
 
 variables:
   NAMESPACE: patapsco.ai
-  COMPONENT: blender-mcp
+  COMPONENT: blender-agent
   VERSION: 0.1.0
 
 stages:
@@ -24,7 +24,7 @@ stages:
 # cache) and `build-manifest` (multi-arch manifest-tool push). It defaults to
 # image-name=$CI_PROJECT_NAME, dockerfile=$CI_PROJECT_DIR/Dockerfile,
 # context=$CI_PROJECT_DIR - all correct for this repo (project slug
-# `blender-mcp`, Dockerfile at the root), so no overrides needed.
+# `blender-agent`, Dockerfile at the root), so no overrides needed.
 include:
   - component: $CI_SERVER_FQDN/$CICD_PIPELINE_RESOURCES/cicd-components/simple-version@v1
     inputs:
@@ -41,7 +41,7 @@ set-version:
 # -- Helm chart ---------------------------------------------------------------
 #
 # build-chart / distribute-chart are provided by the helm components and
-# auto-pick `charts/$CI_PROJECT_NAME` (charts/blender-mcp here). We only declare
+# auto-pick `charts/$CI_PROJECT_NAME` (charts/blender-agent here). We only declare
 # needs: so they wait on the docker manifest (chart appVersion tracks the image
 # tag).
 

@@ -2,9 +2,9 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ printf "%s-data" (include "blender-mcp.fullname" .) }}
+  name: {{ printf "%s-data" (include "blender-agent.fullname" .) }}
   labels:
-    {{- include "blender-mcp.labels" . | nindent 4 }}
+    {{- include "blender-agent.labels" . | nindent 4 }}
 spec:
   accessModes:
     {{- toYaml .Values.persistence.accessModes | nindent 4 }}

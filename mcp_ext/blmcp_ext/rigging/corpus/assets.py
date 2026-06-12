@@ -3,13 +3,19 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Mechanical corpus assets. Each builder populates the current scene and
-returns a manifest: object names, intended skill, and ground-truth
-annotations (hinge axes, contact points) that tests assert against.
+Corpus assets. Each builder populates the current scene and returns a
+manifest: object names, intended skill, and ground-truth annotations
+(hinge axes, contact points) that tests assert against.
+
+Mechanical archetypes (door, wheel, piston, turret, lamp, crates) are
+minimal fixed primitives. Creatures are NOT - ``legged_creature`` is a
+parametric generator so the appendage/assembly path is exercised across
+arbitrary configurations rather than one memorised layout.
 """
 
 __all__ = (
     "CORPUS",
+    "legged_creature",
 )
 
 import math
@@ -255,70 +261,116 @@ def _cylinder_between(name: str, p0, p1, radius: float,
     return obj
 
 
-def cartoon_spider() -> dict:
+def legged_creature(
+        name: str = "Creature",
+        n_legs: int = 6,
+        leg_segments: int = 3,
+        body_radius: float = 0.55,
+        body_center=(0.0, 0.0, 1.0),
+        leg_clearance: float = 0.0,
+        segment_embed: float = 0.03,
+        base_segment_length: float = 0.55,
+        segment_taper: float = 0.85,
+        leg_radius: float = 0.06,
+        detail: "dict | None" = None,
+) -> dict:
     """
-    The production failure that motivated component bridging (2026-06-11):
-    a round body, 8 legs of 3 segments each — leg segments slightly
-    interpenetrate, but every leg clears the body by ~0.07 (modeled
-    clearance), and a "head" sphere floats far away. Zero of it touches
-    the body; all of it should still rig.
+    Build a radially-legged creature of ANY configuration — the general
+    test asset for the appendage/assembly path. It is deliberately
+    parametric so a single builder covers a spider (8 legs, 3 segments),
+    a crab (8 legs, 2 segments, wide stance), a hexapod ant (6 legs +
+    floating head), a quadruped of disjoint limbs, and so on. There is
+    no single canonical creature baked into the code.
+
+    Geometry model (all derived from the parameters):
+
+    - A spherical *body* at ``body_center``.
+    - ``n_legs`` legs spaced evenly around the body's Z axis. Each leg is
+      a polyline of ``leg_segments`` capped cylinders that reaches out
+      and bends progressively downward. Consecutive segments overlap by
+      ``segment_embed`` (a real internal contact -> joint); the first
+      segment stands ``leg_clearance`` off the body surface (a modeled
+      gap -> needs bridging when > 0).
+    - An optional floating ``detail`` part (e.g. a head), given as
+      ``{"name": str, "radius": float, "offset": (x, y, z)}`` relative to
+      the body centre - never touches anything.
+
+    The returned ``truth`` is computed from the parameters (never
+    hardcoded), and exposes the generated object names so tests assert
+    general invariants rather than a memorised layout.
     """
-    body_center = Vector((0.0, 0.0, 1.0))
-    body_radius = 0.55
+    body_center = Vector(body_center)
+    down = Vector((0.0, 0.0, -1.0))
+
     bm = bmesh.new()
     bmesh.ops.create_uvsphere(bm, u_segments=24, v_segments=12, radius=body_radius)
-    mesh = bpy.data.meshes.new("SpiderBody")
+    mesh = bpy.data.meshes.new(name + "_Body")
     bm.to_mesh(mesh)
     bm.free()
-    body = bpy.data.objects.new("SpiderBody", mesh)
+    body_name = name + "_Body"
+    body = bpy.data.objects.new(body_name, mesh)
     body.location = body_center
     bpy.context.scene.collection.objects.link(body)
 
-    gap = 0.07
-    embed = 0.03  # consecutive leg segments interpenetrate by this much
-    objects = ["SpiderBody"]
-    for i in range(8):
-        theta = math.pi * (0.18 + 0.21 * (i % 4)) * (1 if i < 4 else -1)
+    objects = [body_name]
+    legs: "list[list[str]]" = []
+    for i in range(n_legs):
+        theta = 2.0 * math.pi * (i + 0.5) / n_legs
         radial = Vector((math.cos(theta), math.sin(theta), 0.0))
         attach = body_center + radial * body_radius
 
-        d_coxa = (radial + Vector((0, 0, -0.35))).normalized()
-        d_femur = (radial + Vector((0, 0, -1.4))).normalized()
-        d_tibia = (radial * 0.4 + Vector((0, 0, -1.0))).normalized()
+        leg_names: "list[str]" = []
+        prev_dir = None
+        cursor = attach + (radial + down * 0.4).normalized() * leg_clearance
+        for j in range(leg_segments):
+            # Blend each segment from mostly-outward to mostly-downward.
+            t = j / max(1, leg_segments - 1)
+            seg_dir = (radial * (1.0 - 0.7 * t) + down * (0.4 + 1.3 * t)).normalized()
+            length = base_segment_length * (segment_taper ** j)
+            start = cursor if prev_dir is None else cursor - prev_dir * segment_embed
+            end = start + seg_dir * length
+            seg_name = "{:s}_Leg{:d}_Seg{:d}".format(name, i, j)
+            _cylinder_between(seg_name, start, end, leg_radius * (segment_taper ** j))
+            leg_names.append(seg_name)
+            objects.append(seg_name)
+            cursor = end
+            prev_dir = seg_dir
+        legs.append(leg_names)
 
-        p0 = attach + d_coxa * gap
-        p1 = p0 + d_coxa * 0.45
-        p2 = p1 - d_coxa * embed
-        p3 = p2 + d_femur * 0.6
-        p4 = p3 - d_femur * embed
-        p5 = p4 + d_tibia * 0.7
-
-        prefix = "Leg{:d}_".format(i)
-        _cylinder_between(prefix + "Coxa", p0, p1, 0.06)
-        _cylinder_between(prefix + "Femur", p2, p3, 0.05)
-        _cylinder_between(prefix + "Tibia", p4, p5, 0.04)
-        objects += [prefix + "Coxa", prefix + "Femur", prefix + "Tibia"]
-
-    bm = bmesh.new()
-    bmesh.ops.create_uvsphere(bm, u_segments=12, v_segments=8, radius=0.15)
-    mesh = bpy.data.meshes.new("SpiderHead")
-    bm.to_mesh(mesh)
-    bm.free()
-    head = bpy.data.objects.new("SpiderHead", mesh)
-    head.location = body_center + Vector((0.0, 1.0, 0.9))
-    bpy.context.scene.collection.objects.link(head)
-    objects.append("SpiderHead")
+    detail_name = None
+    if detail:
+        detail_name = "{:s}_{:s}".format(name, detail.get("name", "Detail"))
+        bm = bmesh.new()
+        bmesh.ops.create_uvsphere(bm, u_segments=12, v_segments=8,
+                                  radius=detail.get("radius", 0.15))
+        mesh = bpy.data.meshes.new(detail_name)
+        bm.to_mesh(mesh)
+        bm.free()
+        part = bpy.data.objects.new(detail_name, mesh)
+        part.location = body_center + Vector(detail.get("offset", (0.0, 1.0, 0.9)))
+        bpy.context.scene.collection.objects.link(part)
+        objects.append(detail_name)
 
     bpy.context.view_layer.update()
     return {
         "objects": objects,
         "skill": "rig_rigid_assembly",
+        "params": {
+            "n_legs": n_legs,
+            "leg_segments": leg_segments,
+            "leg_clearance": leg_clearance,
+        },
         "truth": {
-            "n_parts": 26,
-            "n_legs": 8,
-            "body_leg_gap": gap,
-            "leg_internal_joints": 16,
-            "head_gap_at_least": 0.4,
+            "n_parts": len(objects),
+            "n_legs": n_legs,
+            "leg_segments": leg_segments,
+            "body_leg_gap": leg_clearance,
+            "leg_internal_joints": n_legs * (leg_segments - 1),
+            "has_detail": bool(detail),
+            "body": body_name,
+            "legs": legs,
+            "first_segments": [leg[0] for leg in legs],
+            "detail": detail_name,
         },
     }
 
@@ -333,5 +385,4 @@ CORPUS = {
     "desk_lamp": desk_lamp,
     "desk_lamp_single_mesh": desk_lamp_single_mesh,
     "crate_stack": crate_stack,
-    "cartoon_spider": cartoon_spider,
 }

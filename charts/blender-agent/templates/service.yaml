@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "blender-mcp.fullname" . }}
+  name: {{ include "blender-agent.fullname" . }}
   labels:
-    {{- include "blender-mcp.labels" . | nindent 4 }}
+    {{- include "blender-agent.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
   selector:
-    {{- include "blender-mcp.selectorLabels" . | nindent 4 }}
+    {{- include "blender-agent.selectorLabels" . | nindent 4 }}
   ports:
     - name: http
       port: {{ .Values.service.port }}

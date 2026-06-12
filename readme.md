@@ -1,18 +1,49 @@
-# Blender MCP
+# Blender Agent
 
 ## Overview
 
-A lightweight MCP (Model Context Protocol) server for Blender.
-It offers a natural language interface with Blender's Python API,
-improving access to documentation, and allowing users to explore
-and understand complex setups.
+**Blender Agent** builds on Blender's official MCP (Model Context
+Protocol) server, adding an autonomous web agent, an in-core skills
+library, optional tool extensions for advanced workflows (rigging,
+animation), and container/Helm deployment - while keeping the original
+MCP tool surface intact and usable on its own.
 
-Read the documentation at [blender.org/lab/mcp-server](https://www.blender.org/lab/mcp-server/)
+It is a fork of the upstream
+[Blender MCP server](https://www.blender.org/lab/mcp-server/)
+([projects.blender.org/lab/blender_mcp](https://projects.blender.org/lab/blender_mcp));
+the core MCP server and add-on below are upstream's, documented at
+[blender.org/lab/mcp-server](https://www.blender.org/lab/mcp-server/).
+
+### What this adds over upstream Blender MCP
+
+- **Web Agent** (`agent/`, package `blender-mcp-agent`) - a
+  conversational agent that drives Blender through the same tools:
+  sessions with transcripts, a confirmation gate for destructive
+  actions, media artifacts, context compaction, and a choice of LLM
+  backend - any OpenAI-compatible endpoint **or** an in-browser model
+  (Transformers.js / WebLLM on WebGPU, no server-side GPU needed). It
+  also exposes an OpenAI-compatible `/v1/chat/completions` API for
+  headless clients, and can run **standalone**: with no Blender in
+  front of it, it spawns its own headless Blender as the compute
+  surface (with a process-tree recursion guard). See [agent/readme.md](agent/readme.md).
+- **Skills in the core MCP tools** - a searchable playbook library
+  exposed as `skills_list` / `skills_search` / `skills_read` plus a
+  `welcome` tool that primes a client with working instructions.
+  Skills use the Anthropic `SKILL.md` layout and are sourced from
+  built-ins, a drop folder, configured git repos, and tool extensions.
+- **Tools extensions** (`mcp_ext/`, package `blender-mcp-extensions`) -
+  an optional add-on collection that self-registers extra MCP tools and
+  bundles matching skills. The first extension is a deterministic
+  **rigging/animation** toolset (perception queries, rig standards,
+  validation, Rigify wrappers).
+- **Deployment** - a `Dockerfile` that bundles a headless Blender, a
+  Helm chart at [charts/blender-agent](charts/blender-agent/), and a
+  `make install-dev` that installs all three packages into Blender's
+  bundled Python (Linux/macOS/Windows).
 
 ----
 
-The project is deliberately small, maintainable, and does no more than
-necessary. It has two components that communicate over a TCP socket:
+At its core it has two components that communicate over a TCP socket:
 
 - A **Blender add-on** that runs inside Blender and executes requests.
 - An **MCP server** that runs as a separate process, launched by the
@@ -77,7 +108,8 @@ The data flow then becomes:
 MCP Client  ⇐ MCP/http ⇒  blender-mcp (127.0.0.1:10101)  ⇐ TCP socket ⇒  Blender Add-on
 ```
 
-Clients configured with a ``.mcp.json`` (e.g. Claude Code) connect with:
+Local MCP clients (e.g. Claude Code, Claude Desktop) connect with a
+``.mcp.json`` pointing at the **MCP port** (here ``10101``):
 
 ```json
 {
@@ -90,10 +122,28 @@ Clients configured with a ``.mcp.json`` (e.g. Claude Code) connect with:
 }
 ```
 
+or, with the Claude Code CLI:
+
+```
+claude mcp add --transport http blender http://127.0.0.1:10101
+```
+
 Notes:
 
-- The server binds to the loop-back interface by default and the
-  HTTP endpoint is stateless, so clients may connect, disconnect
+- **Mind which port.** When you run the Web Agent (below) it serves
+  two distinct ports: its browser UI (default ``10102``, for you) and
+  the MCP-over-HTTP endpoint (default ``10101``, for MCP clients). The
+  ``.mcp.json`` must point at the **MCP port**, not the UI port. The
+  TCP bridge port (``9876``) is internal plumbing between the server
+  and the add-on - never an MCP client target.
+- **Local only.** This endpoint binds to the loop-back interface, so
+  it is reachable from MCP clients on the same machine. Cloud/web
+  connectors (e.g. claude.ai custom connectors) run on Anthropic's
+  servers and cannot reach your ``127.0.0.1`` - they need a public
+  HTTPS URL (an ngrok/cloudflared tunnel in front of the port).
+  Running inside a container? Publish/forward the port to the host
+  (the dev container forwards ``9876``/``10101``/``10102``).
+- The HTTP endpoint is stateless, so clients may connect, disconnect
   and reconnect freely.
 - Browser-based clients (e.g. the llama.cpp web UI) are allowed by
   CORS only when served from this machine (``localhost`` origins).

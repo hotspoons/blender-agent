@@ -2,14 +2,14 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ include "blender-mcp.fullname" . }}
+  name: {{ include "blender-agent.fullname" . }}
   labels:
-    {{- include "blender-mcp.labels" . | nindent 4 }}
+    {{- include "blender-agent.labels" . | nindent 4 }}
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ include "blender-mcp.fullname" . }}
+    name: {{ include "blender-agent.fullname" . }}
   minReplicas: {{ .Values.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.maxReplicas }}
   metrics:

@@ -1,12 +1,12 @@
-# Default values for the blender-mcp (Blender Agent) chart.
+# Default values for the blender-agent (Blender Agent) chart.
 
 replicaCount: 1
 
 image:
-  # The docker-build CI component pushes to <registry>/<group>/blender-mcp.
+  # The docker-build CI component pushes to <registry>/<group>/blender-agent.
   # Override repository/tag at deploy time (CI's helm-distribute pins tag to
   # the built image).
-  repository: blender-mcp
+  repository: blender-agent
   pullPolicy: IfNotPresent
   tag: ""  # defaults to .Chart.AppVersion when empty
 

@@ -1,11 +1,11 @@
-{{ include "blender-mcp.fullname" . }} deployed.
+{{ include "blender-agent.fullname" . }} deployed.
 
 The Blender Agent serves its web UI and OpenAI-compatible chat-completions API
-on port {{ .Values.service.port }} (service "{{ include "blender-mcp.fullname" . }}").
+on port {{ .Values.service.port }} (service "{{ include "blender-agent.fullname" . }}").
 
 Reach it locally with:
 
-  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "blender-mcp.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "blender-agent.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
 
 {{- if .Values.agent.chatApi.enabled }}
 

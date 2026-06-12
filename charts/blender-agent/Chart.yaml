@@ -1,7 +1,7 @@
 apiVersion: v2
-name: blender-mcp
+name: blender-agent
 description: >-
-  Blender Agent - a web-based agent for Blender that drives the blender-mcp
+  Blender Agent - a web-based agent for Blender that drives the Blender MCP
   tool surface, exposes an OpenAI-compatible chat-completions API, and bundles
   a headless Blender as its own compute surface.
 type: application

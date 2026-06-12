@@ -66,11 +66,16 @@ FROM python:${PYTHON_VERSION}-slim-trixie AS runtime
 # amd64 runtime set, plus the windowing libs a from-source arm64 build wants).
 # The agent only ever launches Blender in --background, so no display server,
 # Vulkan/GL stack, or Weston is required.
+#
+# ffmpeg: headless agents render image sequences from Blender and stitch
+# them into a shareable video (the media_io tool's render/export verbs);
+# the `ffmpeg` CLI is the encoder for that.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libx11-6 libxi6 libxxf86vm1 libxfixes3 libxrender1 \
         libxrandr2 libxinerama1 libxcursor1 \
         libgl1 libegl1 libsm6 libxkbcommon0 libgomp1 \
+        ffmpeg \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

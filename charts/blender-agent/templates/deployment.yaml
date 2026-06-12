@@ -4,9 +4,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "blender-mcp.fullname" . }}
+  name: {{ include "blender-agent.fullname" . }}
   labels:
-    {{- include "blender-mcp.labels" . | nindent 4 }}
+    {{- include "blender-agent.labels" . | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
@@ -16,7 +16,7 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      {{- include "blender-mcp.selectorLabels" . | nindent 6 }}
+      {{- include "blender-agent.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       annotations:
@@ -24,7 +24,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "blender-mcp.selectorLabels" . | nindent 8 }}
+        {{- include "blender-agent.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -33,7 +33,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "blender-mcp.serviceAccountName" . }}
+      serviceAccountName: {{ include "blender-agent.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -82,14 +82,14 @@ spec:
             - name: BLENDER_AGENT_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.agent.llm.existingSecret | default (include "blender-mcp.secretName" .) }}
+                  name: {{ .Values.agent.llm.existingSecret | default (include "blender-agent.secretName" .) }}
                   key: {{ .Values.agent.llm.existingSecretKey }}
             {{- end }}
             {{- if or .Values.agent.chatApiKey.value .Values.agent.chatApiKey.existingSecret }}
             - name: BLENDER_AGENT_CHAT_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.agent.chatApiKey.existingSecret | default (include "blender-mcp.secretName" .) }}
+                  name: {{ .Values.agent.chatApiKey.existingSecret | default (include "blender-agent.secretName" .) }}
                   key: {{ .Values.agent.chatApiKey.existingSecretKey }}
             {{- end }}
             {{- with .Values.agent.extraEnv }}
@@ -108,7 +108,7 @@ spec:
         - name: data
           {{- if .Values.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "blender-mcp.fullname" .)) }}
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "blender-agent.fullname" .)) }}
           {{- else }}
           emptyDir: {}
           {{- end }}

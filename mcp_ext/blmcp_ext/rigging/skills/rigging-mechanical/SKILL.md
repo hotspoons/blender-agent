@@ -1,7 +1,7 @@
 ---
 name: rigging-mechanical
 description: Parameters and behavior of the mechanical rigging skills — rig_chain, rig_rigid_assembly, rig_hinge, rig_piston, rig_wheel, rig_turret — with worked rig() tool-call examples including gap bridging and chain composition.
-keywords: chain, limb, leg, arm, tail, tentacle, boom, spider, insect, robot, robotic, hinge, door, lid, jaw, joint, piston, cylinder, wheel, tire, gear, fan, propeller, turret, vehicle, car, airplane, landing gear, crane, excavator, linkage, assembly, parts
+keywords: chain, limb, leg, arm, tail, tentacle, boom, insect, arthropod, spider, crab, lobster, scorpion, ant, hexapod, robot, robotic, hinge, door, lid, jaw, joint, piston, cylinder, wheel, tire, gear, fan, propeller, turret, vehicle, car, airplane, landing gear, crane, excavator, linkage, assembly, parts
 aliases: [rig_chain, rig_rigid_assembly, rig_hinge, rig_piston, rig_wheel, rig_turret]
 ---
 

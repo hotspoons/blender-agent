@@ -1,7 +1,7 @@
 ---
 name: rigging-overview
 description: How to rig ANYTHING in Blender with the rig(verb, args) tool — creatures with any number of legs, vehicles, robots, props. Decision table, gap bridging, the diagnose/run/verify contract, and every failure code with its fix.
-keywords: rig, rigging, armature, skeleton, bones, skinning, weights, creature, animal, spider, insect, arthropod, monster, legs, limbs, character, vehicle, car, airplane, plane, robot, mech, machine, prop, animate, animation
+keywords: rig, rigging, armature, skeleton, bones, skinning, weights, creature, animal, insect, arthropod, spider, crab, lobster, scorpion, ant, centipede, hexapod, octopod, horse, quadruped, monster, legs, limbs, character, vehicle, car, airplane, plane, robot, mech, machine, prop, animate, animation
 aliases: [rig, rigging]
 ---
 
@@ -47,12 +47,16 @@ failure code — fall back to the step-by-step flow below.
 | symmetric standing humanoid | `rig_biped_rigify` |
 | symmetric four-legged character | `rig_quadruped_rigify` |
 
-**Multi-legged creatures (spiders, crabs, hexapod robots):**
-`rig_rigid_assembly` with `bridge_gaps` rigs the whole thing in one call —
-each leg chain keeps its internal joints and attaches to the body across
-modeled clearance gaps. For precise per-joint control instead, rig the
-body first, then each leg with `rig_chain` passing `armature` so all
-chains compose into ONE rig.
+**Multi-legged creatures — ANY number of legs, ANY segments per leg**
+(quadrupeds of disjoint limbs, hexapod ants, octopod spiders/crabs,
+many-legged centipedes, radial mechanisms): the approach is the same
+regardless of count. `rig_rigid_assembly` with `bridge_gaps` rigs the
+whole thing in one call — each leg chain keeps its internal joints and
+attaches to the body across modeled clearance gaps. For precise
+per-joint control instead, rig the body first, then each leg with
+`rig_chain` passing `armature` so all chains compose into ONE rig.
+Nothing about this is specialized to a particular creature; drive it
+from what `inspect` reports (leg count, gaps), not a fixed template.
 
 **Vehicles (cars, planes):** `rig_rigid_assembly` for the body/chassis,
 `rig_wheel` per wheel/propeller, `rig_hinge` for doors/control surfaces,

@@ -25,6 +25,7 @@ __all__ = (
     "is_available",
     "is_running",
     "launch_kind",
+    "port_listening",
     "running_ports",
     "start",
     "stop",
@@ -112,6 +113,26 @@ def launch_kind() -> str:
 
 def is_running() -> bool:
     return launch_kind() != ""
+
+
+def port_listening(host: str, port: int, timeout: float = 0.3) -> bool:
+    """
+    True when a TCP connection to *host:port* is accepted - a confirmed
+    listener, not just an intended port. Used to report the MCP HTTP
+    endpoint honestly (the agent runs on a background thread, so the
+    port being chosen does not guarantee the server bound).
+    """
+    if not port:
+        return False
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        sock.connect((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
 
 
 def start(

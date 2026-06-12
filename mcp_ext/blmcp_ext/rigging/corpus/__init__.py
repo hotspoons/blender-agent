@@ -10,9 +10,11 @@ Golden corpus: procedural asset generators (deterministic — no binary
 __all__ = (
     "CORPUS",
     "build",
+    "legged_creature",
 )
 
 from .assets import CORPUS as _MECHANICAL
+from .assets import legged_creature
 from .characters import CHARACTERS as _CHARACTERS
 
 CORPUS = {**_MECHANICAL, **_CHARACTERS}

@@ -1,5 +1,5 @@
 {
-	"name": "blender-mcp",
+	"name": "blender-agent",
 	"image": "mcr.microsoft.com/devcontainers/python:3.12",
 	"features": {
 		"ghcr.io/devcontainers/features/git:1": {},
@@ -10,6 +10,16 @@
 	"postCreateCommand": "bash .devcontainer/post-create.sh",
 	"containerEnv": {
 		"XDG_RUNTIME_DIR": "/tmp/xdg-runtime"
+	},
+	// Publish the server ports to the host so MCP clients (Claude
+	// Code/Desktop) and browsers on the host can reach a server started
+	// inside the container: 9876 = Blender MCP bridge, 10101 = MCP over
+	// HTTP, 10102 = agent web UI.
+	"forwardPorts": [9876, 10101, 10102],
+	"portsAttributes": {
+		"9876": { "label": "Blender MCP bridge" },
+		"10101": { "label": "MCP over HTTP" },
+		"10102": { "label": "Agent web UI", "onAutoForward": "openBrowserOnce" }
 	},
     "initializeCommand": "cmd.exe /c powershell -NoProfile -Command \"$ErrorActionPreference='SilentlyContinue'; New-Item -ItemType Directory -Force -Path $env:USERPROFILE\\.kube, $env:USERPROFILE\\.claude | Out-Null; if (!(Test-Path $env:USERPROFILE\\.claude.json)) { Set-Content -Path $env:USERPROFILE\\.claude.json -Value '{}' }\" || sh -c 'mkdir -p \"$HOME/.kube\" \"$HOME/.claude\" && touch \"$HOME/.claude.json\"'",
     

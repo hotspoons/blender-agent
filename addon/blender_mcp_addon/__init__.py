@@ -388,13 +388,24 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
                 box.operator("blmcp.agent_stop", icon="CANCEL")
                 box.operator("blmcp.agent_open", icon="URL")
                 box.label(
-                    text="Agent running at http://127.0.0.1:{:d}/".format(agent_port),
+                    text="Web UI (for you): http://127.0.0.1:{:d}/".format(agent_port),
                     icon="CHECKMARK")
                 if mcp_port:
-                    box.label(text="MCP over HTTP on port {:d} - .mcp.json for your client:".format(mcp_port))
+                    # The MCP endpoint is a SEPARATE port from the web UI -
+                    # point MCP clients here, not at the UI port. Confirm
+                    # it is actually accepting connections before claiming so.
+                    listening = agent_launch.port_listening("127.0.0.1", mcp_port)
+                    box.label(
+                        text="MCP endpoint (for tools): http://127.0.0.1:{:d}{:s}".format(
+                            mcp_port, "" if listening else "  (starting...)"),
+                        icon="CHECKMARK" if listening else "SORTTIME")
+                    box.label(text="Connect a LOCAL MCP client (Claude Code, Claude Desktop) - .mcp.json:")
                     for line in _mcp_json_snippet(mcp_port).splitlines():
                         box.label(text=line)
                     box.operator("blmcp.agent_copy_mcp_json", icon="COPYDOWN")
+                    box.label(
+                        text="Cloud connectors (claude.ai) can't reach localhost - use a public tunnel.",
+                        icon="INFO")
             else:
                 available, how = agent_launch.is_available()
                 if available:

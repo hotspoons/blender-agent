@@ -5,6 +5,14 @@
 # pinned Blender version so the Blender-backed tests run in-container.
 set -euo pipefail
 
+# System tools: ffmpeg lets the agent stitch Blender's rendered image
+# sequences into a shareable video (mirrors the runtime Dockerfile).
+if ! command -v ffmpeg >/dev/null 2>&1; then
+    sudo apt-get update \
+        && sudo apt-get install -y --no-install-recommends ffmpeg \
+        && sudo rm -rf /var/lib/apt/lists/*
+fi
+
 python -m pip install --upgrade pip
 
 # Install the MCP server package (editable) plus its runtime deps.
