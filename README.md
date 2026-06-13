@@ -333,18 +333,6 @@ the Blender add-on originate upstream; this project adds the agent harness,
 HTTP/API serving, in-browser LLMs, tool extensions, and deployment. Licensed
 GPL-3.0-or-later, matching upstream.
 
-The agentic layer was ported from **[Foyer Studio](https://github.com/hotspoons/foyer-studio)**,
-a web-native, remote-collaborative control surface for professional DAWs (audio
-production, Ardour backend). Lifted from Foyer's `foyer-agent` crate and `ui-core`
-and reshaped for Blender:
-
-- **the agent harness** — the runtime/engine turn loop, LLM transport, filesystem
-  session store, per-turn token budget, and the OpenAI-compatible chat-completions
-  proxy (`foyer-agent/src/{runtime,engine,llm,store,media}.rs` → `agent/blagent/`);
-- **the browser UI components** — the theme system, the rendered (non-native)
-  widget library, the client-side store + control-plane WebSocket, and markdown
-  rendering (`ui-core/` → `agent/blagent/web/core/`);
-- **tooling design** — the tool registry/abstractions and the **skills registry**
-  (Foyer's markdown `skills_seed` → the SKILL.md skills subsystem here).
-
-If you work with audio, go check out Foyer Studio.
+The agentic layer (agent harness, chat-API proxy, browser UI, and skills registry)
+was ported from [Foyer Studio](https://github.com/hotspoons/foyer-studio) and reshaped
+for Blender.
