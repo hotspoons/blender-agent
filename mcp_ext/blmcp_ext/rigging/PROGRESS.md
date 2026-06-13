@@ -89,6 +89,47 @@
   depsgraph acceptance numbers). Corpus: humanoid_parts (+_bighand);
   tests: test_skill_multipart.py; evals: 2 selection scenarios.
 
+- **Weights / pose / anim tool families (2026-06-13)** — three new
+  polymorphic MCP tools beside `rig`, same verb-router shape, registered
+  in tools.py; ops live in blrig/skills/{weight,pose,anim}_ops.py, each
+  exposing `dispatch(verb, args)`:
+  * `weights`: inspect (coverage + L/R balance + bones-without-group),
+    transfer (wraps _proxy.transfer_weights), mirror (NEW directional
+    kdtree mirror across perception.symmetry_plane / explicit center_x,
+    flips .L/.R group names, keeps the midline-margin blend), clean
+    (prune/limit-total/normalize/drop-empty via vgroup ops, keep_single
+    guard), smooth (vertex_group_smooth w/ WEIGHT_PAINT fallback), bind
+    (wraps _proxy.bind_to_rig; REFUSES unweighted meshes by default —
+    E_NO_DEFORM_GROUPS hole stays closed), validate. Mutators:
+    scene-snapshot rollback, failures.jsonl.
+  * `pose`: get/set (globs; rotation_deg CONVERTED to the bone's real
+    rotation_mode, never dropped), mirror (paste-flipped channel math),
+    reset (subset), ik_fk (Rigify switch + matrix snap via the ORG
+    chain, geometric pole placement, snap_drift reported), named poses
+    (JSON id-prop). Cheap pose-state capture/restore instead of scene
+    snapshots. The EDIT-mode freeze + IK_FK capture bugs are now
+    guarded in the shared path (`_bones.ensure_object_mode`, promoted
+    from _character).
+  * `anim`: inspect (layered channelbag API encoded once —
+    action_fcurves()), keyframe (bulk bones x frames), cycle
+    (PARAMETRIC phase-offset oscillators: bones/axis/amplitude/phase/
+    phase_step/frequency/offset; seamless wrap by construction; NO
+    named-gait library anywhere), loop (pin end keys + CYCLES mods),
+    bake (anim_utils.bake_action visual keying; PoseBone.select — 5.x
+    removed Bone.select), actions (new/assign/push_nla/...), clear.
+    Probe-at-quarter-period lesson: every sin channel is ZERO at the
+    half period — probing start vs start+frames/2 reads a healthy
+    cycle as static.
+  Skills: weight-painting, posing, animating-at-scale (cross-links
+  animating-basics, doesn't fork it); rigging-overview routes the
+  families. Tests: test_{weight,pose,anim}_ops.py (37 new; suite 163
+  green all tiers); repo tests green, tool-listing snapshot
+  regenerated (103). Evals: 10 new tool-family scenarios (chain =
+  tool name, verb in param_checks); blind selection run on all 10
+  (fresh sonnet agents, routing surface only): 10/10. Param lessons
+  folded back into code, not descriptions: axis now accepts
+  "X"/0|1|2, non-integer frequency rounds (can't wrap seamlessly).
+
 ## Next / open
 - rig_creature_rigify (variable leg count via programmatic metarig
   assembly from Rigify limb samples) — deferred; mechanical path (assembly

@@ -269,10 +269,11 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     )
 
     use_agent: BoolProperty(  # type: ignore[valid-type]
-        name="Enable Agent",
+        name="Enable Web Agent (UI)",
         description=(
-            "Enable the built-in web agent: a browser UI driving this Blender "
+            "Run the built-in web agent: a browser UI driving this Blender "
             "instance through the MCP tool surface.\n"
+            "Independent of 'Serve MCP over HTTP' - enable either or both.\n"
             "Adds a launcher entry to the Window menu"
         ),
         default=False,
@@ -287,8 +288,9 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
     agent_use_mcp: BoolProperty(  # type: ignore[valid-type]
         name="Serve MCP over HTTP",
         description=(
-            "Also expose the tools as a streamable-HTTP MCP server, so external "
-            "MCP clients (e.g. Claude Code) can connect with the .mcp.json shown below"
+            "Expose the tools as a streamable-HTTP MCP server so external MCP "
+            "clients (e.g. Claude Code) can connect with the .mcp.json shown below.\n"
+            "Independent of the Web Agent UI - enable either or both"
         ),
         default=False,
     )
@@ -335,6 +337,94 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         del context
         layout = self.layout
 
+        # -------------------------------------------------------------
+        # MCP Bridge UI intentionally HIDDEN. The bridge (port 9876) is an
+        # internal transport that auto-starts; its tuning knobs confused more
+        # than they clarified, so the whole box is deprecated. The settings
+        # live on as properties (their defaults drive auto-start) and the
+        # original UI is preserved in `_draw_bridge_box_deprecated` below for
+        # anyone who needs to bring it back. Only a hard auto-start failure
+        # still surfaces - so a healthy bridge is invisible, a broken one isn't.
+        if _State.autostart_error:
+            layout.label(text="MCP bridge: {:s}".format(_State.autostart_error), icon="ERROR")
+
+        # -------------------------------------------------------------
+        # Skills library.
+
+        box = layout.box()
+        box.label(text="Skills Library", icon="ASSET_MANAGER")
+        box.prop(self, "skills_dir")
+        box.prop(self, "skills_repos")
+        box.label(text="Indexed on MCP server startup; agents refresh via skills_list(refresh=True)")
+
+        # -------------------------------------------------------------
+        # Web Agent UI and MCP-over-HTTP: two INDEPENDENT services, either
+        # or both. They are served by one background process, so a single
+        # Start/Stop drives whichever toggles are on.
+
+        from . import agent_launch
+
+        box = layout.box()
+        box.label(text="Web Agent & MCP", icon="WORLD")
+
+        box.prop(self, "use_agent")
+        if self.use_agent:
+            row = box.row()
+            row.prop(self, "agent_port")
+            row.prop(self, "agent_open_browser")
+
+        box.prop(self, "agent_use_mcp")
+        if self.agent_use_mcp:
+            box.prop(self, "agent_mcp_port")
+
+        running = agent_launch.is_running()
+        agent_port, mcp_port = agent_launch.running_ports() if running else (0, 0)
+
+        if not (self.use_agent or self.agent_use_mcp):
+            box.label(text="Enable the Web Agent UI and/or Serve MCP over HTTP above.", icon="INFO")
+        elif running:
+            box.operator("blmcp.agent_stop", icon="CANCEL")
+            if agent_port:
+                box.operator("blmcp.agent_open", icon="URL")
+                box.label(
+                    text="Web UI (for you): http://127.0.0.1:{:d}/".format(agent_port),
+                    icon="CHECKMARK")
+        else:
+            available, how = agent_launch.is_available()
+            if available:
+                box.operator("blmcp.agent_start", icon="PLAY")
+                box.label(text="Launch mode: {:s}".format(how))
+            else:
+                box.label(text=how, icon="ERROR")
+
+        # The .mcp.json is shown whenever MCP-over-HTTP is enabled - before
+        # start (so you can configure your client first) and after (with the
+        # actual bound port, which may differ if the preferred one was taken).
+        if self.agent_use_mcp:
+            shown_mcp = mcp_port or self.agent_mcp_port
+            if mcp_port:
+                listening = agent_launch.port_listening("127.0.0.1", mcp_port)
+                box.label(
+                    text="MCP endpoint (for tools): http://127.0.0.1:{:d}{:s}".format(
+                        mcp_port, "" if listening else "  (starting...)"),
+                    icon="CHECKMARK" if listening else "SORTTIME")
+            box.label(text="Connect a LOCAL MCP client (Claude Code, Claude Desktop) - .mcp.json:")
+            for line in _mcp_json_snippet(shown_mcp).splitlines():
+                box.label(text=line)
+            box.operator("blmcp.agent_copy_mcp_json", icon="COPYDOWN")
+            box.label(
+                text="Cloud connectors (claude.ai) can't reach localhost - use a public tunnel.",
+                icon="INFO")
+
+        if _State.agent_error:
+            box.label(text=_State.agent_error, icon="ERROR")
+
+    def _draw_bridge_box_deprecated(self, layout: bpy.types.UILayout) -> None:
+        """
+        The original 'MCP Bridge' preferences box. DEPRECATED and no longer
+        drawn (the bridge auto-starts; its knobs confused users). Preserved
+        verbatim - call this from ``draw`` to restore the section.
+        """
         box = layout.box()
         box.label(text="MCP Bridge", icon="PLUGIN")
         box.prop(self, "host")
@@ -357,65 +447,6 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
         if _State.autostart_error:
             box.label(text=_State.autostart_error, icon="ERROR")
-
-        # -------------------------------------------------------------
-        # Skills library.
-
-        box = layout.box()
-        box.label(text="Skills Library", icon="ASSET_MANAGER")
-        box.prop(self, "skills_dir")
-        box.prop(self, "skills_repos")
-        box.label(text="Indexed on MCP server startup; agents refresh via skills_list(refresh=True)")
-
-        # -------------------------------------------------------------
-        # Web agent (optional).
-
-        from . import agent_launch
-
-        box = layout.box()
-        box.label(text="Web Agent", icon="WORLD")
-        box.prop(self, "use_agent")
-        if self.use_agent:
-            row = box.row()
-            row.prop(self, "agent_port")
-            row.prop(self, "agent_open_browser")
-            box.prop(self, "agent_use_mcp")
-            if self.agent_use_mcp:
-                box.prop(self, "agent_mcp_port")
-
-            if agent_launch.is_running():
-                agent_port, mcp_port = agent_launch.running_ports()
-                box.operator("blmcp.agent_stop", icon="CANCEL")
-                box.operator("blmcp.agent_open", icon="URL")
-                box.label(
-                    text="Web UI (for you): http://127.0.0.1:{:d}/".format(agent_port),
-                    icon="CHECKMARK")
-                if mcp_port:
-                    # The MCP endpoint is a SEPARATE port from the web UI -
-                    # point MCP clients here, not at the UI port. Confirm
-                    # it is actually accepting connections before claiming so.
-                    listening = agent_launch.port_listening("127.0.0.1", mcp_port)
-                    box.label(
-                        text="MCP endpoint (for tools): http://127.0.0.1:{:d}{:s}".format(
-                            mcp_port, "" if listening else "  (starting...)"),
-                        icon="CHECKMARK" if listening else "SORTTIME")
-                    box.label(text="Connect a LOCAL MCP client (Claude Code, Claude Desktop) - .mcp.json:")
-                    for line in _mcp_json_snippet(mcp_port).splitlines():
-                        box.label(text=line)
-                    box.operator("blmcp.agent_copy_mcp_json", icon="COPYDOWN")
-                    box.label(
-                        text="Cloud connectors (claude.ai) can't reach localhost - use a public tunnel.",
-                        icon="INFO")
-            else:
-                available, how = agent_launch.is_available()
-                if available:
-                    box.operator("blmcp.agent_start", icon="PLAY")
-                    box.label(text="Launch mode: {:s}".format(how))
-                else:
-                    box.label(text=how, icon="ERROR")
-
-            if _State.agent_error:
-                box.label(text=_State.agent_error, icon="ERROR")
 
 
 class _BLMCP_OT_server_start(bpy.types.Operator):  # type: ignore[misc]
@@ -509,8 +540,16 @@ class _BLMCP_OT_agent_start(bpy.types.Operator):  # type: ignore[misc]
         prefs = context.preferences.addons[__package__].preferences
         _State.agent_error = ""
 
-        # The agent's tools execute through the TCP bridge - make sure
-        # it is up first (same path as the user clicking Start).
+        # The Web Agent UI and MCP over HTTP are independent; serve whichever
+        # are enabled. At least one must be on.
+        ui_port = prefs.agent_port if prefs.use_agent else None
+        mcp_port = prefs.agent_mcp_port if prefs.agent_use_mcp else None
+        if ui_port is None and mcp_port is None:
+            self.report({"ERROR"}, "Enable the Web Agent UI and/or Serve MCP over HTTP first")
+            return {"CANCELLED"}
+
+        # Both services' tools execute through the TCP bridge - make sure
+        # it is up first (auto-start usually has it running already).
         if not mcp_to_blender_server.is_running():
             try:
                 bpy.ops.blmcp.server_start()
@@ -523,8 +562,8 @@ class _BLMCP_OT_agent_start(bpy.types.Operator):  # type: ignore[misc]
         try:
             kind = agent_launch.start(
                 host="127.0.0.1",
-                port=prefs.agent_port,
-                mcp_port=prefs.agent_mcp_port if prefs.agent_use_mcp else None,
+                port=ui_port,
+                mcp_port=mcp_port,
                 bridge_host=prefs.host,
                 bridge_port=_State.bridge_port_actual or prefs.port,
                 title=_instance_title(),
@@ -535,14 +574,14 @@ class _BLMCP_OT_agent_start(bpy.types.Operator):  # type: ignore[misc]
             return {"CANCELLED"}
 
         agent_port, _mcp_port = agent_launch.running_ports()
-        if prefs.agent_open_browser:
+        if prefs.use_agent and prefs.agent_open_browser and agent_port:
             # Give the server a moment to bind before the browser hits it.
             url = "http://127.0.0.1:{:d}/".format(agent_port)
             bpy.app.timers.register(
                 lambda: bpy.ops.wm.url_open(url=url) and None,
                 first_interval=1.0,
             )
-        self.report({"INFO"}, "Agent started ({:s}) on port {:d}".format(kind, agent_port))
+        self.report({"INFO"}, "Started ({:s})".format(kind))
         return {"FINISHED"}
 
 
@@ -575,9 +614,12 @@ class _BLMCP_OT_agent_open(bpy.types.Operator):  # type: ignore[misc]
                 return {"CANCELLED"}
             # agent_start already opens the browser when configured.
             prefs = context.preferences.addons[__package__].preferences
-            if prefs.agent_open_browser:
+            if prefs.use_agent and prefs.agent_open_browser:
                 return {"FINISHED"}
         agent_port, _mcp_port = agent_launch.running_ports()
+        if not agent_port:
+            self.report({"INFO"}, "Web UI is disabled (serving MCP over HTTP only)")
+            return {"CANCELLED"}
         bpy.ops.wm.url_open(url="http://127.0.0.1:{:d}/".format(agent_port))
         return {"FINISHED"}
 

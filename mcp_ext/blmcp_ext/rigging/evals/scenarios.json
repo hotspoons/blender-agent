@@ -1,5 +1,5 @@
 {
-  "description": "Agent skill-selection scenarios: natural-language rigging requests x corpus assets, scored on correct skill chain + sane params. When these fail but the skills pass their own tests, fix the skill DESCRIPTIONS (the tuned surface), not the code. Track the two failure modes separately.",
+  "description": "Agent selection scenarios: natural-language requests x corpus assets, scored on correct routing + sane params. Rig-building scenarios expect a skill chain (e.g. ['rig_hinge']); weights/pose/anim scenarios expect the TOOL FAMILY in the chain (e.g. ['weights']) with the chosen verb recorded in params as 'verb'. Scenarios with a 'setup' field assume the asset was already rigged (by its manifest skill) before the request. When these fail but the ops pass their own tests, fix the tool/skill DESCRIPTIONS (the tuned surface), not the code. Track the two failure modes separately.",
   "scenarios": [
     {
       "id": "door-basic",
@@ -108,6 +108,91 @@
       "request": "Bipedal rig for this man please, one arm has a giant hand. Make no mistakes.",
       "expected_chain": ["rig_biped_multipart"],
       "notes": "One-sided appendage: bbox-centered fits skew sideways; rig_biped_multipart symmetrizes across the bilateral-parts midline."
+    },
+    {
+      "id": "weights-fix-one-side",
+      "asset": "humanoid",
+      "setup": "rigged",
+      "request": "When I rotate the character's left arm, the mesh on that side stays behind — the right side follows the bones fine. Fix the left side.",
+      "expected_chain": ["weights"],
+      "param_checks": {"verb": "mirror"},
+      "notes": "One working side + one broken side = directional weight mirror (from the good side), not re-rigging."
+    },
+    {
+      "id": "weights-clothes-follow",
+      "asset": "humanoid",
+      "setup": "rigged",
+      "request": "I added a jacket mesh over my rigged character. Make the jacket deform with the body like the skin does.",
+      "expected_chain": ["weights"],
+      "param_checks": {"verb": "transfer"},
+      "notes": "Transfer from the body mesh, then bind; selecting transfer (not bind alone, not rig) is the point."
+    },
+    {
+      "id": "weights-influence-limit",
+      "asset": "humanoid",
+      "setup": "rigged",
+      "request": "My game engine only supports 4 bone influences per vertex and the export warns about unnormalized weights. Clean this model up.",
+      "expected_chain": ["weights"],
+      "param_checks": {"verb": "clean", "limit": 4}
+    },
+    {
+      "id": "pose-wave",
+      "asset": "humanoid",
+      "setup": "rigged",
+      "request": "Pose him waving — right arm raised, hand up.",
+      "expected_chain": ["pose"],
+      "param_checks": {"verb": "set"},
+      "notes": "A static pose, not an animation; anim would be over-selection unless the user asks for motion."
+    },
+    {
+      "id": "pose-mirror-side",
+      "asset": "humanoid",
+      "setup": "rigged",
+      "request": "I posed the left leg exactly how I want it. Make the right leg match it symmetrically.",
+      "expected_chain": ["pose"],
+      "param_checks": {"verb": "mirror", "from_side": "L"}
+    },
+    {
+      "id": "pose-ikfk-switch",
+      "asset": "humanoid",
+      "setup": "rigged",
+      "request": "Switch the arms from IK to FK for animating arcs, but keep the current pose exactly — nothing should jump.",
+      "expected_chain": ["pose"],
+      "param_checks": {"verb": "ik_fk", "to": "fk"}
+    },
+    {
+      "id": "anim-idle-loop",
+      "asset": "humanoid",
+      "setup": "rigged",
+      "request": "Give him a gentle looping idle — subtle breathing and sway, nothing dramatic.",
+      "expected_chain": ["anim"],
+      "param_checks": {"verb": "cycle"},
+      "notes": "Small-amplitude parametric cycle; params are the agent's choice, only the verb is checked."
+    },
+    {
+      "id": "anim-quadruped-walk",
+      "asset": "quadruped",
+      "setup": "rigged",
+      "request": "Animate this four-legged creature walking in place, looping seamlessly.",
+      "expected_chain": ["anim"],
+      "param_checks": {"verb": "cycle"},
+      "notes": "Gait = phase relationships (diagonal pairs anti-phase); any reasonable amplitudes pass."
+    },
+    {
+      "id": "anim-loop-pop",
+      "asset": "humanoid",
+      "setup": "rigged+animated",
+      "request": "My animation pops back to the start when it repeats. Make it loop cleanly.",
+      "expected_chain": ["anim"],
+      "param_checks": {"verb": "loop"}
+    },
+    {
+      "id": "anim-bake-export",
+      "asset": "humanoid",
+      "setup": "rigged+animated",
+      "request": "Bake the IK animation down to plain keyframes on the bones so I can export it to a game engine.",
+      "expected_chain": ["anim"],
+      "param_checks": {"verb": "bake"}
     }
   ]
 }

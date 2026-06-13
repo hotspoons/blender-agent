@@ -184,15 +184,19 @@ def sync_repo(url: str) -> tuple[str | None, str | None]:
     """
     checkout = _repo_cache_dir(url)
     try:
+        # Windows: keep git from flashing a console window on each sync.
+        no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         if os.path.isdir(os.path.join(checkout, ".git")):
             subprocess.run(
                 ["git", "-C", checkout, "pull", "--ff-only", "--quiet"],
-                check=True, capture_output=True, timeout=_GIT_TIMEOUT)
+                check=True, capture_output=True, timeout=_GIT_TIMEOUT,
+                creationflags=no_window)
         else:
             os.makedirs(os.path.dirname(checkout), exist_ok=True)
             subprocess.run(
                 ["git", "clone", "--depth", "1", "--quiet", url, checkout],
-                check=True, capture_output=True, timeout=_GIT_TIMEOUT)
+                check=True, capture_output=True, timeout=_GIT_TIMEOUT,
+                creationflags=no_window)
         return checkout, None
     except subprocess.CalledProcessError as ex:
         error = (ex.stderr or b"").decode("utf-8", "replace").strip() or str(ex)

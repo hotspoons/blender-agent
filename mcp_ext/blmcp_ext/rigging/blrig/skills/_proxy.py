@@ -221,6 +221,9 @@ def build_fused_proxy(objects, name: str, voxel_size: float,
     bpy.ops.object.join()
     proxy = bpy.context.view_layer.objects.active
     proxy.name = name
+    # join() leaves the merged mesh-data named after the last active object
+    # (e.g. "Cone.002") - rename it so debug/inspect output is legible.
+    proxy.data.name = name + "_mesh"
     # Bake world transforms so proxy-local == world for all later math.
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
 
@@ -315,7 +318,7 @@ def bind_to_rig(target, rig, rollback=None) -> None:
 
 
 def strip_cross_side_leg_weights(target, rig, margin: float,
-                                 center_x: float = 0.0) -> int:
+                                 center_x: float = 0.0, leg_stems=None) -> int:
     """
     Zero .L leg-chain weights on clearly right-side verts and vice versa,
     then renormalize. *margin* is the half-width of the midline dead zone
@@ -325,13 +328,14 @@ def strip_cross_side_leg_weights(target, rig, margin: float,
     dragging with the other foot — size it to the real gap between the
     legs (about 2x the proxy voxel works in practice).
     """
+    stems = tuple(leg_stems) if leg_stems is not None else _LEG_GROUP_STEMS
     leg_groups: dict[str, set[int]] = {"L": set(), "R": set()}
     for group in target.vertex_groups:
         bone = rig.data.bones.get(group.name)
         if bone is None or not bone.use_deform:
             continue
         stem = group.name.removeprefix("DEF-").split(".")[0]
-        if stem in _LEG_GROUP_STEMS:
+        if stem in stems:
             if group.name.endswith((".L", ".L.001", ".L.002")):
                 leg_groups["L"].add(group.index)
             elif group.name.endswith((".R", ".R.001", ".R.002")):

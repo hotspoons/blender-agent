@@ -35,6 +35,7 @@ _SKILLS = {
     "rig_biped_rigify": "blrig.skills.rig_biped_rigify",
     "rig_biped_multipart": "blrig.skills.rig_biped_multipart",
     "rig_quadruped_rigify": "blrig.skills.rig_quadruped_rigify",
+    "rig_quadruped_multipart": "blrig.skills.rig_quadruped_multipart",
 }
 
 

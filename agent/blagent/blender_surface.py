@@ -94,6 +94,7 @@ def _proc_parent_and_name(pid: int) -> "tuple[int, str] | None":
         out = subprocess.run(
             ["ps", "-o", "ppid=,comm=", "-p", str(pid)],
             capture_output=True, text=True, timeout=2.0, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return None
@@ -233,7 +234,10 @@ class BlenderSurface:
         _log.info("spawning Blender compute surface: %s", " ".join(argv))
         try:
             # pylint: disable-next=consider-using-with
-            self.proc = subprocess.Popen(argv)
+            self.proc = subprocess.Popen(
+                argv,
+                # Windows: spawn headless Blender without a console window flash.
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except FileNotFoundError as ex:
             raise RuntimeError(
                 "Blender executable not found at '{:s}'. Set BLENDER_PATH to the "

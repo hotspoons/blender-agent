@@ -273,10 +273,39 @@ def quadruped() -> dict:
     }
 
 
+def quadruped_parts() -> dict:
+    """
+    The quadruped split into overlapping z-bands (legs / body+head), each
+    an open non-manifold shell — the four-legged analogue of
+    humanoid_parts. Direct bone-heat can't bind the disconnected pile; the
+    weight proxy fuses it (legs reconnect to the body through the overlap).
+    """
+    base = bpy.data.objects[quadruped()["objects"][0]]
+    z_lo = min(v.co.z for v in base.data.vertices)
+    z_hi = max(v.co.z for v in base.data.vertices)
+    height = z_hi - z_lo
+    # Generous overlap (~12% of height) so the proxy fuses legs to body.
+    bands = (
+        ("QParts.Legs", z_lo - 0.01, z_lo + 0.60 * height),
+        ("QParts.Body", z_lo + 0.48 * height, z_hi + 0.01),
+    )
+    parts = [_band_part(base, name, lo, hi) for name, lo, hi in bands]
+    mesh = base.data
+    bpy.data.objects.remove(base)
+    bpy.data.meshes.remove(mesh)
+    bpy.context.view_layer.update()
+    return {
+        "objects": [p.name for p in parts],
+        "skill": "rig_quadruped_multipart",
+        "truth": {"symmetric": True, "n_parts": len(parts)},
+    }
+
+
 CHARACTERS = {
     "humanoid": humanoid,
     "humanoid_asymmetric": humanoid_asymmetric,
     "humanoid_parts": humanoid_parts,
     "humanoid_parts_bighand": humanoid_parts_bighand,
     "quadruped": quadruped,
+    "quadruped_parts": quadruped_parts,
 }

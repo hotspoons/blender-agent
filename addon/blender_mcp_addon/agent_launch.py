@@ -137,7 +137,7 @@ def port_listening(host: str, port: int, timeout: float = 0.3) -> bool:
 
 def start(
         host: str,
-        port: int,
+        port: int | None,
         mcp_port: int | None,
         bridge_host: str,
         bridge_port: int,
@@ -145,16 +145,21 @@ def start(
 ) -> str:
     """
     Start the agent server, auto-assigning ports when the preferred
-    ones are taken (other Blender instances). *bridge_host*/*bridge_port*
-    point the agent's tools at THIS instance's TCP bridge. *title*
-    labels the instance in the browser tab (the open .blend file name);
-    keep it updated later via ``update_title``.
+    ones are taken (other Blender instances). *port* is the web-UI port
+    (``None`` to serve MCP only, no UI); *mcp_port* is the HTTP-MCP port
+    (``None`` to serve the UI only). At least one must be given - they
+    are independent. *bridge_host*/*bridge_port* point the agent's tools
+    at THIS instance's TCP bridge. *title* labels the instance in the
+    browser tab (the open .blend file name); keep it updated later via
+    ``update_title``.
 
     Returns the launch kind. Raises ``RuntimeError`` with a user-facing
     message on failure. Actual ports are exposed via ``running_ports``.
     """
     if is_running():
         raise RuntimeError("the agent is already running")
+    if port is None and mcp_port is None:
+        raise RuntimeError("nothing to start: enable the web UI, MCP over HTTP, or both")
 
     available, how = is_available()
     if not available:
@@ -163,7 +168,7 @@ def start(
     # Resolve ports up front so the UI/browser know where to point even
     # when the defaults are taken by another Blender instance.
     try:
-        actual_port = _pick_free_port(host, port)
+        actual_port = _pick_free_port(host, port) if port is not None else None
         actual_mcp_port = _pick_free_port(host, mcp_port) if mcp_port is not None else None
     except OSError as ex:
         raise RuntimeError(str(ex)) from ex
@@ -208,7 +213,7 @@ def start(
         thread = threading.Thread(target=_run, name="blender-agent", daemon=True)
         _AgentState.loop = loop
         _AgentState.thread = thread
-        _AgentState.port = actual_port
+        _AgentState.port = actual_port or 0
         _AgentState.mcp_port = actual_mcp_port or 0
         _AgentState.host = host
         thread.start()
@@ -216,14 +221,21 @@ def start(
 
     cli = shutil.which("blender-agent")
     assert cli is not None
-    argv = [cli, "--host", host, "--port", str(actual_port), "--no-port-auto"]
+    argv = [cli, "--host", host, "--no-port-auto"]
+    if actual_port is not None:
+        argv += ["--port", str(actual_port)]
+    else:
+        argv += ["--no-ui"]
     if actual_mcp_port is not None:
         argv += ["--mcp-port", str(actual_mcp_port)]
     if title:
         argv += ["--title", title]
     # pylint: disable-next=consider-using-with
-    _AgentState.proc = subprocess.Popen(argv, env={**os.environ, **bridge_env})
-    _AgentState.port = actual_port
+    _AgentState.proc = subprocess.Popen(
+        argv, env={**os.environ, **bridge_env},
+        # Windows: don't pop a console window for the agent subprocess.
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    _AgentState.port = actual_port or 0
     _AgentState.mcp_port = actual_mcp_port or 0
     _AgentState.host = host
     return "subprocess"

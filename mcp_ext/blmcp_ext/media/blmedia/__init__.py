@@ -15,6 +15,7 @@ collision-suffixed (``name-2.ext``) rather than overwritten.
 
 __all__ = (
     "export_file",
+    "fetch_ffmpeg",
     "find_ffmpeg",
     "render_video",
     "import_file",
@@ -28,9 +29,11 @@ __all__ = (
 
 import glob
 import os
+import platform
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 import bpy
@@ -60,19 +63,53 @@ _IMAGE_RENDER_FORMATS = {
 # Container formats the video verb encodes (frames -> clip via ffmpeg).
 _VIDEO_FORMATS = ("mp4", "mov", "webm", "gif")
 
-# Where ffmpeg commonly lives, checked AFTER $PATH so an explicit/PATH
-# binary always wins. Covers Linux distros, Homebrew (Intel + Apple
-# Silicon), MacPorts, snap, and the usual Windows drops.
+# Where ffmpeg commonly lives on Linux + macOS, checked AFTER $PATH so an
+# explicit/PATH binary always wins. (Windows locations are computed at call
+# time from the environment - see _ffmpeg_windows_candidates.)
 _FFMPEG_COMMON = (
     "/usr/bin/ffmpeg",
     "/usr/local/bin/ffmpeg",
     "/opt/homebrew/bin/ffmpeg",
     "/opt/local/bin/ffmpeg",
     "/snap/bin/ffmpeg",
-    r"C:\ffmpeg\bin\ffmpeg.exe",
-    r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
-    r"C:\Program Files\ffmpeg\ffmpeg.exe",
 )
+
+
+def _ffmpeg_windows_candidates() -> list:
+    """
+    Where ffmpeg.exe actually lands on Windows when it isn't on PATH -
+    which it almost never is. Covers winget (the shim Link plus the
+    versioned package dir), Scoop, Chocolatey, and manual drops. PATH is
+    not refreshed in a running process, so the winget/scoop shims are
+    worth checking directly even after the user "installed ffmpeg".
+    """
+    import glob
+
+    env = os.environ
+    local = env.get("LOCALAPPDATA", "")
+    profile = env.get("USERPROFILE", "")
+    programdata = env.get("ProgramData", r"C:\ProgramData")
+    programfiles = env.get("ProgramFiles", r"C:\Program Files")
+
+    cands = [
+        os.path.join(_ffmpeg_cache_dir(), "ffmpeg.exe"),  # a previous auto-fetch
+        r"C:\ffmpeg\bin\ffmpeg.exe",
+        os.path.join(programfiles, "ffmpeg", "bin", "ffmpeg.exe"),
+        os.path.join(programfiles, "ffmpeg", "ffmpeg.exe"),
+        os.path.join(programdata, "chocolatey", "bin", "ffmpeg.exe"),
+    ]
+    if local:
+        cands.append(os.path.join(local, "Microsoft", "WinGet", "Links", "ffmpeg.exe"))
+        # winget unpacks Gyan/BtBN builds into a versioned dir; newest first.
+        cands += sorted(glob.glob(os.path.join(
+            local, "Microsoft", "WinGet", "Packages",
+            "*FFmpeg*", "**", "ffmpeg.exe"), recursive=True), reverse=True)
+    if profile:
+        cands += [
+            os.path.join(profile, "scoop", "shims", "ffmpeg.exe"),
+            os.path.join(profile, "scoop", "apps", "ffmpeg", "current", "bin", "ffmpeg.exe"),
+        ]
+    return cands
 
 _VIDEO_CRF = {"high": 18, "medium": 23, "low": 28}
 
@@ -466,10 +503,122 @@ def find_ffmpeg(explicit: str | None = None) -> str | None:
     found = shutil.which("ffmpeg")
     if found:
         return found
-    for cand in _FFMPEG_COMMON:
+    candidates = (_ffmpeg_windows_candidates() if os.name == "nt"
+                  else list(_FFMPEG_COMMON))
+    for cand in candidates:
         if os.path.isfile(cand) and os.access(cand, os.X_OK):
             return cand
     return None
+
+
+def _ffmpeg_cache_dir() -> str:
+    """Per-user cache for an auto-fetched ffmpeg (shared base with the installer)."""
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    else:
+        base = os.environ.get("XDG_CACHE_HOME") or os.path.join(
+            os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "blender-agent", "ffmpeg")
+
+
+def _ffmpeg_works(exe: str) -> bool:
+    """True when *exe* runs and identifies itself as ffmpeg."""
+    try:
+        out = subprocess.run(
+            [exe, "-version"], capture_output=True, text=True, timeout=15, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.returncode == 0 and "ffmpeg version" in (out.stdout or "").lower()
+
+
+# Static GPL builds; the only source that ships winarm64. The `latest`
+# tag is a rolling HTTPS URL from a pinned, well-known project (the same
+# builds winget/scoop pull) - we verify the result by running it rather
+# than against a hash, because this URL's content changes daily.
+_BTBN_BASE = ("https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
+              "ffmpeg-master-latest-{arch}-gpl.zip")
+
+
+def _btbn_arch() -> str | None:
+    machine = platform.machine().upper()
+    if machine in ("ARM64", "AARCH64"):
+        return "winarm64"
+    if machine in ("AMD64", "X86_64", "X64"):
+        return "win64"
+    return None
+
+
+def fetch_ffmpeg(log=None) -> str | None:
+    """
+    Download a static ffmpeg into the per-user cache and return its path,
+    or ``None`` when auto-fetch does not apply. Windows only: Linux/macOS
+    have package managers (apt/brew) and that path stays manual.
+
+    Verification is functional - the extracted binary must run and report
+    ``ffmpeg version`` - not a pinned checksum: the only source shipping
+    winarm64 wheels (BtbN) serves a daily-rolling artifact with no stable
+    hash, fetched over HTTPS from a fixed, well-known release URL. Opt out
+    with ``BLENDER_MCP_NO_FETCH_FFMPEG=1``.
+    """
+    say = log or (lambda _m: None)
+    if os.name != "nt":
+        return None
+    if os.environ.get("BLENDER_MCP_NO_FETCH_FFMPEG"):
+        return None
+
+    cache_dir = _ffmpeg_cache_dir()
+    cached = os.path.join(cache_dir, "ffmpeg.exe")
+    if os.path.isfile(cached) and _ffmpeg_works(cached):
+        return cached
+
+    arch = _btbn_arch()
+    if arch is None:
+        return None
+    url = _BTBN_BASE.format(arch=arch)
+
+    import urllib.request
+    import zipfile
+
+    os.makedirs(cache_dir, exist_ok=True)
+    say("ffmpeg not found - downloading a static build ({:s}) from BtbN; "
+        "this is ~100 MB and runs once.".format(arch))
+    tmp_zip = os.path.join(cache_dir, "_ffmpeg_download.zip")
+    try:
+        ctx = None
+        try:
+            import ssl
+            ctx = ssl.create_default_context()
+        except Exception:  # pylint: disable=broad-except
+            ctx = None
+        with urllib.request.urlopen(url, timeout=120, context=ctx) as resp, \
+                open(tmp_zip, "wb") as fh:
+            shutil.copyfileobj(resp, fh)
+
+        with zipfile.ZipFile(tmp_zip) as zf:
+            member = next(
+                (n for n in zf.namelist() if n.lower().replace("\\", "/").endswith("bin/ffmpeg.exe")),
+                None)
+            if member is None:
+                raise RuntimeError("downloaded archive has no bin/ffmpeg.exe")
+            with zf.open(member) as src, open(cached, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+    except Exception as ex:  # pylint: disable=broad-except
+        raise RuntimeError(
+            "ffmpeg auto-download failed ({:s}). Install it manually "
+            "(winget install Gyan.FFmpeg) or pass {{'ffmpeg': '...'}}.".format(ex)) from ex
+    finally:
+        if os.path.exists(tmp_zip):
+            os.unlink(tmp_zip)
+
+    if not _ffmpeg_works(cached):
+        try:
+            os.unlink(cached)
+        except OSError:
+            pass
+        raise RuntimeError("downloaded ffmpeg did not run; install it manually instead.")
+    say("ffmpeg ready at {:s}".format(cached))
+    return cached
 
 
 def _ffmpeg_encode_cmd(binary: str, pattern: str, fps: int, fmt: str,
@@ -512,13 +661,22 @@ def render_video(jail: str | None = None, start: int | None = None,
     quality = (quality or "medium").lower()
 
     binary = find_ffmpeg(ffmpeg)
+    if binary is None and not ffmpeg:
+        # Auto-fetch on demand (Windows only; opt out with
+        # BLENDER_MCP_NO_FETCH_FFMPEG). No-op elsewhere.
+        binary = fetch_ffmpeg(log=lambda m: print("blmedia:", m, flush=True))
     if binary is None:
         if ffmpeg:
             raise RuntimeError("no ffmpeg binary at {!r}".format(ffmpeg))
+        install = {
+            "nt": "winget install Gyan.FFmpeg  (or: scoop install ffmpeg)",
+            "posix": "apt install ffmpeg",
+            "mac": "brew install ffmpeg",
+        }[("nt" if os.name == "nt" else "mac" if sys.platform == "darwin" else "posix")]
         raise RuntimeError(
-            "ffmpeg not found on PATH or in common locations. Install it "
-            "(e.g. `apt install ffmpeg`, `brew install ffmpeg`) or pass "
-            "{'ffmpeg': '/path/to/ffmpeg'}.")
+            "ffmpeg not found on PATH or in the common install locations. "
+            "Install it ({:s}) and restart Blender so it picks up the new PATH, "
+            "or pass {{'ffmpeg': '/path/to/ffmpeg'}}.".format(install))
 
     scene = bpy.context.scene
     cam = bpy.data.objects.get(camera) if camera else scene.camera
@@ -568,7 +726,10 @@ def render_video(jail: str | None = None, start: int | None = None,
 
         cmd = _ffmpeg_encode_cmd(
             binary, os.path.join(tmpdir, "seq_%05d.png"), fps, format, quality, out_path)
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, check=False,
+            # Windows: encode without flashing up an ffmpeg console window.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if proc.returncode != 0 or not os.path.isfile(out_path):
             raise RuntimeError("ffmpeg encode failed: {}".format(
                 (proc.stderr or proc.stdout or "no output").strip()[-800:]))

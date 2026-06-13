@@ -14,7 +14,9 @@ __all__ = (
     "make_cube",
     "make_cylinder",
     "make_mirrored_pair",
+    "make_sided_rig",
     "make_sphere",
+    "make_subdivided_bar",
     "make_tapered_limb",
 )
 
@@ -103,6 +105,44 @@ def make_mirrored_pair(name: str = "Pair", offset: float = 2.0) -> bpy.types.Obj
     for sign in (-1.0, 1.0):
         ret = bmesh.ops.create_cube(bm, size=1.0)
         bmesh.ops.translate(bm, vec=(sign * offset, 0.0, 0.0), verts=ret["verts"])
+    return _to_object(bm, name)
+
+
+def make_sided_rig(name: str = "Rig", deform: bool = True) -> bpy.types.Object:
+    """
+    Minimal bilateral armature for weight/pose/anim ops tests: a root and
+    one bone per side along +-x (``DEF-arm.L``/``DEF-arm.R``, or
+    unprefixed control bones with ``deform=False``).
+    """
+    from blrig import _armature
+
+    prefix = "DEF-" if deform else ""
+    rig = _armature.build_armature(name, [
+        {"name": "root", "head": (0.0, 0.0, 0.0), "tail": (0.0, 0.5, 0.0)},
+        {"name": prefix + "arm.L", "parent": "root", "use_deform": deform,
+         "head": (0.1, 0.0, 0.0), "tail": (1.2, 0.0, 0.0)},
+        {"name": prefix + "arm.R", "parent": "root", "use_deform": deform,
+         "head": (-0.1, 0.0, 0.0), "tail": (-1.2, 0.0, 0.0)},
+    ])
+    # Euler bones (new pose bones default to QUATERNION) — matches the
+    # rigs the mechanical skills build and keeps channel asserts direct.
+    for pb in rig.pose.bones:
+        pb.rotation_mode = "XYZ"
+    return rig
+
+
+def make_subdivided_bar(name: str = "Bar", dims=(2.4, 0.6, 0.6),
+                        cuts: int = 7) -> bpy.types.Object:
+    """
+    Axis-aligned box centered at the origin with a subdivision grid —
+    enough vertices on both sides of x=0 for weight-op tests.
+    """
+    bm = bmesh.new()
+    bmesh.ops.create_cube(bm, size=1.0)
+    bmesh.ops.subdivide_edges(bm, edges=bm.edges[:], cuts=cuts,
+                              use_grid_fill=True)
+    bmesh.ops.transform(bm, matrix=Matrix.LocRotScale(None, None, Vector(dims)),
+                        verts=bm.verts)
     return _to_object(bm, name)
 
 

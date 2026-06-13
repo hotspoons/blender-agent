@@ -46,7 +46,8 @@ failure code — fall back to the step-by-step flow below.
 | base + rotating platform + elevating member | `rig_turret` |
 | symmetric standing humanoid, ONE clean mesh | `rig_biped_rigify` |
 | humanoid as SEVERAL meshes, shell piles, or with one-sided appendages | `rig_biped_multipart` |
-| symmetric four-legged character | `rig_quadruped_rigify` |
+| symmetric four-legged character, ONE clean mesh | `rig_quadruped_rigify` |
+| four-legged creature as SEVERAL meshes / shell piles | `rig_quadruped_multipart` |
 
 **Multi-legged creatures — ANY number of legs, ANY segments per leg**
 (quadrupeds of disjoint limbs, hexapod ants, octopod spiders/crabs,
@@ -94,6 +95,20 @@ Models are often built with clearance — nothing touches. Two levers:
 
 Failed runs roll back — retrying a different skill is always safe.
 
+## After the rig: weights, pose, anim
+
+Three sibling tools cover everything downstream of `rig`, same
+verb-dispatched shape, same rollback-on-failure:
+
+| Goal | Tool |
+|---|---|
+| Mesh deforms wrong / fix skinning / transfer or mirror weights | `weights(verb, args)` — see `weight-painting` |
+| Put the rig IN a pose (batch set, mirror, IK/FK switch, named poses) | `pose(verb, args)` — see `posing` |
+| Motion over time: keyframes, walk/idle cycles, loops, bakes, NLA | `anim(verb, args)` — see `animating-at-scale` |
+
+Rule of thumb: `rig` builds it, `weights` makes the mesh follow it,
+`pose` holds a moment, `anim` makes it move.
+
 See also: `rigging-mechanical`, `rigging-characters`,
 `rigging-multipart-characters`, `rigging-stretchy-limbs`,
-`rigging-standard`.
+`rigging-standard`, `weight-painting`, `posing`, `animating-at-scale`.

@@ -253,7 +253,7 @@ def _transfer(args: dict) -> dict:
             if target is None or target.type != "MESH":
                 return _contract.fail("object_not_found", object=name)
             _proxy.transfer_weights(source, target)
-            entry = {"n_groups": len(target.vertex_groups)}
+            entry: dict = {"n_groups": len(target.vertex_groups)}
             if rig is not None:
                 validation = validate_weights(target, rig)
                 entry["validation_errors"] = [e["rule"] for e in validation["errors"]]

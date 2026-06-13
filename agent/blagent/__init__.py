@@ -67,7 +67,7 @@ def pick_free_port(
 
 async def run_server(
         host: str = _DEFAULT_HOST,
-        port: int = _DEFAULT_PORT,
+        port: int | None = _DEFAULT_PORT,
         mcp_port: int | None = None,
         data_dir: str | None = None,
         open_browser: bool = False,
@@ -110,12 +110,18 @@ async def run_server(
     from .runtime import AgentRuntime
     from .store import AgentStore
 
+    if port is None and mcp_port is None:
+        raise ValueError(
+            "nothing to serve: pass a UI port, an mcp_port, or both")
+
     if port_auto:
-        port = pick_free_port(host, port)
+        if port is not None:
+            port = pick_free_port(host, port)
         if mcp_port is not None:
             # Exclude the UI port just chosen - it is not bound yet, so
             # the scan would otherwise consider it free.
-            mcp_port = pick_free_port(host, mcp_port, exclude={port})
+            mcp_port = pick_free_port(
+                host, mcp_port, exclude={port} if port is not None else None)
 
     # Resolve / provision the Blender compute surface before building
     # the tool registry (which reads BLENDER_MCP_HOST/PORT lazily).
@@ -142,10 +148,13 @@ async def run_server(
     logging.getLogger("blagent").addHandler(handler)
     runtime = AgentRuntime(store, blender_tools)
     runtime.instance_title = title if title is not None else os.environ.get("BLENDER_AGENT_TITLE", "")
-    runtime.instance_port = port
+    runtime.instance_port = port or 0
     app = create_app(runtime)
 
-    servers = [uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning"))]
+    servers = []
+    if port is not None:
+        servers.append(uvicorn.Server(uvicorn.Config(
+            app, host=host, port=port, log_level="warning")))
 
     if mcp_port is not None:
         from mcp.server.fastmcp.server import TransportSecuritySettings  # type: ignore[attr-defined]
@@ -161,12 +170,13 @@ async def run_server(
             mcp.streamable_http_app(), host=host, port=mcp_port, log_level="warning",
         )))
 
-    if open_browser:
+    if open_browser and port is not None:
         import webbrowser
 
         webbrowser.open("http://{:s}:{:d}/".format(host, port))
 
-    print("blender-agent: web UI at http://{:s}:{:d}/".format(host, port), flush=True)
+    if port is not None:
+        print("blender-agent: web UI at http://{:s}:{:d}/".format(host, port), flush=True)
     print("blender-agent: log file at {:s}".format(log_path), flush=True)
     if mcp_port is not None:
         print("blender-agent: MCP (streamable HTTP) at http://{:s}:{:d}/".format(host, mcp_port), flush=True)
@@ -259,6 +269,11 @@ def main() -> int:
              "(use {:d} to match the documented .mcp.json).".format(_DEFAULT_MCP_PORT),
     )
     parser.add_argument(
+        "--no-ui",
+        action="store_true",
+        help="Do not serve the web UI; serve only MCP over HTTP. Requires --mcp-port.",
+    )
+    parser.add_argument(
         "--data-dir",
         default=None,
         help="Agent data directory (default: $XDG_DATA_HOME/blender-agent).",
@@ -314,11 +329,13 @@ def main() -> int:
         help="Blender bridge port to attach to / spawn (default: $BLENDER_MCP_PORT or 9876).",
     )
     args = parser.parse_args()
+    if args.no_ui and args.mcp_port is None:
+        parser.error("--no-ui requires --mcp-port (there would be nothing to serve)")
 
     try:
         asyncio.run(run_server(
             host=args.host,
-            port=args.port,
+            port=None if args.no_ui else args.port,
             mcp_port=args.mcp_port,
             data_dir=args.data_dir,
             open_browser=args.open,

@@ -72,6 +72,8 @@ def run_blender_cli(
             text=True,
             timeout=timeout,
             check=False,
+            # Windows: don't flash a console window when shelling out to Blender.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except subprocess.TimeoutExpired as ex:
         raise RuntimeError("Blender CLI timed out after {:.0f}s".format(timeout)) from ex
