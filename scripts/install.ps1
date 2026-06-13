@@ -75,7 +75,11 @@ function Resolve-RepoDir {
     } catch {
         Fail "download failed ($url): $($_.Exception.Message)"
     }
-    Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
+    # .NET's extractor is many times faster than Expand-Archive on an
+    # archive of thousands of small files (the bundled API/manual docs).
+    Note "Extracting"
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $extract)
     Remove-Item -Force $zip
 
     # GitHub wraps everything in a single <repo>-<ref> directory.
@@ -200,11 +204,35 @@ function Find-Blender {
 # --- Locate Blender's bundled Python ----------------------------------------
 function Find-BlenderPython($blender) {
     if ($env:BLENDER_PYTHON -and (Test-Path -LiteralPath $env:BLENDER_PYTHON)) { return $env:BLENDER_PYTHON }
-    $expr = 'import sys,glob,os; b=os.path.join(sys.prefix,"bin"); ' +
-            'c=sorted(glob.glob(os.path.join(b,"python.exe"))); ' +
-            'print("BLPY="+(c[-1] if c else ""))'
-    $out = & $blender --background --factory-startup --python-expr $expr 2>$null |
-        Select-String -Pattern "^BLPY=(.+)$"
+
+    # Blender ships its interpreter next to blender.exe, under the versioned
+    # folder: <blender dir>\<version>\python\bin\python.exe. Find it on disk -
+    # no need to launch Blender (and no --python-expr arg-quoting headaches).
+    $bdir = Split-Path -Parent $blender
+    $globs = @(
+        (Join-Path $bdir "*\python\bin\python.exe"),
+        (Join-Path $bdir "python\bin\python.exe")
+    )
+    foreach ($g in $globs) {
+        $hit = Get-ChildItem $g -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1
+        if ($hit) { return $hit.FullName }
+    }
+
+    # Fallback for unusual layouts: ask Blender, via a temp script file so no
+    # quoting survives the PowerShell -> native-exe arg boundary.
+    $tmp = Join-Path $env:TEMP "blpy_probe.py"
+    @'
+import sys, os, glob
+cand = sorted(glob.glob(os.path.join(sys.prefix, "bin", "python*")))
+print("BLPY=" + (cand[-1] if cand else ""))
+'@ | Set-Content -LiteralPath $tmp -Encoding ASCII
+    try {
+        $out = & $blender --background --factory-startup --python $tmp 2>$null |
+            Select-String -Pattern "^BLPY=(.+)$"
+    } finally {
+        Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
+    }
     if ($out) {
         $path = $out.Matches[0].Groups[1].Value.Trim()
         if (Test-Path -LiteralPath $path) { return $path }

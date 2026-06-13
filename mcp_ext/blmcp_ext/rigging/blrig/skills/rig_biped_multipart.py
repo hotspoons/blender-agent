@@ -102,8 +102,8 @@ def diagnose(ctx: dict, params: dict | None = None) -> dict:
     lo, hi = _combined_bounds(objects)
     height = float(hi.z - lo.z)
     voxel = float(params.get("voxel_size") or max(height / 150.0, 1e-5))
-    center_x = float(params.get("center_x")
-                     if params.get("center_x") is not None
+    cx = params.get("center_x")
+    center_x = float(cx if cx is not None
                      else _proxy.estimate_midline_x(objects, height))
     return _contract.ok(plan={
         "parts": [o.name for o in objects],

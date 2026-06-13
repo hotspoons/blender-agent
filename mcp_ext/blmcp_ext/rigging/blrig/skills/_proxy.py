@@ -167,6 +167,8 @@ def _bridge_islands(obj, voxel_size: float) -> int:
             co, _index, dist = tree.find(verts[vi].co)
             if best is None or dist < best[2]:
                 best = (verts[vi].co.copy(), co.copy(), dist)
+        if best is None:  # _island_sizes never yields empty islands; guard anyway
+            continue
         p0, p1, _dist = best
         direction = p1 - p0
         length = max(direction.length, voxel_size)
@@ -323,7 +325,7 @@ def strip_cross_side_leg_weights(target, rig, margin: float,
     dragging with the other foot — size it to the real gap between the
     legs (about 2x the proxy voxel works in practice).
     """
-    leg_groups = {"L": set(), "R": set()}
+    leg_groups: dict[str, set[int]] = {"L": set(), "R": set()}
     for group in target.vertex_groups:
         bone = rig.data.bones.get(group.name)
         if bone is None or not bone.use_deform:

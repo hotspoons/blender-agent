@@ -93,16 +93,24 @@ server-side GPU.
    (From a checkout, double-click `scripts\install.cmd` instead — same
    thing, no policy change.)
 
-   **Linux / macOS / WSL** — from a checkout:
+   **Linux / macOS / WSL** — paste into a terminal (no clone needed):
 
-   ```
-   ./scripts/install.sh             # or: make install-dev
-   make install-dev BLENDER_BIN=/path/to/blender   # point at the binary
-   make uninstall-dev               # to remove
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/hotspoons/blender-agent/main/scripts/install.sh | bash
    ```
 
-   (All paths are equivalent to `pip install ./mcp ./agent ./mcp_ext` into
-   Blender's bundled Python, then building + enabling the add-on extension.)
+   To uninstall, or pin a specific binary (note the `bash -s --` for flags):
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/hotspoons/blender-agent/main/scripts/install.sh | bash -s -- --uninstall
+   curl -fsSL https://raw.githubusercontent.com/hotspoons/blender-agent/main/scripts/install.sh | BLENDER_BIN=/path/to/blender bash
+   ```
+
+   (From a checkout: `./scripts/install.sh` or `make install-dev` — same thing,
+   no download.)
+
+   All paths are equivalent to `pip install ./mcp ./agent ./mcp_ext` into
+   Blender's bundled Python, then building + enabling the add-on extension.
 
 2. **Enable the add-on**: *Edit → Preferences → Add-ons → MCP*. Its panel
    starts the bridge, registers the skills library, and runs the Web Agent.

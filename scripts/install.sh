@@ -6,10 +6,24 @@
 # Install the Blender MCP plugin without needing `make` (or a host
 # Python): works on Linux, macOS and WSL2 under bash or zsh.
 #
+# One-liner (nothing to clone):
+#
+#   curl -fsSL https://raw.githubusercontent.com/hotspoons/blender-agent/main/scripts/install.sh | bash
+#
+# It fetches the repo into $XDG_CACHE_HOME/blender-agent and installs from
+# there. Pass options through the pipe with `bash -s --`:
+#
+#   curl -fsSL .../scripts/install.sh | bash -s -- --uninstall
+#
+# From a checkout it uses the files on disk (no download):
+#
 #   ./scripts/install.sh                 full install
-#   ./scripts/install.sh --uninstall    remove everything again
+#   ./scripts/install.sh --uninstall     remove everything again
 #   ./scripts/install.sh --packages-only    pip packages, skip the add-on
 #   ./scripts/install.sh --extension-only   add-on, skip the pip packages
+#
+# Env: BLENDER_BIN / BLENDER_PYTHON pin the binary / interpreter;
+#      BLENDER_AGENT_REF picks the branch or tag to fetch (default main).
 #
 # Two halves, both idempotent:
 #   1. pip-install mcp/ + agent/ + mcp_ext/ into Blender's BUNDLED
@@ -22,9 +36,11 @@
 
 set -eu
 
-REPO_DIR="$(cd -- "$(dirname -- "$0")/.." && pwd)"
-ADDON_DIR="$REPO_DIR/addon/blender_mcp_addon"
-DIST_DIR="$REPO_DIR/dist"
+note() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
+die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+
+REPO_URL="${BLENDER_AGENT_REPO:-https://github.com/hotspoons/blender-agent}"
+REF="${BLENDER_AGENT_REF:-main}"
 
 DO_PACKAGES=1
 DO_EXTENSION=1
@@ -35,7 +51,17 @@ for arg in "$@"; do
 		--extension-only) DO_PACKAGES=0 ;;
 		--uninstall) UNINSTALL=1 ;;
 		-h|--help)
-			sed -n '6,21p' "$0" | sed 's/^# \{0,1\}//'
+			cat <<'EOF'
+Install the Blender MCP plugin (Linux / macOS / WSL).
+
+  curl -fsSL https://raw.githubusercontent.com/hotspoons/blender-agent/main/scripts/install.sh | bash
+  ... | bash -s -- --uninstall        remove everything again
+  ... | bash -s -- --packages-only    pip packages, skip the add-on
+  ... | bash -s -- --extension-only   add-on, skip the pip packages
+
+From a checkout: ./scripts/install.sh [--uninstall|--packages-only|--extension-only]
+Env: BLENDER_BIN, BLENDER_PYTHON, BLENDER_AGENT_REF (branch/tag), BLENDER_AGENT_REPO.
+EOF
 			exit 0 ;;
 		*)
 			echo "install.sh: unknown argument '$arg' (try --help)" >&2
@@ -43,8 +69,37 @@ for arg in "$@"; do
 	esac
 done
 
-note() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
-die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+# --- Locate the repo: a checkout, or fetch it (the curl | bash one-liner) ---
+# Piped through bash there is no script file on disk, so we download the
+# source tarball. From a real checkout we use it as-is.
+resolve_repo_dir() {
+	_self="${BASH_SOURCE:-$0}"
+	if [ -f "$_self" ]; then
+		_local="$(cd -- "$(dirname -- "$_self")/.." && pwd)"
+		if [ -d "$_local/addon/blender_mcp_addon" ]; then
+			note "Using local checkout: $_local" >&2
+			echo "$_local"; return 0
+		fi
+	fi
+	_cache="${XDG_CACHE_HOME:-$HOME/.cache}/blender-agent"
+	rm -rf "$_cache/src"; mkdir -p "$_cache/src"
+	_url="$REPO_URL/archive/$REF.tar.gz"
+	note "Fetching $_url" >&2
+	if command -v curl >/dev/null 2>&1; then
+		curl -fsSL "$_url" | tar -xz -C "$_cache/src" || die "download/extract failed: $_url"
+	elif command -v wget >/dev/null 2>&1; then
+		wget -qO- "$_url" | tar -xz -C "$_cache/src" || die "download/extract failed: $_url"
+	else
+		die "need curl or wget to bootstrap the install"
+	fi
+	_addon="$(find "$_cache/src" -type d -path '*/addon/blender_mcp_addon' 2>/dev/null | head -1)"
+	[ -n "$_addon" ] || die "fetched archive has no addon/ - wrong repo or ref ($REF)?"
+	(cd -- "$_addon/../.." && pwd)
+}
+
+REPO_DIR="$(resolve_repo_dir)"
+ADDON_DIR="$REPO_DIR/addon/blender_mcp_addon"
+DIST_DIR="$REPO_DIR/dist"
 
 # --- Locate the Blender binary (for the extension CLI) ----------------------
 find_blender() {
