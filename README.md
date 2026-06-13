@@ -72,18 +72,37 @@ server-side GPU.
 
 ## Quickstart
 
-1. **Install** the packages into Blender's bundled Python — `make install-dev`
-   locates the right interpreter on Linux/macOS/Windows:
+1. **Install** the packages into Blender's bundled Python and enable the
+   add-on. Pick your platform:
+
+   **Windows** — paste this into PowerShell (no clone, no admin, no
+   execution-policy change; it finds Blender via the registry even in an
+   unusual install location):
+
+   ```powershell
+   irm https://raw.githubusercontent.com/hotspoons/blender-agent/main/scripts/install.ps1 | iex
+   ```
+
+   To uninstall, or pin a specific `blender.exe`:
+
+   ```powershell
+   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/hotspoons/blender-agent/main/scripts/install.ps1))) -Uninstall
+   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/hotspoons/blender-agent/main/scripts/install.ps1))) -BlenderBin "D:\Tools\Blender\blender.exe"
+   ```
+
+   (From a checkout, double-click `scripts\install.cmd` instead — same
+   thing, no policy change.)
+
+   **Linux / macOS / WSL** — from a checkout:
 
    ```
-   make install-dev                 # if `blender` is on PATH
-   # or point at the binary / interpreter:
-   make install-dev BLENDER_BIN=/path/to/blender
+   ./scripts/install.sh             # or: make install-dev
+   make install-dev BLENDER_BIN=/path/to/blender   # point at the binary
    make uninstall-dev               # to remove
    ```
 
-   (Equivalent to `pip install ./mcp ./agent ./mcp_ext` into Blender's
-   Python.)
+   (All paths are equivalent to `pip install ./mcp ./agent ./mcp_ext` into
+   Blender's bundled Python, then building + enabling the add-on extension.)
 
 2. **Enable the add-on**: *Edit → Preferences → Add-ons → MCP*. Its panel
    starts the bridge, registers the skills library, and runs the Web Agent.

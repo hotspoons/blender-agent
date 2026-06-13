@@ -38,8 +38,8 @@ failure code — fall back to the step-by-step flow below.
 
 | Situation (from inspect) | Skill |
 |---|---|
-| ORDERED segments forming a limb/arm/tail/boom — touching or not | `rig_chain` |
-| Any pile of rigid parts; one mesh with many loose parts; creature with N legs | `rig_rigid_assembly` |
+| ORDERED segments forming an APPENDAGE of a larger body (limb/arm/tail/boom/tentacle) that attaches to a torso/chassis — touching or not | `rig_chain` |
+| A STANDALONE multi-part object: any pile of rigid parts, a base+arm linkage (desk lamp, crane, robot arm, anglepoise) even when its parts form a serial chain, one mesh with many loose parts, a creature with N legs | `rig_rigid_assembly` |
 | 2 parts, elongated contact (door/lid/jaw) | `rig_hinge` |
 | 2 rod-like coaxial parts that slide | `rig_piston` |
 | 1 disc-like part that spins (wheel/gear/fan/prop) | `rig_wheel` |

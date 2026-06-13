@@ -34,6 +34,7 @@ _MATRIX = (
     ("crate_stack", "rig_rigid_assembly", None),
     ("humanoid", "rig_biped_rigify", None),
     ("quadruped", "rig_quadruped_rigify", None),
+    ("humanoid_parts", "rig_biped_multipart", None),
 )
 
 # Sanity bound: no vertex may travel further than this multiple of the

@@ -100,8 +100,25 @@
   a real bridge would close the loop.
 - Joint refinement for character metarig fit (perception-driven knee/elbow
   snapping from cross-section minima) — proportional fit is deliberate v1.
-- Run the agent evals against the live agent and tune SKILL.md descriptions
-  (selection failures fix descriptions, not code).
+- Agent-eval pass (2026-06-13) — ran all 16 selection scenarios blind
+  (routing surface + request only, no inspect signal, no expected answer).
+  Blind selection 14/16; both misses explained, realistic 15/16:
+  * multipart-bighand: blind miss (request never says "multiple meshes" —
+    that's an inspect fact). Re-run WITH the inspect report -> correctly
+    routes rig_biped_multipart. Methodology artifact, not a description bug.
+  * lamp-articulate: picks rig_chain over the expected rig_rigid_assembly
+    EVEN with assembly ranked #1 in suggested — and the asset's own truth
+    is {"chain": True}. Genuine routing ambiguity (a desk lamp IS an
+    ordered segment chain). OPEN DECISION: accept rig_chain for the lamp,
+    or tighten the table so standalone base+arm objects route to assembly.
+  Param note: turret-limits real param is `pitch_limits_deg` (agent guessed
+  `min_elevation_deg`); surfaced by inspect/diagnose at runtime, low pri.
+- Deform coverage gap closed (2026-06-13) — `humanoid_parts ->
+  rig_biped_multipart` added to deform_corpus._MATRIX; the multipart rig now
+  gets the same pose-extremes (+-80deg) deformation smoke every other skill
+  has. Full suite 126 green across all tiers. (Multipart end-to-end tests
+  stay in the property tier — consistent with TestBipedEndToEnd, which is
+  equally slow and also property; deform tier is the deformation matrix.)
 - Corpus growth toward 30–50 assets (crab/tentacle/backhoe + scanned junk).
 - Addon prefs repo field is comma-separated; a UIList would be nicer UX.
 
