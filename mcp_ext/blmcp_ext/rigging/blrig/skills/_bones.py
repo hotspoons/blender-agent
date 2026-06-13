@@ -12,10 +12,12 @@ __all__ = (
     "add_limit_rotation",
     "assign_custom_shapes",
     "bind_rigid",
+    "ensure_object_mode",
     "evaluated_verts",
     "evaluated_volume",
     "pose_rotate",
     "reset_pose",
+    "select_only",
 )
 
 import math
@@ -56,6 +58,19 @@ def _ensure_widget_circle(rollback=None) -> bpy.types.Object:
     if rollback is not None:
         rollback.track_object(obj)
     return obj
+
+
+def select_only(objects, active=None) -> None:
+    """
+    Make exactly *objects* selected (and *active* the active object) —
+    operator-driven helpers depend on explicit selection state.
+    """
+    for obj in bpy.context.view_layer.objects:
+        obj.select_set(False)
+    for obj in objects:
+        obj.select_set(True)
+    if active is not None:
+        bpy.context.view_layer.objects.active = active
 
 
 def assign_custom_shapes(armature_obj: bpy.types.Object, rollback=None) -> None:
@@ -198,10 +213,31 @@ def pose_rotate(armature_obj: bpy.types.Object, bone_name: str,
     bpy.context.view_layer.update()
 
 
-def reset_pose(armature_obj: bpy.types.Object) -> None:
+def reset_pose(armature_obj: bpy.types.Object, bones=None) -> None:
+    """
+    Zero pose transforms on *bones* (names; default: every pose bone).
+    """
+    wanted = None if bones is None else set(bones)
     for pb in armature_obj.pose.bones:
+        if wanted is not None and pb.name not in wanted:
+            continue
         pb.rotation_euler = (0.0, 0.0, 0.0)
         pb.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
         pb.location = (0.0, 0.0, 0.0)
         pb.scale = (1.0, 1.0, 1.0)
     bpy.context.view_layer.update()
+
+
+def ensure_object_mode(rig: bpy.types.Object) -> None:
+    """
+    Pose evaluation is FROZEN while an armature sits in EDIT mode: every
+    pose-bone transform set from Python is accepted but never reaches the
+    depsgraph, so probes measure 0.0 displacement against a healthy rig.
+    Guard pose-level code against whatever mode the session left the
+    armature in.
+    """
+    if rig.mode != "OBJECT":
+        prev_active = bpy.context.view_layer.objects.active
+        bpy.context.view_layer.objects.active = rig
+        bpy.ops.object.mode_set(mode="OBJECT")
+        bpy.context.view_layer.objects.active = prev_active

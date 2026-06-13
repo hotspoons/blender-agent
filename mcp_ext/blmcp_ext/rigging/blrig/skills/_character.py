@@ -178,20 +178,6 @@ def _restore_fk(rig: bpy.types.Object, previous: dict) -> None:
     rig.update_tag()
 
 
-def _ensure_object_mode(rig: bpy.types.Object) -> None:
-    """
-    Pose evaluation is FROZEN while an armature sits in EDIT mode: every
-    pose-bone transform set from Python is accepted but never reaches the
-    depsgraph, so probes measure 0.0 displacement against a healthy rig.
-    Guard verify against whatever mode the session left the armature in.
-    """
-    if rig.mode != "OBJECT":
-        prev_active = bpy.context.view_layer.objects.active
-        bpy.context.view_layer.objects.active = rig
-        bpy.ops.object.mode_set(mode="OBJECT")
-        bpy.context.view_layer.objects.active = prev_active
-
-
 def character_verify(skill: str, ctx: dict, pose_bones) -> dict:
     """
     *pose_bones*: list of ``(fk_prop_limb, bone_name, axis, angle_deg)``
@@ -204,7 +190,7 @@ def character_verify(skill: str, ctx: dict, pose_bones) -> dict:
         report = _contract.fail("no_armature", checks=checks)
         _contract.log_failure(skill, "verify", report)
         return report
-    _ensure_object_mode(rig)
+    _bones.ensure_object_mode(rig)
 
     # ALL meshes bound to the rig: a multi-part character legitimately has
     # parts a probe must not move (the head during a thigh probe) — judge

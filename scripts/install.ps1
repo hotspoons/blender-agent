@@ -42,9 +42,36 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Let native tools (pip, blender) print to the log without auto-throwing on
+# stderr/nonzero; our explicit $LASTEXITCODE checks below decide what's fatal,
+# so the helpful failure messages still fire. (No-op on Windows PowerShell 5.1.)
+$PSNativeCommandUseErrorActionPreference = $false
 
 function Note($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
-function Fail($msg) { Write-Host "error: $msg" -ForegroundColor Red; exit 1 }
+function Fail($msg) { throw $msg }
+
+# Record everything to a log file so an error that scrolls past - or closes
+# the window - is still reviewable afterwards.
+$LogPath = $null
+try {
+    $LogDir = Join-Path $env:LOCALAPPDATA "blender-agent\logs"
+    New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+    $LogPath = Join-Path $LogDir ("install-{0}.log" -f (Get-Date -Format "yyyyMMdd-HHmmss"))
+    Start-Transcript -Path $LogPath -Force | Out-Null
+    Note "Logging to $LogPath"
+} catch {
+    $LogPath = $null
+}
+
+# Any terminating error (ours, or a native command's) lands here: surface the
+# log location and stop cleanly, instead of `exit` taking the window down with
+# it (which hides the error when run via `irm | iex`).
+trap {
+    Write-Host "error: $($_.Exception.Message)" -ForegroundColor Red
+    if ($LogPath) { Write-Host "Full log saved to: $LogPath" -ForegroundColor Yellow }
+    try { Stop-Transcript | Out-Null } catch {}
+    break
+}
 
 # --- Locate the repo: a local checkout, or fetch it (one-liner case) --------
 # Under `irm | iex` there is no script file on disk, so $PSScriptRoot is
@@ -258,12 +285,17 @@ if (-not $ExtensionOnly) {
     } else {
         Note "Installing python packages (mcp, agent, mcp_ext)"
         & $BlPy -m ensurepip --upgrade 2>$null | Out-Null
-        & $BlPy -m pip install --upgrade `
+        # Force wheels for the compiled deps. The newest `cryptography` (pulled
+        # in transitively via mcp -> pyjwt[crypto]) ships no win_arm64 wheel, so
+        # plain pip tries to BUILD it from source (Rust + MSVC) and fails on ARM.
+        # --only-binary makes pip backtrack to a version that has an arm64 wheel.
+        & $BlPy -m pip install --upgrade --only-binary=cryptography,cffi `
             (Join-Path $RepoDir "mcp") (Join-Path $RepoDir "agent") (Join-Path $RepoDir "mcp_ext")
         if ($LASTEXITCODE -ne 0) {
-            Fail ("pip install failed. If Blender lives under Program Files its bundled " +
-                  "Python is write-protected - re-run this from an Administrator PowerShell, " +
-                  "or install Blender somewhere user-writable.")
+            Fail ("pip install failed (see the log above). Common causes: no network to " +
+                  "PyPI; a dependency with no prebuilt wheel for this Python/arch; or - if " +
+                  "Blender lives under Program Files - a write-protected bundled Python " +
+                  "(re-run from an Administrator PowerShell).")
         }
     }
 }
@@ -293,4 +325,9 @@ if ($Uninstall) {
 } else {
     Note "Done. Start Blender - the MCP bridge starts automatically"
     Note "(Edit > Preferences > Add-ons > MCP to configure ports, agent, skills)."
+}
+
+if ($LogPath) {
+    Note "Log saved to $LogPath"
+    try { Stop-Transcript | Out-Null } catch {}
 }

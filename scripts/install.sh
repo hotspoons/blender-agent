@@ -143,7 +143,11 @@ if [ "$DO_PACKAGES" = 1 ]; then
 	else
 		note "Installing python packages (mcp, agent, mcp_ext)"
 		"$BLPY" -m ensurepip --upgrade >/dev/null 2>&1 || true
-		"$BLPY" -m pip install --upgrade \
+		# Force wheels for the compiled deps: the newest cryptography (pulled in
+		# via mcp -> pyjwt[crypto]) has no win_arm64 wheel, so plain pip builds it
+		# from source and fails on ARM. --only-binary makes pip backtrack to a
+		# version that ships an arm64 wheel. Harmless on x86 / Linux / macOS.
+		"$BLPY" -m pip install --upgrade --only-binary=cryptography,cffi \
 			"$REPO_DIR/mcp" "$REPO_DIR/agent" "$REPO_DIR/mcp_ext"
 	fi
 fi
