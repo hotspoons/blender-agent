@@ -153,15 +153,43 @@ def character_run(skill: str, metarig_kind: str, default_name: str,
             os.unlink(snapshot)
 
 
-def _set_fk(rig: bpy.types.Object, side: str, limbs) -> None:
+def _set_fk(rig: bpy.types.Object, side: str, limbs) -> dict:
     """
     Flip Rigify IK/FK snap properties to FK so FK pose tests actually
-    drive the mesh.
+    drive the mesh. Returns the previous values so callers can restore
+    them — leaving a limb silently switched to FK makes every IK control
+    a no-op afterwards (found live: posing ``hand_ik.R`` did nothing
+    because an earlier verify had left ``IK_FK`` at 1).
     """
+    previous = {}
     for limb in limbs:
         holder = rig.pose.bones.get("{:s}_parent{:s}".format(limb, side))
         if holder is not None and "IK_FK" in holder:
+            previous[holder.name] = float(holder["IK_FK"])
             holder["IK_FK"] = 1.0
+    return previous
+
+
+def _restore_fk(rig: bpy.types.Object, previous: dict) -> None:
+    for holder_name, value in previous.items():
+        holder = rig.pose.bones.get(holder_name)
+        if holder is not None:
+            holder["IK_FK"] = value
+    rig.update_tag()
+
+
+def _ensure_object_mode(rig: bpy.types.Object) -> None:
+    """
+    Pose evaluation is FROZEN while an armature sits in EDIT mode: every
+    pose-bone transform set from Python is accepted but never reaches the
+    depsgraph, so probes measure 0.0 displacement against a healthy rig.
+    Guard verify against whatever mode the session left the armature in.
+    """
+    if rig.mode != "OBJECT":
+        prev_active = bpy.context.view_layer.objects.active
+        bpy.context.view_layer.objects.active = rig
+        bpy.ops.object.mode_set(mode="OBJECT")
+        bpy.context.view_layer.objects.active = prev_active
 
 
 def character_verify(skill: str, ctx: dict, pose_bones) -> dict:
@@ -176,32 +204,37 @@ def character_verify(skill: str, ctx: dict, pose_bones) -> dict:
         report = _contract.fail("no_armature", checks=checks)
         _contract.log_failure(skill, "verify", report)
         return report
+    _ensure_object_mode(rig)
 
-    mesh_obj = next(
-        (o for o in bpy.data.objects
-         if o.type == "MESH"
-         and any(m.type == "ARMATURE" and m.object == rig for m in o.modifiers)),
-        None)
-    checks.append(_contract.check("skinned_mesh_found", mesh_obj is not None))
+    # ALL meshes bound to the rig: a multi-part character legitimately has
+    # parts a probe must not move (the head during a thigh probe) — judge
+    # each probe on the union, not on whichever mesh happens to come first.
+    mesh_objs = [
+        o for o in bpy.data.objects
+        if o.type == "MESH"
+        and any(m.type == "ARMATURE" and m.object == rig for m in o.modifiers)]
+    checks.append(_contract.check("skinned_mesh_found", bool(mesh_objs)))
 
-    if mesh_obj is not None:
-        weights = validate_weights(mesh_obj, rig)
-        checks.append(_contract.check("weights", weights["ok"], str(weights["errors"])))
+    if mesh_objs:
+        weight_reports = [validate_weights(o, rig) for o in mesh_objs]
+        checks.append(_contract.check(
+            "weights", all(w["ok"] for w in weight_reports),
+            str([e for w in weight_reports for e in w["errors"]])))
 
-        rest_verts = _bones.evaluated_verts(mesh_obj)
-        rest_volume = _bones.evaluated_volume(mesh_obj)
-        size = float(max(mesh_obj.dimensions))
+        rest_verts = np.vstack([_bones.evaluated_verts(o) for o in mesh_objs])
+        rest_volume = sum(_bones.evaluated_volume(o) for o in mesh_objs)
+        size = float(max(max(o.dimensions) for o in mesh_objs))
 
         for limb, bone, axis, angle in pose_bones:
             pb = rig.pose.bones.get(bone)
             checks.append(_contract.check("bone_{:s}".format(bone), pb is not None))
             if pb is None:
                 continue
-            _set_fk(rig, bone[-2:], [limb])
+            previous_fk = _set_fk(rig, bone[-2:], [limb])
             _bones.pose_rotate(rig, bone, axis, angle)
-            posed = _bones.evaluated_verts(mesh_obj)
+            posed = np.vstack([_bones.evaluated_verts(o) for o in mesh_objs])
             moved = float(np.abs(posed - rest_verts).max())
-            volume = _bones.evaluated_volume(mesh_obj)
+            volume = sum(_bones.evaluated_volume(o) for o in mesh_objs)
             ratio = volume / max(rest_volume, 1e-12)
             checks.append(_contract.check(
                 "pose_{:s}_moves".format(bone), moved > 0.02 * size,
@@ -211,6 +244,7 @@ def character_verify(skill: str, ctx: dict, pose_bones) -> dict:
                 abs(ratio - 1.0) < _VOLUME_TOLERANCE,
                 "volume ratio {:.3f}".format(ratio)))
             _bones.reset_pose(rig)
+            _restore_fk(rig, previous_fk)
 
     failed = [c for c in checks if not c["ok"]]
     report = {"ok": not failed, "checks": checks}

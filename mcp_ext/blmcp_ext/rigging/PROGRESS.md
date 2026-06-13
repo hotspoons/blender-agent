@@ -67,6 +67,28 @@
   floating head) so a fix has to hold for the family, not one creature.
   No exact creature configuration lives in code. Suite 118, green.
 
+- **Multipart character round (2026-06-12, live-session brain dump)** —
+  driving a real scene (8-object cartoon man, ~290 non-manifold shells,
+  one giant one-sided hand) through rig_biped_rigify surfaced a failure
+  class and two latent bugs; everything learned is now code + skills:
+  NEW `rig_biped_multipart` (blrig/skills/_proxy.py + skill module):
+  fused disposable weight proxy (voxel remesh -> fatten/remesh loop ->
+  cylinder-bridge stubborn gaps), mirror-union symmetrization across the
+  bilateral-parts midline (largest cluster of per-part bbox-center x —
+  NOT combined bbox center, which the big hand drags 0.23m sideways and
+  lands leg bones inside the wrong leg / far bones in empty air with
+  one-sided bone-heat failure), weight transfer back to untouched
+  originals (POLYINTERP_NEAREST), cross-side leg-weight cleanup.
+  BUGFIXES in character_verify: armatures left in EDIT mode froze pose
+  evaluation (all probes read 0.0 on a healthy rig) — now guarded; FK
+  probes left `IK_FK`=1 making every IK control a silent no-op — now
+  captured/restored. NEW skills docs: rigging-multipart-characters
+  (full recipe + gotchas incl. keep_metarig joint-correction loop and
+  bone-feature pruning for mitt hands / solid heads),
+  rigging-stretchy-limbs (3-bone Stretch To rubber-limb recipe with
+  depsgraph acceptance numbers). Corpus: humanoid_parts (+_bighand);
+  tests: test_skill_multipart.py; evals: 2 selection scenarios.
+
 ## Next / open
 - rig_creature_rigify (variable leg count via programmatic metarig
   assembly from Rigify limb samples) — deferred; mechanical path (assembly

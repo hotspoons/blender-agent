@@ -14,7 +14,11 @@ normalization. Nothing is reimplemented; nothing is eyeballed.
 
 ## rig_biped_rigify
 
-One symmetric, standing (Z-up) humanoid mesh.
+One symmetric, standing (Z-up) humanoid mesh. If the character is split
+across SEVERAL meshes, or is one mesh made of overlapping non-manifold
+shells, use `rig_biped_multipart` instead (see
+rigging-multipart-characters) — it rigs a disposable fused weight proxy
+and transfers the weights back without touching the originals.
 
 ```
 rig("run", {"skill": "rig_biped_rigify", "objects": ["Hero"]})
@@ -40,9 +44,11 @@ One symmetric four-legged mesh. Params: `name`, `keep_metarig`,
   produces garbage on unapplied scale — apply scale, don't override.
 - `bone_heat_failed`: automatic weights found no solution (non-manifold or
   overlapping shells). Blender only prints a console warning for this; the
-  skill detects it via weight coverage and rolls the scene back. Repair the
-  mesh first (see the make-manifold skill) or, if the model is actually
-  rigid pieces, use rig_rigid_assembly instead.
+  skill detects it via weight coverage and rolls the scene back. Prefer
+  `rig_biped_multipart` (rigs a fused disposable proxy and transfers the
+  weights back — no destructive repair of the visible mesh); repair the
+  mesh only when you may modify it (see the make-manifold skill), or use
+  rig_rigid_assembly if the model is actually rigid pieces.
 
 ## After generation
 
@@ -53,3 +59,19 @@ One symmetric four-legged mesh. Params: `name`, `keep_metarig`,
 - verify() already pose-tests limbs and checks volume preservation; treat
   its `checks` list as the acceptance record.
 - Keep posing via controls only — never rotate `DEF-`/`ORG-` bones.
+- If posing from Python ever measures 0.0 displacement on a healthy rig,
+  check `rig.mode` — an armature left in EDIT mode accepts pose values
+  but evaluates none of them. And if `hand_ik.*`/`foot_ik.*` controls do
+  nothing, read `["IK_FK"]` on the `*_parent` bones (1 = FK wins) before
+  suspecting weights.
+
+## Fixing a bad metarig fit
+
+The proportional fit is deliberate v1 and can misplace joints on
+stylized proportions (ankles below the floor, head bone above the
+skull). Use `keep_metarig: true`, correct the metarig edit-bone joints
+from the real anatomy, optionally delete unusable features (fingers for
+mitt hands, the `face` hierarchy for solid cartoon heads — Rigify
+handles arbitrary subsets), then `bpy.ops.pose.rigify_generate()` to
+rebuild the SAME target rig, and re-bind. Full recipe:
+rigging-multipart-characters.

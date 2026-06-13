@@ -27,6 +27,7 @@ _SKILLS = (
     "rig_wheel",
     "rig_turret",
     "rig_biped_rigify",
+    "rig_biped_multipart",
     "rig_quadruped_rigify",
 )
 
@@ -158,7 +159,10 @@ def register(mcp: FastMCP) -> None:
         existing rig — spider legs, robot arms, landing gear),
         rig_rigid_assembly (any pile of parts; `contact_tolerance`,
         `bridge_gaps`), rig_hinge, rig_piston, rig_wheel, rig_turret,
-        rig_biped_rigify, rig_quadruped_rigify.
+        rig_biped_rigify (ONE clean symmetric humanoid mesh),
+        rig_biped_multipart (humanoid split across several meshes or
+        built from non-manifold shell piles — fused weight proxy +
+        weight transfer; originals untouched), rig_quadruped_rigify.
 
         Param/failure-code reference: skills_read("rigging-overview").
         """

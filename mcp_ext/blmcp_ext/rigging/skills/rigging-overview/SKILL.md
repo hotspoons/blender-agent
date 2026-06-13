@@ -44,7 +44,8 @@ failure code — fall back to the step-by-step flow below.
 | 2 rod-like coaxial parts that slide | `rig_piston` |
 | 1 disc-like part that spins (wheel/gear/fan/prop) | `rig_wheel` |
 | base + rotating platform + elevating member | `rig_turret` |
-| symmetric standing humanoid | `rig_biped_rigify` |
+| symmetric standing humanoid, ONE clean mesh | `rig_biped_rigify` |
+| humanoid as SEVERAL meshes, shell piles, or with one-sided appendages | `rig_biped_multipart` |
 | symmetric four-legged character | `rig_quadruped_rigify` |
 
 **Multi-legged creatures — ANY number of legs, ANY segments per leg**
@@ -85,10 +86,14 @@ Models are often built with clearance — nothing touches. Two levers:
 | `not_a_wheel` / `not_coaxial` / `not_elongated` | wrong skill for the shape | follow `suggest` |
 | `no_chain` | turret order wrong | objects = [base, platform, member] |
 | `asymmetric` | character not bilaterally symmetric | tell the user; `ignore_symmetry` on their say-so |
-| `bone_heat_failed` | auto-weights found no solution | repair mesh (make-manifold skill) or rig as parts |
+| `bone_heat_failed` | auto-weights found no solution | `rig_biped_multipart` (proxy path), repair mesh (make-manifold), or rig as parts |
+| `proxy_not_fused` | multipart proxy stayed disconnected | raise `voxel_size`, or rig_rigid_assembly |
+| `transfer_failed` | a part got unweighted verts after transfer | lower `voxel_size` so the proxy hugs the parts |
 | `bone_exists` | chain composed twice into one armature | pick different part set / armature |
 | `verify_failed` | rig built but moves wrong | read `checks`; do not ship |
 
 Failed runs roll back — retrying a different skill is always safe.
 
-See also: `rigging-mechanical`, `rigging-characters`, `rigging-standard`.
+See also: `rigging-mechanical`, `rigging-characters`,
+`rigging-multipart-characters`, `rigging-stretchy-limbs`,
+`rigging-standard`.

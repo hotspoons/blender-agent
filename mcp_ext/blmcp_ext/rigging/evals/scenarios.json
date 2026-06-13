@@ -94,6 +94,20 @@
       "expected_chain": ["rig_wheel"],
       "expect_diagnose_fail": "not_a_wheel",
       "notes": "Correct behavior: try rig_wheel per the user's intent, surface the not_a_wheel diagnosis (a cube is not a disc), and relay the suggestion."
+    },
+    {
+      "id": "multipart-man",
+      "asset": "humanoid_parts",
+      "request": "Give my guy a biped rig; he's modeled as a bunch of separate meshes.",
+      "expected_chain": ["rig_biped_multipart"],
+      "notes": "Multiple meshes -> the proxy path, not rig_biped_rigify (wrong_object_count) and not rig_rigid_assembly (the user wants smooth character deformation)."
+    },
+    {
+      "id": "multipart-bighand",
+      "asset": "humanoid_parts_bighand",
+      "request": "Bipedal rig for this man please, one arm has a giant hand. Make no mistakes.",
+      "expected_chain": ["rig_biped_multipart"],
+      "notes": "One-sided appendage: bbox-centered fits skew sideways; rig_biped_multipart symmetrizes across the bilateral-parts midline."
     }
   ]
 }

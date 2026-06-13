@@ -186,6 +186,80 @@ def humanoid_asymmetric() -> dict:
     return manifest
 
 
+def _band_part(source: bpy.types.Object, name: str,
+               z_lo: float, z_hi: float) -> bpy.types.Object:
+    """
+    Copy *source* keeping only verts with z in [z_lo, z_hi]. The cut
+    leaves OPEN boundaries — each part is deliberately non-manifold, like
+    real multi-part character models.
+    """
+    import bmesh
+    obj = source.copy()
+    obj.data = source.data.copy()
+    obj.name = name
+    bpy.context.scene.collection.objects.link(obj)
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    doomed = [v for v in bm.verts if not z_lo <= v.co.z <= z_hi]
+    bmesh.ops.delete(bm, geom=doomed, context="VERTS")
+    bm.to_mesh(obj.data)
+    bm.free()
+    obj.data.update()
+    return obj
+
+
+def humanoid_parts() -> dict:
+    """
+    The humanoid split into overlapping z-bands (head / torso+arms /
+    legs), each an open non-manifold shell — the multi-part shell-pile
+    character class that defeats direct bone-heat binding.
+    """
+    base = bpy.data.objects[humanoid()["objects"][0]]
+    z_lo = min(v.co.z for v in base.data.vertices)
+    z_hi = max(v.co.z for v in base.data.vertices)
+    height = z_hi - z_lo
+    # Bands overlap by ~4% of height so the weight proxy can fuse them.
+    bands = (
+        ("Parts.Legs", z_lo - 0.01, z_lo + 0.50 * height),
+        ("Parts.Torso", z_lo + 0.46 * height, z_lo + 0.84 * height),
+        ("Parts.Head", z_lo + 0.80 * height, z_hi + 0.01),
+    )
+    parts = [_band_part(base, name, lo, hi) for name, lo, hi in bands]
+    mesh = base.data
+    bpy.data.objects.remove(base)
+    bpy.data.meshes.remove(mesh)
+    bpy.context.view_layer.update()
+    return {
+        "objects": [p.name for p in parts],
+        "skill": "rig_biped_multipart",
+        "truth": {"symmetric": True, "n_parts": len(parts)},
+    }
+
+
+def humanoid_parts_bighand() -> dict:
+    """
+    Multi-part humanoid with one giant one-sided hand: the combined bbox
+    center is dragged toward the hand, so any bbox-centered fit places
+    the skeleton off the body midline (leg bones inside the wrong leg,
+    far-side bones in empty air -> one-sided bone-heat failure). The
+    midline must come from the bilateral parts instead.
+    """
+    manifest = humanoid_parts()
+    torso = bpy.data.objects["Parts.Torso"]
+    # Tip of the left arm (max x).
+    tip = max((v.co for v in torso.data.vertices), key=lambda co: co.x)
+    bpy.ops.mesh.primitive_uv_sphere_add(
+        radius=0.22, location=(tip.x + 0.15, tip.y, tip.z), segments=16,
+        ring_count=8)
+    hand = bpy.context.view_layer.objects.active
+    hand.name = "Parts.BigHand"
+    bpy.context.view_layer.update()
+    manifest["objects"].append(hand.name)
+    manifest["truth"]["symmetric"] = False
+    manifest["truth"]["n_parts"] += 1
+    return manifest
+
+
 def quadruped() -> dict:
     """
     Manifold skin-mesh quadruped at basic-quadruped-metarig proportions.
@@ -202,5 +276,7 @@ def quadruped() -> dict:
 CHARACTERS = {
     "humanoid": humanoid,
     "humanoid_asymmetric": humanoid_asymmetric,
+    "humanoid_parts": humanoid_parts,
+    "humanoid_parts_bighand": humanoid_parts_bighand,
     "quadruped": quadruped,
 }

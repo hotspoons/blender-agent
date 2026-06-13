@@ -33,6 +33,7 @@ _SKILLS = {
     "rig_turret": "blrig.skills.rig_turret",
     "rig_rigid_assembly": "blrig.skills.rig_rigid_assembly",
     "rig_biped_rigify": "blrig.skills.rig_biped_rigify",
+    "rig_biped_multipart": "blrig.skills.rig_biped_multipart",
     "rig_quadruped_rigify": "blrig.skills.rig_quadruped_rigify",
 }
 
