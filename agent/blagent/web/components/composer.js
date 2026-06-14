@@ -24,6 +24,7 @@ export class BaComposer extends LitElement {
     _attachments: { state: true },   // [{id, sessionId, uploading}]
     _dragOver: { state: true },
     _autoload: { state: true },      // loading a local model before send
+    _level: { state: true },         // autonomy slider: minimal|yolo|orchestrator|swarm
   };
 
   constructor() {
@@ -33,6 +34,7 @@ export class BaComposer extends LitElement {
     this._attachments = [];
     this._dragOver = false;
     this._autoload = false;
+    this._level = store.state.autonomyLevel;
     this._onLlmChange = () => this._onLocalLlmState();
   }
 
@@ -47,6 +49,7 @@ export class BaComposer extends LitElement {
         this._attachments = this._attachments.filter(
           (a) => a.sessionId === store.state.sessionId);
       }
+      if (keys.has("autonomyLevel")) this._level = store.state.autonomyLevel;
     });
     localLlm.addEventListener("change", this._onLlmChange);
   }
@@ -193,6 +196,24 @@ export class BaComposer extends LitElement {
       transition: opacity 0.15s ease;
     }
     .grip:hover::after, .grip.active::after { opacity: 1; background: var(--accent); }
+    /* Autonomy slider: a segmented pill, front-and-center above the input. */
+    .autonomy {
+      display: flex; gap: 2px; margin-bottom: 8px;
+      background: var(--surface-muted); border: 1px solid var(--border);
+      border-radius: var(--radius-md); padding: 2px;
+    }
+    .autonomy .seg {
+      flex: 1; border: none; background: transparent; color: var(--text-muted);
+      font: inherit; font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+      padding: 5px 8px; border-radius: calc(var(--radius-md) - 2px); cursor: pointer;
+      transition: background 0.12s, color 0.12s;
+    }
+    .autonomy .seg:hover:not(.on):not(:disabled) { color: var(--text); }
+    .autonomy .seg.on {
+      background: var(--accent); color: #0d0d0d;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+    }
+    .autonomy .seg:disabled { cursor: default; opacity: 0.6; }
     .chips { display: flex; gap: 6px; flex-wrap: wrap; padding-bottom: 6px; }
     .chip {
       display: inline-flex;
@@ -287,7 +308,13 @@ export class BaComposer extends LitElement {
       return;
     }
     this._autoload = false;
-    store.chat(text || "(see attached image)", ready);
+    if (this._level === "orchestrator" || this._level === "swarm") {
+      // Autonomy modes: the input establishes an objective. (Guided
+      // multi-objective intake is a later refinement; one line = one goal.)
+      store.objectives([{ text: text, acceptance: "" }]);
+    } else {
+      store.chat(text || "(see attached image)", ready);
+    }
     this._attachments = [];
     ta.value = "";
     // A manually-chosen height is the user's preference - keep it after
@@ -308,6 +335,16 @@ export class BaComposer extends LitElement {
         @dragleave=${() => { this._dragOver = false; }}
         @drop=${this._onDrop}>
         <div class="grip" title="Drag to resize" @pointerdown=${this._onGripDown}></div>
+        <div class="autonomy" role="tablist" aria-label="Autonomy level">
+          ${[["minimal", "Minimal", "Act directly; confirm every mutating tool call"],
+             ["yolo", "YOLO", "Act directly; run tool calls without confirmation"],
+             ["orchestrator", "Orchestrator", "Pursue objectives via in-process worker agents"],
+             ["swarm", "Swarm", "Parallel workers, each its own headless Blender, merged at the end"],
+            ].map(([val, label, desc]) => html`
+            <button class="seg ${this._level === val ? "on" : ""}" title=${desc}
+              ?disabled=${this._busy}
+              @click=${() => store.setAutonomyLevel(val)}>${label}</button>`)}
+        </div>
         ${this._attachments.length ? html`
           <div class="chips">
             ${this._attachments.map((a) => html`
@@ -320,7 +357,10 @@ export class BaComposer extends LitElement {
                 }}>${icon("x-mark")}</button>
               </span>`)}
           </div>` : nothing}
-        <textarea rows="1" placeholder="Ask the Blender agent..."
+        <textarea rows="1" placeholder=${
+          this._level === "orchestrator" || this._level === "swarm"
+            ? "Describe an objective for the orchestrator to pursue..."
+            : "Ask the Blender agent..."}
           @paste=${this._onPaste}
           @input=${(e) => {
             if (!this._manualHeight) {

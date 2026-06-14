@@ -28,6 +28,17 @@ class Store extends EventTarget {
       pendingConfirm: null, // {call_id, name, arguments}
       error: "",
       models: { endpoint: "", list: [], error: "", loading: false },
+      // Autonomy mode (slider): minimal | yolo | orchestrator | swarm.
+      autonomyLevel: "yolo",
+      // Live autonomy/swarm run state for the bounded nested UI.
+      autonomy: {
+        objectives: [],         // [{id, text, acceptance, status, evidence}]
+        agents: {},             // agent_id -> {id, role, task, objectiveId, state, proof, ok, events:[]}
+        agentOrder: [],         // agent_id in spawn order
+        rounds: [],             // [{round, unmet, verdicts, allMet}]
+        gathered: null,         // {master, components} when swarm gather completes
+        done: null,             // {allMet, rounds} | {paused:true,...}
+      },
     };
     this._ws = null;
     this._backoff = 500;
@@ -199,8 +210,67 @@ class Store extends EventTarget {
         }
         break;
       case "config":
-        this._set({ config: msg.config });
+        this._set({
+          config: msg.config,
+          autonomyLevel: msg.config?.autonomy_level || this.state.autonomyLevel,
+        });
         break;
+      case "autonomy_accepted":
+        // Fresh objectives run: reset the live autonomy view.
+        this._set({
+          busy: true, error: "",
+          autonomy: { objectives: [], agents: {}, agentOrder: [], rounds: [], gathered: null, done: null },
+        });
+        break;
+      case "autonomy_round_start":
+      case "objectives_update": {
+        const a = { ...this.state.autonomy, objectives: msg.objectives || this.state.autonomy.objectives };
+        this._set({ autonomy: a });
+        break;
+      }
+      case "autonomy_round_done": {
+        const a = { ...this.state.autonomy };
+        a.rounds = [...a.rounds, { round: msg.round, verdicts: msg.verdicts || [], allMet: !!msg.all_met }];
+        this._set({ autonomy: a });
+        break;
+      }
+      case "agent_spawned": {
+        const a = { ...this.state.autonomy, agents: { ...this.state.autonomy.agents } };
+        const id = msg.agent_id;
+        a.agents[id] = { id, role: msg.role || "worker", task: msg.task || "",
+          objectiveId: msg.objective_id || "", state: "running", proof: "", ok: null, events: [] };
+        if (!a.agentOrder.includes(id)) a.agentOrder = [...a.agentOrder, id];
+        this._set({ autonomy: a });
+        break;
+      }
+      case "agent_done": {
+        const a = { ...this.state.autonomy, agents: { ...this.state.autonomy.agents } };
+        const cur = a.agents[msg.agent_id] || { id: msg.agent_id, role: msg.role || "worker", events: [] };
+        a.agents[msg.agent_id] = { ...cur, state: "done", ok: msg.ok !== false, proof: msg.proof || "" };
+        this._set({ autonomy: a });
+        break;
+      }
+      case "swarm_gathered": {
+        const a = { ...this.state.autonomy, gathered: { master: msg.master || null, components: msg.components || [] } };
+        this._set({ autonomy: a });
+        break;
+      }
+      case "autonomy_done":
+      case "autonomy_paused": {
+        const a = { ...this.state.autonomy,
+          objectives: msg.objectives || this.state.autonomy.objectives,
+          done: { paused: msg.type === "autonomy_paused", allMet: !!msg.all_met, rounds: msg.rounds || 0 } };
+        this._set({ autonomy: a });
+        break;
+      }
+      case "injected": {
+        // Surface a voice-of-god injection in the transcript.
+        if (forThisSession) {
+          this.state.records.push({ role: "injected", content: msg.content, ts: Date.now() / 1000 });
+          this._set({ records: this.state.records });
+        }
+        break;
+      }
       case "local_llm_status":
         this._set({ localLlm: { status: msg.status, model_id: msg.model_id, connected: msg.connected } });
         break;
@@ -286,6 +356,23 @@ class Store extends EventTarget {
 
   setConfig(updates) {
     this.send({ type: "set_config", ...updates });
+  }
+
+  /** Set the autonomy slider; the backend re-issues the tool catalog. */
+  setAutonomyLevel(level) {
+    this._set({ autonomyLevel: level });
+    this.send({ type: "set_autonomy_level", session_id: this.state.sessionId, level });
+  }
+
+  /** Start an autonomy run from a list of {text, acceptance} objectives. */
+  objectives(list) {
+    this._set({ streaming: "", drafting: null, quiet: 0, toolCalls: {}, toolOrder: [], error: "" });
+    this.send({ type: "objectives", session_id: this.state.sessionId, objectives: list });
+  }
+
+  /** Voice of god: inject a message into a live worker's context. */
+  injectWorker(agentId, content, mode = "after_round") {
+    this.send({ type: "inject", agent_id: agentId, content, mode });
   }
 
   /** Fetch the model list for an endpoint (debounced by callers). */
