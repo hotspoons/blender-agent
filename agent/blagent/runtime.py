@@ -31,6 +31,10 @@ from .local_llm import LocalLlmBridge
 
 _log = logging.getLogger("blagent.runtime")
 
+# A real .blend (even an empty scene) is comfortably larger than this; a file
+# below it is almost certainly a failed/partial export, surfaced as suspect.
+_MIN_BLEND_BYTES = 1024
+
 # Appended to every worker task: the orchestrator demands proof, not prose.
 _WORKER_PROOF_SUFFIX = (
     "\n\nWhen the task is complete, end your turn with a short PROOF OF WORK: "
@@ -439,10 +443,23 @@ class AgentRuntime:
             if not comps:
                 return "(no component .blend files produced yet)"
             lines = ["Components produced so far (objects per file):"]
+            total = 0
             for path in comps:
+                size = os.path.getsize(path) if os.path.isfile(path) else 0
                 objs = await self._read_blend_objects(path)
-                lines.append("- {:s}: {:s}".format(
-                    os.path.basename(path), ", ".join(objs) if objs else "(empty/unreadable)"))
+                total += len(objs)
+                if not os.path.isfile(path):
+                    detail = "(missing on disk)"
+                elif size < _MIN_BLEND_BYTES:
+                    detail = "(suspect: only {:d} bytes — export may have failed)".format(size)
+                elif objs:
+                    detail = "{:d} object(s): {:s}".format(len(objs), ", ".join(objs))
+                else:
+                    detail = "0 objects (empty or unreadable scene)"
+                lines.append("- {:s} [{:d} B]: {:s}".format(
+                    os.path.basename(path), size, detail))
+            lines.append("Total: {:d} component file(s), {:d} object(s) across them.".format(
+                len(comps), total))
             return "\n".join(lines)
 
         return probe

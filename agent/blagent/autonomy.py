@@ -339,9 +339,9 @@ class SequentialScheduler:
 
 class ParallelScheduler:
     """
-    Bounded-concurrency scheduler for a future where workers each bind to
-    their own headless Blender instance (see ``blender_surface.py``). Kept
-    out of the default path until that binding exists.
+    Bounded-concurrency scheduler: runs up to ``max_concurrency`` workers at
+    once. Used in swarm mode, where each worker is a real subprocess with its
+    own headless Blender (see ``swarm.RemoteWorkerStrategy``).
     """
 
     def __init__(self, max_concurrency: int = 4) -> None:

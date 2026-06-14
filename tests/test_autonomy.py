@@ -230,6 +230,25 @@ class TestAutonomyLoop(unittest.TestCase):
         self.assertEqual(order, ["t0", "t1", "t2", "t3"])
         self.assertEqual([r.task_id for r in out], ["t0", "t1", "t2", "t3"])
 
+    def test_parallel_scheduler_runs_concurrently_and_bounds(self) -> None:
+        a = _import_autonomy()
+        tasks = [a.WorkerTask(id="t{:d}".format(i), objective_id="o", instruction="i")
+                 for i in range(6)]
+        live = {"now": 0, "peak": 0}
+
+        async def runner(task: Any) -> Any:
+            live["now"] += 1
+            live["peak"] = max(live["peak"], live["now"])
+            await asyncio.sleep(0.02)  # overlap window
+            live["now"] -= 1
+            return a.WorkerResult(task.id, "o", "ok")
+
+        out = _run(a.ParallelScheduler(max_concurrency=3).run(tasks, runner))
+        # All ran, results carry every task, and concurrency was real but capped.
+        self.assertEqual({r.task_id for r in out}, {t.id for t in tasks})
+        self.assertGreater(live["peak"], 1, "tasks must overlap (ran in parallel)")
+        self.assertLessEqual(live["peak"], 3, "concurrency must respect the cap")
+
 
 @unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
 class TestChildSessionRunner(unittest.TestCase):

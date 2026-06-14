@@ -102,16 +102,26 @@ class TestRemoteWorkerStrategy(unittest.TestCase):
         nested = os.path.join(wdir, "sessions", "s1", "media")
         os.makedirs(nested, exist_ok=True)
         blend = os.path.join(nested, "scene.blend")
+        body = b"BLENDER-v500RENDH" + b"\x00" * 2048  # magic + realistic size
         with open(blend, "wb") as fh:
-            fh.write(b"BLENDER-fake")
+            fh.write(body)
         dest = strat._collect_blend(wdir, "component_x")
         self.assertIsNotNone(dest)
         self.assertEqual(os.path.basename(dest), "component_x.blend")
         self.assertTrue(os.path.isfile(dest))
         with open(dest, "rb") as fh:
-            self.assertEqual(fh.read(), b"BLENDER-fake")
+            self.assertEqual(fh.read(), body)
         # no .blend -> None
         self.assertIsNone(strat._collect_blend(tempfile.mkdtemp(prefix="empty_"), "c2"))
+
+    def test_collect_blend_rejects_truncated_export(self) -> None:
+        exch = tempfile.mkdtemp(prefix="exch_")
+        strat = self._strategy(exch)
+        wdir = tempfile.mkdtemp(prefix="wdir_")
+        # A tiny/garbage .blend (failed export) must NOT be collected.
+        with open(os.path.join(wdir, "broken.blend"), "wb") as fh:
+            fh.write(b"oops")
+        self.assertIsNone(strat._collect_blend(wdir, "component_bad"))
 
     def test_list_components_and_gather_noop(self) -> None:
         exch = tempfile.mkdtemp(prefix="exch_")
@@ -125,6 +135,132 @@ class TestRemoteWorkerStrategy(unittest.TestCase):
         comps = strat.list_components()
         self.assertEqual([os.path.basename(c) for c in comps],
                          ["component_a.blend", "component_b.blend"])  # sorted
+
+
+@unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
+class TestSwarmStreaming(unittest.TestCase):
+    """The SSE delta -> worker-card event translation (no subprocess)."""
+
+    def _strategy(self, emit) -> Any:
+        swarm = _import_swarm()
+        return swarm.RemoteWorkerStrategy(
+            endpoint="http://x/v1", model="m",
+            exchange_dir=tempfile.mkdtemp(prefix="exch_"),
+            emit=emit, session_id="s1")
+
+    def test_agent_id_mirrors_orchestrator(self) -> None:
+        strat = self._strategy(None)
+        self.assertEqual(strat._agent_id("task-0-0"), "s1:w:task-0-0")
+
+    def test_stream_delta_emits_token_toolcall_media(self) -> None:
+        events = []
+
+        async def emit(ev):
+            events.append(ev)
+
+        strat = self._strategy(emit)
+        loop = asyncio.new_event_loop()
+        parts: list = []
+        # content token
+        loop.run_until_complete(strat._stream_delta("s1:w:t", {"content": "hello "}, parts))
+        # tool call (status maps done->ok)
+        loop.run_until_complete(strat._stream_delta("s1:w:t", {"blender_tool_calls": [
+            {"call_id": "c1", "name": "media_io", "args_json": "{}", "status": "done", "summary": "ok"}]}, parts))
+        # media (inline data url)
+        loop.run_until_complete(strat._stream_delta("s1:w:t", {"blender_media": [
+            {"id": "i1", "data_url": "data:image/png;base64,AAAA"}]}, parts))
+
+        kinds = [e["type"] for e in events]
+        self.assertEqual(kinds, ["token", "tool_status", "worker_media"])
+        # every event is tagged for the worker card
+        for e in events:
+            self.assertEqual(e["session_id"], "s1:w:t")
+            self.assertEqual(e["parent_session_id"], "s1")
+            self.assertEqual(e["role"], "worker")
+        self.assertEqual(events[1]["state"], "ok")  # done -> ok
+        self.assertEqual(events[2]["data_url"], "data:image/png;base64,AAAA")
+        self.assertEqual("".join(parts), "hello ")
+
+    def test_stream_delta_strips_data_url_markdown_from_text(self) -> None:
+        events = []
+
+        async def emit(ev):
+            events.append(ev)
+
+        strat = self._strategy(emit)
+        loop = asyncio.new_event_loop()
+        parts: list = []
+        blob = "Rendered:\n![scene](data:image/png;base64,QUJDQUJD)\nDone."
+        loop.run_until_complete(strat._stream_delta("s1:w:t", {"content": blob}, parts))
+        token = [e for e in events if e["type"] == "token"][0]
+        self.assertNotIn("data:image", token["text"])
+        self.assertIn("Rendered:", token["text"])
+        self.assertIn("Done.", token["text"])
+        # but the raw text is preserved for the proof accumulator
+        self.assertIn("data:image", "".join(parts))
+
+    def test_data_url_regex(self) -> None:
+        swarm = _import_swarm()
+        s = "a ![x](data:image/png;base64,ZZ) b ![y](data:image/jpeg;base64,QQ) c"
+        self.assertEqual(swarm._DATA_URL_MD_RE.sub("", s), "a  b  c")
+
+
+@unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
+class TestWorkerControls(unittest.TestCase):
+    """Runtime stop / interrupt / injection routing (in-process vs swarm)."""
+
+    def _runtime(self) -> Any:
+        for path in (os.path.join(_REPO_DIR, "mcp"), os.path.join(_REPO_DIR, "agent")):
+            if path not in sys.path:
+                sys.path.insert(0, path)
+        from blagent.runtime import AgentRuntime
+        from blagent.store import AgentStore
+        return AgentRuntime(AgentStore(tempfile.mkdtemp(prefix="agentdata_")), [])
+
+    def test_inprocess_worker_inject_interrupt_stop(self) -> None:
+        rt = self._runtime()
+
+        class FakeEngine:
+            def __init__(self):
+                self.injected = []
+                self.interrupted = False
+                self.aborted = False
+
+            def inject(self, content, now=False):
+                self.injected.append((content, now))
+
+            def interrupt(self):
+                self.interrupted = True
+
+            def abort(self):
+                self.aborted = True
+
+        eng = FakeEngine()
+        rt._register_worker("s1:w:t0", eng)
+        self.assertTrue(rt.worker_supports_injection("s1:w:t0"))
+        self.assertTrue(rt.inject_into_worker("s1:w:t0", "do X"))
+        self.assertEqual(eng.injected, [("do X", False)])
+        self.assertTrue(rt.interrupt_worker("s1:w:t0"))
+        self.assertTrue(eng.interrupted)
+        self.assertTrue(rt.stop_worker("s1:w:t0"))
+        self.assertTrue(eng.aborted)
+
+    def test_swarm_worker_stop_only(self) -> None:
+        rt = self._runtime()
+        calls = {"stopped": 0}
+        rt._register_swarm_worker("s1:w:t1", lambda: calls.__setitem__("stopped", calls["stopped"] + 1))
+        # swarm workers run out of process: no injection, but stop works
+        self.assertFalse(rt.worker_supports_injection("s1:w:t1"))
+        self.assertFalse(rt.inject_into_worker("s1:w:t1", "x"))
+        self.assertFalse(rt.interrupt_worker("s1:w:t1"))
+        self.assertTrue(rt.stop_worker("s1:w:t1"))
+        self.assertEqual(calls["stopped"], 1)
+
+    def test_unknown_worker_returns_false(self) -> None:
+        rt = self._runtime()
+        self.assertFalse(rt.stop_worker("nope"))
+        self.assertFalse(rt.interrupt_worker("nope"))
+        self.assertFalse(rt.inject_into_worker("nope", "x"))
 
 
 @unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")

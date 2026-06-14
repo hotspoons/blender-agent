@@ -1258,6 +1258,63 @@ class TestVoiceOfGodInjection(unittest.TestCase):
         # ...and the injected guidance reached the re-planned round.
         self.assertIn("STOP", json.dumps(llm.final_messages))
 
+    def test_interrupt_promotes_queued_without_new_content(self) -> None:
+        """interrupt() cuts generation to apply an already-queued message."""
+        from blagent.llm import LlmChunk, LlmClient
+
+        class Llm(LlmClient):
+            def __init__(self, engine: Any) -> None:
+                self.engine = engine
+                self.round = 0
+                self.final_messages: list[dict[str, Any]] = []
+
+            async def stream(self, request: dict[str, Any]) -> Any:
+                self.round += 1
+                if self.round == 1:
+                    # queue (after-round), then promote it with interrupt()
+                    self.engine.inject("APPLY THIS", now=False)
+                    self.engine.interrupt()
+                    yield LlmChunk(content="mid-thought")
+                    yield LlmChunk(tool_calls=[{
+                        "index": 0, "id": "c1",
+                        "function": {"name": "noop", "arguments": "{}"}}])
+                else:
+                    self.final_messages = request["messages"]
+                    yield LlmChunk(content="done")
+
+        engine, llm, events = self._engine_and_llm(Llm)
+        asyncio.new_event_loop().run_until_complete(engine.run_turn(
+            "s1", "go", llm, "m", autonomy="auto", max_rounds=4, budget_review=False))
+        self.assertFalse(any(
+            e["type"] == "tool_status" and e.get("name") == "noop" for e in events))
+        self.assertIn("APPLY THIS", json.dumps(llm.final_messages))
+
+    def test_abort_ends_turn_at_next_boundary(self) -> None:
+        """abort() stops the turn cooperatively; turn_done carries aborted."""
+        from blagent.llm import LlmChunk, LlmClient
+
+        class Llm(LlmClient):
+            def __init__(self, engine: Any) -> None:
+                self.engine = engine
+                self.rounds = 0
+
+            async def stream(self, request: dict[str, Any]) -> Any:
+                self.rounds += 1
+                if self.rounds == 1:
+                    self.engine.abort()
+                    yield LlmChunk(tool_calls=[{
+                        "index": 0, "id": "c1",
+                        "function": {"name": "noop", "arguments": "{}"}}])
+                else:  # must not be reached
+                    yield LlmChunk(content="should not run")
+
+        engine, llm, events = self._engine_and_llm(Llm)
+        asyncio.new_event_loop().run_until_complete(engine.run_turn(
+            "s1", "go", llm, "m", autonomy="auto", max_rounds=8, budget_review=False))
+        self.assertLessEqual(llm.rounds, 1, "aborted turn must not start another round")
+        done = [e for e in events if e["type"] == "turn_done"]
+        self.assertTrue(done and done[-1].get("aborted"))
+
 
 if __name__ == "__main__":
     unittest.main()

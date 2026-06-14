@@ -49,9 +49,29 @@ from typing import Any, Awaitable, Callable
 
 _log = logging.getLogger("blagent.swarm")
 
+# Markdown image with an inlined data: URL — chat_api adds these to the
+# assistant text so plain clients still receive tool media. We surface media
+# as its own event, so these (often huge) blobs are stripped from the prose.
+_DATA_URL_MD_RE = re.compile(r"!\[[^\]]*\]\(data:[^)]*\)")
+
 
 def _safe(name: str) -> str:
     return re.sub(r"[^a-z0-9_-]+", "_", name.lower()).strip("_") or "x"
+
+
+def _is_blend(path: str) -> bool:
+    """True if *path* looks like a real Blender file (uncompressed 'BLENDER'
+    magic, or a gzip/zstd-compressed .blend) rather than a truncated stub."""
+    try:
+        if os.path.getsize(path) < 1024:
+            return False
+        with open(path, "rb") as fh:
+            head = fh.read(8)
+    except OSError:
+        return False
+    return (head[:7] == b"BLENDER"          # uncompressed
+            or head[:2] == b"\x1f\x8b"        # gzip-compressed
+            or head[:4] == b"\x28\xb5\x2f\xfd")  # zstd-compressed (Blender 3+)
 
 
 class PortAllocator:
@@ -297,8 +317,13 @@ class RemoteWorkerStrategy:
         return prompt
 
     def _collect_blend(self, worker_dir: str, component: str) -> "str | None":
-        """Find the worker's exported .blend under its jail; copy to exchange."""
-        cands = glob.glob(os.path.join(worker_dir, "**", "*.blend"), recursive=True)
+        """
+        Find the worker's exported .blend under its jail and copy it to the
+        exchange dir. Validates the file is a real Blender file (magic header)
+        so a failed/partial export isn't passed downstream as an artifact.
+        """
+        cands = [c for c in glob.glob(os.path.join(worker_dir, "**", "*.blend"), recursive=True)
+                 if _is_blend(c)]
         if not cands:
             return None
         newest = max(cands, key=os.path.getmtime)
@@ -361,7 +386,9 @@ class RemoteWorkerStrategy:
                         continue
                     delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
                     await self._stream_delta(agent_id, delta, text_parts)
-        return "".join(text_parts)
+        # Strip inlined data-URL images from the proof; media is surfaced
+        # separately and the raw blobs would bloat the report.
+        return _DATA_URL_MD_RE.sub("", "".join(text_parts)).strip()
 
     async def _stream_delta(self, agent_id: str, delta: dict[str, Any],
                             text_parts: list[str]) -> None:
@@ -369,7 +396,12 @@ class RemoteWorkerStrategy:
         content = delta.get("content")
         if content:
             text_parts.append(str(content))
-            await self._emit_worker(agent_id, {"type": "token", "text": str(content)})
+            # chat_api inlines tool media as a markdown ![](data:...) in the
+            # text for plain clients; we surface media as its own event, so
+            # strip the (huge) data-URL blobs from the streamed prose.
+            shown = _DATA_URL_MD_RE.sub("", str(content))
+            if shown:
+                await self._emit_worker(agent_id, {"type": "token", "text": shown})
         for call in delta.get("blender_tool_calls") or ():
             state = self._STATUS_TO_STATE.get(str(call.get("status")), "error")
             await self._emit_worker(agent_id, {
