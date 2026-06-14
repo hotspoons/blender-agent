@@ -279,6 +279,21 @@ class SetAutonomyTool(Tool):
             level = "ask"
         if level not in _AUTONOMY_LEVELS:
             raise ToolError("level must be one of: " + ", ".join(_AUTONOMY_LEVELS))
+        # Changing autonomy is a privileged action: confirm with the user via
+        # an elicitation (the RBAC `elicit` level for this tool). Honor a
+        # decline; if no elicit channel is wired, fall through (back-compat).
+        if ctx.elicit is not None:
+            answer = await ctx.elicit(
+                question="The agent wants to change its autonomy level to "
+                         "'{:s}'. Allow this?".format(level),
+                options=["Allow", "Keep current level"],
+                allow_freeform=False,
+            )
+            choice = (answer.get("choices") or [None])[0]
+            if choice != "Allow":
+                return ToolResult(
+                    summary="autonomy change to '{:s}' declined by the user".format(level),
+                    data={"autonomy_level": None, "declined": True})
         self._set_level(ctx.session_id, level)
         return ToolResult(
             summary="autonomy set to {:s}".format(level),

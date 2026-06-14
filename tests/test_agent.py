@@ -1397,5 +1397,46 @@ class TestElicitation(unittest.TestCase):
                 AskUserTool().call(ctx, {"question": "anything?"}))
 
 
+class TestSetAutonomyElicits(unittest.TestCase):
+    """Changing autonomy must confirm with the user via an elicitation."""
+
+    def _call(self, elicit, args=None):
+        _import_blagent()
+        from blagent.agent_tools import SetAutonomyTool
+        from blagent.tools import ToolContext
+        applied: list[str] = []
+        tool = SetAutonomyTool(lambda sid, level: applied.append(level))
+        ctx = ToolContext(media=None, session_id="s1", elicit=elicit)
+        res = asyncio.new_event_loop().run_until_complete(
+            tool.call(ctx, args or {"level": "yolo"}))
+        return res, applied
+
+    def test_allow_applies_change(self) -> None:
+        async def elicit(**kw):
+            return {"choices": ["Allow"], "text": ""}
+        res, applied = self._call(elicit)
+        self.assertEqual(applied, ["yolo"])
+        self.assertEqual(res.data["autonomy_level"], "yolo")
+
+    def test_decline_blocks_change(self) -> None:
+        async def elicit(**kw):
+            return {"choices": ["Keep current level"], "text": ""}
+        res, applied = self._call(elicit)
+        self.assertEqual(applied, [])
+        self.assertTrue(res.data.get("declined"))
+
+    def test_dismiss_blocks_change(self) -> None:
+        async def elicit(**kw):
+            return {"cancelled": True}
+        res, applied = self._call(elicit)
+        self.assertEqual(applied, [])
+
+    def test_no_elicit_channel_falls_through(self) -> None:
+        # Headless (chat API): no user to confirm — apply directly (back-compat).
+        res, applied = self._call(None)
+        self.assertEqual(applied, ["yolo"])
+        self.assertEqual(res.data["autonomy_level"], "yolo")
+
+
 if __name__ == "__main__":
     unittest.main()
