@@ -12,6 +12,7 @@ Control-plane protocol (JSON over ``/ws``):
 Client -> server:
     ``{"type": "chat", "session_id": "", "content": "..."}``
     ``{"type": "objectives", "session_id": "", "objectives": [{"text", "acceptance"}], "max_rounds"?}``
+    ``{"type": "inject", "agent_id": "...", "content": "...", "mode": "now"|"after_round"}``
     ``{"type": "new_session"}``
     ``{"type": "load_session", "id": ...}``
     ``{"type": "delete_session", "id": ...}``
@@ -215,6 +216,18 @@ async def _handle_control(runtime: AgentRuntime, ws: WebSocket, data: dict[str, 
                     max_rounds=int(mr) if isinstance(mr, int) else None,
                 )
                 await ws.send_json({"type": "autonomy_accepted", "session_id": session_id})
+        elif msg_type == "inject":
+            # Voice of god: inject a message into a running worker's context.
+            ok = runtime.inject_into_worker(
+                str(data.get("agent_id", "")),
+                str(data.get("content", "")),
+                now=str(data.get("mode", "")) == "now",
+            )
+            if not ok:
+                await ws.send_json({
+                    "type": "error",
+                    "message": "no live worker {!r} to inject into".format(data.get("agent_id", "")),
+                })
         elif msg_type == "new_session":
             session_id = runtime.new_session()
             await ws.send_json({"type": "session_loaded", "session_id": session_id, "records": [], "media": []})

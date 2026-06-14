@@ -66,6 +66,8 @@ class ChildSessionRunner:
             max_rounds: int = 8,
             context_tokens: int = 0,
             budget_review: bool = False,
+            register: "Callable[[str, AgentEngine], None] | None" = None,
+            unregister: "Callable[[str], None] | None" = None,
     ) -> None:
         self._registry = registry
         self._make_llm = make_llm
@@ -78,6 +80,10 @@ class ChildSessionRunner:
         self._max_rounds = max_rounds
         self._context_tokens = context_tokens
         self._budget_review = budget_review
+        # Lets the runtime track the live worker engine by agent id so the
+        # user can inject messages straight into it (voice of god).
+        self._register = register
+        self._unregister = unregister
 
     async def __call__(self, task: Any) -> Any:
         from .autonomy import WorkerResult
@@ -98,6 +104,17 @@ class ChildSessionRunner:
             emit=child_emit,
             append_record=append,
         )
+        # Informed worker: seed the orchestrator's context before the turn.
+        # Blind worker (default): task.context is empty, nothing is seeded.
+        if getattr(task, "context", ""):
+            engine.push_record({
+                "role": "user",
+                "content": "[Orchestrator context]\n{:s}".format(task.context),
+                "synthetic": True,
+                "shared_context": True,
+            })
+        if self._register is not None:
+            self._register(agent_id, engine)
         try:
             await engine.run_turn(
                 session_id=agent_id,
@@ -114,6 +131,9 @@ class ChildSessionRunner:
             return WorkerResult(
                 task_id=task.id, objective_id=task.objective_id,
                 proof="worker errored: {:s}".format(ex), ok=False, transcript_ref=agent_id)
+        finally:
+            if self._unregister is not None:
+                self._unregister(agent_id)
 
         proof = ""
         for record in reversed(records):
@@ -166,6 +186,8 @@ class AgentRuntime:
         tools.append(ContinueWorkingTool())
         self.registry = ToolRegistry(tools)
         self._sessions: dict[str, _Session] = {}
+        # Live worker engines by agent id, for voice-of-god injection.
+        self._workers: dict[str, AgentEngine] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._system_prompt = self._load_system_prompt()
 
@@ -440,6 +462,8 @@ class AgentRuntime:
             max_rounds=config.max_rounds,
             context_tokens=config.context_tokens,
             budget_review=config.budget_review,
+            register=self._register_worker,
+            unregister=self._unregister_worker,
         )
         orchestrator = AutonomyOrchestrator(
             planner=LlmPlanner(llm, model),
@@ -449,6 +473,7 @@ class AgentRuntime:
             worker_runner=runner,
             emit=self.emit,
             session_id=session_id,
+            share_context=config.autonomy_share_context,
         )
         rounds = max_rounds or config.max_autonomy_rounds
 
@@ -471,6 +496,25 @@ class AgentRuntime:
 
         session.task = asyncio.create_task(_run())
         return session_id
+
+    def _register_worker(self, agent_id: str, engine: AgentEngine) -> None:
+        self._workers[agent_id] = engine
+
+    def _unregister_worker(self, agent_id: str) -> None:
+        self._workers.pop(agent_id, None)
+
+    def inject_into_worker(self, agent_id: str, content: str, now: bool = False) -> bool:
+        """
+        Voice of god: push *content* straight into a running worker's context,
+        bypassing the orchestrator. *now* cuts its in-flight generation short
+        (applied after any running tool finishes); otherwise it lands at the
+        worker's next round boundary. Returns False if no such worker is live.
+        """
+        engine = self._workers.get(agent_id)
+        if engine is None:
+            return False
+        engine.inject(content, now=now)
+        return True
 
     def confirm_tool(self, session_id: str, call_id: str, approve: bool) -> bool:
         session = self._sessions.get(session_id)

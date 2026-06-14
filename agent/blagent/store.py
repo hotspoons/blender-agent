@@ -154,6 +154,10 @@ class AgentConfig:
     # back when the evaluator reports no path forward.
     autonomy_policy: str = "auto_until_done"
     max_autonomy_rounds: int = 6
+    # When True, seed each worker with the orchestrator's objective context
+    # (informed worker); when False (default), workers run blind on just
+    # their task — so the two can be compared on the same problem.
+    autonomy_share_context: bool = False
 
     @classmethod
     def load(cls, path: str) -> "AgentConfig":
@@ -196,6 +200,7 @@ class AgentConfig:
             "autonomy_mode": self.autonomy_mode,
             "autonomy_policy": self.autonomy_policy,
             "max_autonomy_rounds": self.max_autonomy_rounds,
+            "autonomy_share_context": self.autonomy_share_context,
         }
 
 

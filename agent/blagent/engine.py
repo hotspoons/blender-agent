@@ -219,6 +219,26 @@ class AgentEngine:
         # model, e.g. vLLM without an image encoder) - the transcript
         # then renders media as text placeholders instead.
         self.vision_ok = True
+        # Voice-of-god injection: out-of-band messages pushed into THIS
+        # turn's context (e.g. the user steering a worker directly). Drained
+        # at each round boundary; ``_interrupt`` cuts the in-flight
+        # generation short so an injection lands at the next safe point
+        # (a running tool still finishes — a scene mutation can't be undone).
+        self._injections: list[str] = []
+        self._interrupt = asyncio.Event()
+
+    def inject(self, content: str, now: bool = False) -> None:
+        """
+        Queue an out-of-band message into the current turn. Picked up at the
+        next round boundary; when *now*, also cut the in-flight generation
+        short so it is applied immediately (after any running tool finishes).
+        """
+        content = (content or "").strip()
+        if not content:
+            return
+        self._injections.append(content)
+        if now:
+            self._interrupt.set()
 
     # ------------------------------------------------------------------
     # Transcript helpers.
@@ -572,8 +592,27 @@ class AgentEngine:
         turn_had_tool_calls = False
         reviews_done = 0
         low_budget_warned = False
+        self._injections = []
+        self._interrupt.clear()
 
         while True:
+            # Drain any voice-of-god injections into context before this
+            # round decides anything; clear the interrupt for the new round.
+            if self._injections:
+                pending, self._injections = self._injections, []
+                for message in pending:
+                    self.push_record({
+                        "role": "user",
+                        "content": "[Injected by the user mid-turn] {:s}".format(message),
+                        "injected": True,
+                    })
+                    await self._emit({
+                        "type": "injected",
+                        "session_id": session_id,
+                        "content": message,
+                    })
+            self._interrupt.clear()
+
             if feedback_media:
                 self.push_record({
                     "role": "user",
@@ -611,6 +650,17 @@ class AgentEngine:
                 else:
                     _log.error("LLM round failed: %s", ex)
                     raise
+
+            if self._interrupt.is_set():
+                # A 'now' injection cut this generation short. Keep any
+                # partial text, then re-loop to apply the injected guidance
+                # (drained at the top) rather than act on a half-formed plan.
+                if content.strip():
+                    self.push_record({"role": "assistant", "content": content})
+                    await self._emit({
+                        "type": "assistant_done", "session_id": session_id,
+                        "content": content, "tool_calls": [], "interrupted": True})
+                continue
 
             record: dict[str, Any] = {"role": "assistant", "content": content}
             if tool_calls:
@@ -807,6 +857,12 @@ class AgentEngine:
         try:
             async for chunk in llm.stream(request):
                 last_chunk_at[0] = _now()
+                if self._interrupt.is_set():
+                    # A 'now' injection arrived: stop generating at this
+                    # chunk boundary. The caller keeps any partial text and
+                    # re-loops to apply the injection. (Tool calls aren't
+                    # dispatched on an interrupted round.)
+                    break
                 if chunk.content:
                     content_parts.append(chunk.content)
                     await self._emit({"type": "token", "session_id": session_id, "text": chunk.content})

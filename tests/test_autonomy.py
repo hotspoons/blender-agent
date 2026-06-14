@@ -122,6 +122,41 @@ class TestAutonomyLoop(unittest.TestCase):
         self.assertEqual(sum(e["type"] == "autonomy_round_start" for e in events), 2)
         self.assertTrue(any(e["type"] == "autonomy_done" and e["all_met"] for e in events))
 
+    def _captured_worker_context(self, share: bool) -> str:
+        a = _import_autonomy()
+        llm = self._scripted_llm([
+            '{"tasks": [{"objective_id": "o1", "instruction": "do it"}]}',
+            '{"verdicts": [{"objective_id": "o1", "met": true, "evidence": "done"}]}',
+        ])
+        captured: list[str] = []
+
+        async def worker_runner(task: Any) -> Any:
+            captured.append(task.context)
+            return a.WorkerResult(task.id, task.objective_id, "ok", ok=True)
+
+        async def emit(event: dict[str, Any]) -> None:
+            pass
+
+        objectives = [a.Objective(id="o1", text="a watertight torso", acceptance="is watertight")]
+        orch = a.AutonomyOrchestrator(
+            planner=a.LlmPlanner(llm, "m"),
+            scheduler=a.SequentialScheduler(),
+            evaluator=a.StateAwareEvaluator(llm, "m"),
+            policy=a.AutoUntilDonePolicy(),
+            worker_runner=worker_runner,
+            emit=emit,
+            session_id="s1",
+            share_context=share,
+        )
+        _run(orch.run(objectives, max_rounds=2))
+        return captured[0] if captured else ""
+
+    def test_share_context_switch(self) -> None:
+        blind = self._captured_worker_context(share=False)
+        informed = self._captured_worker_context(share=True)
+        self.assertEqual(blind, "")
+        self.assertIn("watertight torso", informed)
+
     def test_pause_when_blocked(self) -> None:
         a = _import_autonomy()
         llm = self._scripted_llm([
@@ -235,6 +270,16 @@ class TestChildSessionRunner(unittest.TestCase):
         async def emit(event: dict[str, Any]) -> None:
             events.append(event)
 
+        live: dict[str, Any] = {}
+        registered: list[str] = []
+
+        def register(aid: str, eng: Any) -> None:
+            live[aid] = eng
+            registered.append(aid)
+
+        def unregister(aid: str) -> None:
+            live.pop(aid, None)
+
         tmp = tempfile.mkdtemp(prefix="worker_")
         runner = ChildSessionRunner(
             registry=ToolRegistry([StubTool()]),
@@ -247,6 +292,8 @@ class TestChildSessionRunner(unittest.TestCase):
             parent_session_id="orch1",
             autonomy="auto",
             max_rounds=4,
+            register=register,
+            unregister=unregister,
         )
         result = _run(runner(WorkerTask(id="t1", objective_id="o1", instruction="build it")))
 
@@ -254,6 +301,9 @@ class TestChildSessionRunner(unittest.TestCase):
         self.assertIn("Cube", result.proof)
         self.assertEqual(result.transcript_ref, "orch1:w:t1")
         self.assertEqual(len(tool_calls), 1)  # the worker really ran the tool
+        # Registered for injection during the run, cleaned up after.
+        self.assertEqual(registered, ["orch1:w:t1"])
+        self.assertEqual(live, {})
         worker_events = [e for e in events if e.get("parent_session_id") == "orch1"]
         self.assertTrue(worker_events)
         self.assertTrue(all(e.get("role") == "worker" for e in worker_events))

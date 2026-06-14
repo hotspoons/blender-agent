@@ -1158,5 +1158,106 @@ class TestWeightedRoundBudget(unittest.TestCase):
         self.assertGreater(looking, 2 * mutating)
 
 
+@unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
+class TestVoiceOfGodInjection(unittest.TestCase):
+    """
+    Mid-turn message injection (the user steering a worker directly):
+    'after round' lands at the next round boundary; 'now' cuts the
+    in-flight generation short so it lands immediately.
+    """
+
+    def _engine_and_llm(self, llm_factory: Any) -> Any:
+        _import_blagent()
+        from blagent.engine import AgentEngine
+        from blagent.tools import Tool, ToolRegistry, ToolResult
+
+        class StubTool(Tool):
+            name = "noop"
+            description = ""
+
+            def input_schema(self) -> dict:
+                return {"type": "object", "properties": {}}
+
+            async def call(self, ctx: Any, args: dict) -> Any:
+                return ToolResult(summary="ok", data={})
+
+        events: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            events.append(event)
+
+        engine = AgentEngine(
+            registry=ToolRegistry([StubTool()]),
+            media=None,
+            system_prompt="",
+            emit=emit,
+            append_record=lambda record: None,
+        )
+        llm = llm_factory(engine)
+        return engine, llm, events
+
+    def test_after_round_injection_enters_next_round_context(self) -> None:
+        from blagent.llm import LlmChunk, LlmClient
+
+        class Llm(LlmClient):
+            def __init__(self, engine: Any) -> None:
+                self.engine = engine
+                self.round = 0
+                self.round2_messages: list[dict[str, Any]] = []
+
+            async def stream(self, request: dict[str, Any]) -> Any:
+                self.round += 1
+                if self.round == 1:
+                    self.engine.inject("FOCUS ON THE CUBE", now=False)
+                    yield LlmChunk(tool_calls=[{
+                        "index": 0, "id": "c1",
+                        "function": {"name": "noop", "arguments": "{}"}}])
+                else:
+                    self.round2_messages = request["messages"]
+                    yield LlmChunk(content="done")
+
+        engine, llm, _ = self._engine_and_llm(Llm)
+        asyncio.new_event_loop().run_until_complete(engine.run_turn(
+            "s1", "go", llm, "m", autonomy="auto", max_rounds=4, budget_review=False))
+
+        blob = json.dumps(llm.round2_messages)
+        self.assertIn("FOCUS ON THE CUBE", blob)
+        self.assertTrue(any(r.get("injected") for r in engine.records))
+
+    def test_interrupt_now_cuts_generation_and_reloops(self) -> None:
+        from blagent.llm import LlmChunk, LlmClient
+
+        class Llm(LlmClient):
+            def __init__(self, engine: Any) -> None:
+                self.engine = engine
+                self.round = 0
+                self.tool_ran = False
+                self.final_messages: list[dict[str, Any]] = []
+
+            async def stream(self, request: dict[str, Any]) -> Any:
+                self.round += 1
+                if self.round == 1:
+                    # Inject NOW, then try to keep generating a tool call —
+                    # the engine must cut us off before dispatching it.
+                    self.engine.inject("STOP — do X instead", now=True)
+                    yield LlmChunk(content="half a plan...")
+                    yield LlmChunk(tool_calls=[{
+                        "index": 0, "id": "c1",
+                        "function": {"name": "noop", "arguments": "{}"}}])
+                else:
+                    self.final_messages = request["messages"]
+                    yield LlmChunk(content="re-planned")
+
+        engine, llm, events = self._engine_and_llm(Llm)
+        asyncio.new_event_loop().run_until_complete(engine.run_turn(
+            "s1", "go", llm, "m", autonomy="auto", max_rounds=4, budget_review=False))
+
+        # The interrupted round did not dispatch the tool call...
+        self.assertFalse(any(
+            e["type"] == "tool_status" and e.get("name") == "noop" for e in events))
+        # ...and the injected guidance reached the re-planned round.
+        self.assertIn("STOP", json.dumps(llm.final_messages))
+
+
 if __name__ == "__main__":
     unittest.main()

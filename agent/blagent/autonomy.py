@@ -78,6 +78,11 @@ class WorkerTask:
     id: str
     objective_id: str
     instruction: str
+    # Orchestrator context shared with the worker (objectives + status).
+    # Empty == the worker runs blind on just its instruction. Set by the
+    # orchestrator when share_context is on, so blind vs informed workers
+    # can be compared on the same problem.
+    context: str = ""
 
 
 @dataclasses.dataclass
@@ -374,6 +379,7 @@ class AutonomyOrchestrator:
             worker_runner: WorkerRunner,
             emit: Callable[[dict[str, Any]], Awaitable[None]],
             session_id: str = "",
+            share_context: bool = False,
     ) -> None:
         self._planner = planner
         self._scheduler = scheduler
@@ -382,6 +388,21 @@ class AutonomyOrchestrator:
         self._worker_runner = worker_runner
         self._emit = emit
         self._session_id = session_id
+        self._share_context = share_context
+
+    def _shared_context(self, objectives: list[Objective]) -> str:
+        """The orchestrator's objective view, shared with informed workers."""
+        lines = ["Autonomy run — the orchestrator's objectives and current status:"]
+        for o in objectives:
+            line = "- [{:s}] {:s} (done-when: {:s})".format(
+                "MET" if o.status == "met" else "unmet", o.text, o.acceptance)
+            if o.evidence:
+                line += " | latest: {:s}".format(o.evidence)
+            lines.append(line)
+        lines.append(
+            "Do your assigned task; the orchestrator will verify the result "
+            "against these objectives.")
+        return "\n".join(lines)
 
     def _objectives_payload(self, objectives: list[Objective]) -> list[dict[str, Any]]:
         return [dataclasses.asdict(o) for o in objectives]
@@ -439,6 +460,10 @@ class AutonomyOrchestrator:
                 break
 
             tasks = await self._planner.plan(unmet)
+            if self._share_context:
+                shared = self._shared_context(objectives)
+                for task in tasks:
+                    task.context = shared
             results = await self._scheduler.run(tasks, self._run_one_worker)
             verdicts = await self._evaluator.evaluate(objectives, results)
 
