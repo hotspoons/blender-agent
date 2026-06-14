@@ -22,6 +22,7 @@ __all__ = (
 )
 
 import dataclasses
+from typing import Awaitable, Callable
 
 from typing import TYPE_CHECKING, Any
 
@@ -79,6 +80,10 @@ class ToolContext:
     media: "MediaLibrary"
     turn_budget: TurnBudget | None = None
     session_id: str = ""
+    # Ask the user a question mid-turn (multiple choice + freeform). Set by the
+    # engine; None when no interactive user is attached (e.g. headless API), in
+    # which case a tool should fall back rather than block.
+    elicit: "Callable[..., Awaitable[dict[str, Any]]] | None" = None
 
 
 class Tool:

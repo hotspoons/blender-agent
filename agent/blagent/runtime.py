@@ -22,7 +22,7 @@ import os
 
 from typing import Any, Awaitable, Callable
 
-from .agent_tools import ContinueWorkingTool, MediaTool, SetAutonomyTool, SkillsTool
+from .agent_tools import AskUserTool, ContinueWorkingTool, MediaTool, SetAutonomyTool, SkillsTool
 from .engine import AgentEngine
 from .llm import LlmClient, LlmError, LocalLlmBridgeClient, OpenAiHttpClient
 from .media import MediaLibrary
@@ -191,6 +191,8 @@ class AgentRuntime:
         tools.append(SkillsTool(store))
         tools.append(MediaTool())
         tools.append(ContinueWorkingTool())
+        # Lets the agent ask the user a question (multiple choice + freeform).
+        tools.append(AskUserTool())
         # Lets the agent adjust its own autonomy level (also over the OpenAI
         # endpoint), instead of only via the UI slider.
         tools.append(SetAutonomyTool(self.set_autonomy_level))
@@ -756,6 +758,13 @@ class AgentRuntime:
         if session is None:
             return False
         return session.engine.resolve_confirm(call_id, approve)
+
+    def resolve_elicit(self, session_id: str, elicit_id: str, response: dict[str, Any]) -> bool:
+        """Deliver the user's answer to a tool waiting on an elicitation."""
+        session = self._sessions.get(session_id)
+        if session is None:
+            return False
+        return session.engine.resolve_elicit(elicit_id, response)
 
     def approve_agent_tool(self, name: str, approve: bool) -> bool:
         """

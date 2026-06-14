@@ -53,6 +53,7 @@ export class BaChatStage extends LitElement {
     _streaming: { state: true },
     _toolOrder: { state: true },
     _pending: { state: true },
+    _elicit: { state: true },
     _error: { state: true },
     _busy: { state: true },
     _drafting: { state: true },
@@ -72,6 +73,9 @@ export class BaChatStage extends LitElement {
     this._streaming = "";
     this._toolOrder = [];
     this._pending = null;
+    this._elicit = null;
+    this._elicitSel = new Set();   // selected option(s) for the current elicit
+    this._elicitText = "";          // freeform answer for the current elicit
     // tool-name -> "approved" | "rejected", once the human decides on a
     // pending agent-authored tool.
     this._approvals = {};
@@ -98,6 +102,11 @@ export class BaChatStage extends LitElement {
       if (keys.has("streaming")) this._streaming = store.state.streaming;
       if (keys.has("toolOrder") || keys.has("toolCalls")) this._toolOrder = [...store.state.toolOrder];
       if (keys.has("pendingConfirm")) this._pending = store.state.pendingConfirm;
+      if (keys.has("pendingElicit")) {
+        this._elicit = store.state.pendingElicit;
+        this._elicitSel = new Set();
+        this._elicitText = "";
+      }
       if (keys.has("error")) this._error = store.state.error;
       if (keys.has("busy")) this._busy = store.state.busy;
       if (keys.has("drafting")) this._drafting = store.state.drafting;
@@ -303,6 +312,30 @@ export class BaChatStage extends LitElement {
     }
     .confirm .yes { background: var(--success); color: #fff; }
     .confirm .no { background: var(--surface-muted); color: var(--text); }
+    /* Elicitation card: a tool asking the user (multiple choice + freeform). */
+    .elicit { border: 1px solid var(--accent); border-radius: var(--radius-md);
+      padding: 12px 14px; background: var(--surface-elevated); }
+    .elicit .q { display: flex; align-items: center; gap: 8px; font-size: 14px;
+      font-weight: 600; color: var(--text); margin-bottom: 10px; }
+    .elicit .q svg { width: 16px; height: 16px; color: var(--accent); flex: none; }
+    .elicit .opts { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+    .elicit .opt { display: flex; align-items: center; gap: 8px; text-align: left;
+      padding: 8px 12px; font: inherit; font-size: 13px; cursor: pointer;
+      background: var(--surface); color: var(--text);
+      border: 1px solid var(--border); border-radius: var(--radius-sm); }
+    .elicit .opt:hover { border-color: var(--accent); }
+    .elicit .opt.on { border-color: var(--accent); background: var(--accent-soft); }
+    .elicit .opt .mark { color: var(--accent); }
+    .elicit .freeform { width: 100%; box-sizing: border-box; resize: vertical;
+      background: var(--surface); color: var(--text); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 7px 10px; font: inherit; font-size: 13px; }
+    .elicit .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+    .elicit .actions button { display: inline-flex; align-items: center; gap: 6px;
+      font: inherit; font-weight: 600; border-radius: var(--radius-sm); padding: 7px 14px; cursor: pointer; }
+    .elicit .skip { background: var(--surface-muted); color: var(--text-muted); border: 1px solid var(--border); }
+    .elicit .send { background: var(--accent); color: #0d0d0d; border: none; }
+    .elicit .send:disabled { opacity: 0.45; cursor: default; }
+    .elicit .send svg { width: 14px; height: 14px; }
     .error-banner {
       border: 1px solid var(--danger);
       color: var(--danger);
@@ -830,6 +863,7 @@ export class BaChatStage extends LitElement {
             ${records.map((r, i) => this._renderRecord(r, i))}
             ${this._unclaimedLiveToolIds(records).map((id) => this._renderToolCard(id))}
             ${this._pending ? this._renderConfirm() : nothing}
+            ${this._elicit ? this._renderElicit() : nothing}
             ${this._streaming ? this._renderAssistantText(this._streaming, "stream") : nothing}
             ${this._drafting && !this._quiet ? html`
               <div class="thinking-row"><span class="spin">${icon("arrow-path")}</span>
@@ -1022,6 +1056,50 @@ export class BaChatStage extends LitElement {
         <pre>${prettyArgs.slice(0, 2000)}</pre>
         <button class="yes" @click=${() => store.confirm(p.call_id, true)}>${icon("check")} Allow</button>
         <button class="no" @click=${() => store.confirm(p.call_id, false)}>${icon("x-mark")} Deny</button>
+      </div>
+    `;
+  }
+
+  _toggleElicit(opt) {
+    const s = new Set(this._elicit.multi ? this._elicitSel : []);
+    s.has(opt) ? s.delete(opt) : s.add(opt);
+    this._elicitSel = s;
+    this.requestUpdate();
+  }
+
+  _submitElicit() {
+    const e = this._elicit;
+    const choices = [...this._elicitSel];
+    const text = (this._elicitText || "").trim();
+    if (!choices.length && !text) return; // nothing to send
+    store.elicitRespond(e.elicit_id, choices, text, false);
+  }
+
+  _renderElicit() {
+    const e = this._elicit;
+    const canSend = this._elicitSel.size > 0 || (this._elicitText || "").trim().length > 0;
+    return html`
+      <div class="elicit">
+        <div class="q">${icon("sparkles")} ${e.question}</div>
+        ${e.options?.length ? html`
+          <div class="opts">
+            ${e.options.map((opt) => html`
+              <button class="opt ${this._elicitSel.has(opt) ? "on" : ""}"
+                @click=${() => this._toggleElicit(opt)}>
+                <span class="mark">${this._elicitSel.has(opt) ? (e.multi ? "☑" : "●") : (e.multi ? "☐" : "○")}</span>
+                ${opt}</button>`)}
+          </div>` : nothing}
+        ${e.allow_freeform ? html`
+          <textarea class="freeform" rows="2"
+            placeholder=${e.options?.length ? "…or type your own answer" : "Type your answer"}
+            .value=${this._elicitText}
+            @input=${(ev) => { this._elicitText = ev.target.value; this.requestUpdate(); }}
+            @keydown=${(ev) => { if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); this._submitElicit(); } }}></textarea>` : nothing}
+        <div class="actions">
+          <button class="skip" @click=${() => store.elicitRespond(e.elicit_id, [], "", true)}>Skip</button>
+          <button class="send" ?disabled=${!canSend} @click=${() => this._submitElicit()}>
+            ${icon("arrow-up")} Send answer</button>
+        </div>
       </div>
     `;
   }

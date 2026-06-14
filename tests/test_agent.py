@@ -1328,5 +1328,74 @@ class TestVoiceOfGodInjection(unittest.TestCase):
         self.assertTrue(done and done[-1].get("aborted"))
 
 
+@unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
+class TestElicitation(unittest.TestCase):
+    """ask_user: a tool asks the user mid-turn; the answer feeds back in."""
+
+    def test_ask_user_round_trip(self) -> None:
+        _import_blagent()
+        from blagent.agent_tools import AskUserTool
+        from blagent.engine import AgentEngine
+        from blagent.llm import LlmChunk, LlmClient
+        from blagent.tools import ToolRegistry
+
+        events: list[dict[str, Any]] = []
+
+        async def emit(e: dict[str, Any]) -> None:
+            events.append(e)
+
+        class Llm(LlmClient):
+            def __init__(self) -> None:
+                self.round = 0
+                self.final: list[dict[str, Any]] = []
+
+            async def stream(self, request: dict[str, Any]) -> Any:
+                self.round += 1
+                if self.round == 1:
+                    yield LlmChunk(tool_calls=[{
+                        "index": 0, "id": "c1", "function": {
+                            "name": "ask_user",
+                            "arguments": json.dumps({"question": "Pick one", "options": ["A", "B"]})}}])
+                else:
+                    self.final = request["messages"]
+                    yield LlmChunk(content="done")
+
+        engine = AgentEngine(
+            registry=ToolRegistry([AskUserTool()]), media=None, system_prompt="",
+            emit=emit, append_record=lambda r: None)
+        llm = Llm()
+
+        async def main() -> None:
+            task = asyncio.create_task(engine.run_turn(
+                "s1", "go", llm, "m", autonomy="auto", max_rounds=4, budget_review=False))
+            for _ in range(300):
+                el = [e for e in events if e["type"] == "elicitation"]
+                if el:
+                    break
+                await asyncio.sleep(0.01)
+            el = [e for e in events if e["type"] == "elicitation"]
+            assert el, "engine never emitted an elicitation"
+            self.assertEqual(el[0]["options"], ["A", "B"])
+            engine.resolve_elicit(el[0]["elicit_id"], {
+                "choices": ["B"], "text": "prefer B", "cancelled": False})
+            await task
+
+        asyncio.new_event_loop().run_until_complete(main())
+        blob = json.dumps(llm.final)
+        self.assertIn("prefer B", blob)        # the answer reached the next round
+        self.assertIn("B", blob)
+        self.assertTrue(any(e["type"] == "elicitation_done" for e in events))
+
+    def test_ask_user_without_interactive_user_errors(self) -> None:
+        _import_blagent()
+        from blagent.agent_tools import AskUserTool
+        from blagent.tools import ToolContext, ToolError
+
+        ctx = ToolContext(media=None, elicit=None)  # headless: no user attached
+        with self.assertRaises(ToolError):
+            asyncio.new_event_loop().run_until_complete(
+                AskUserTool().call(ctx, {"question": "anything?"}))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -23,6 +23,7 @@ Client -> server:
     ``{"type": "delete_session", "id": ...}``
     ``{"type": "set_config", ...partial config...}``
     ``{"type": "confirm", "session_id": ..., "call_id": ..., "approve": true}``
+    ``{"type": "elicit_response", "session_id": ..., "elicit_id": ..., "choices": [...], "text": "..."}``
     ``{"type": "abort", "session_id": ...}``
 
 Server -> client: ``hello``, ``sessions``, ``session_loaded``,
@@ -318,6 +319,19 @@ async def _handle_control(runtime: AgentRuntime, ws: WebSocket, data: dict[str, 
             )
             if not ok:
                 await ws.send_json({"type": "error", "message": "no pending confirmation for that call"})
+        elif msg_type == "elicit_response":
+            # The user's answer to an ask_user elicitation.
+            ok = runtime.resolve_elicit(
+                str(data.get("session_id", "")),
+                str(data.get("elicit_id", "")),
+                {
+                    "choices": [str(c) for c in (data.get("choices") or [])],
+                    "text": str(data.get("text", "")),
+                    "cancelled": bool(data.get("cancelled", False)),
+                },
+            )
+            if not ok:
+                await ws.send_json({"type": "error", "message": "no pending elicitation for that id"})
         elif msg_type == "approve_agent_tool":
             name = str(data.get("name", ""))
             approve = bool(data.get("approve", False))

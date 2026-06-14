@@ -26,6 +26,7 @@ class Store extends EventTarget {
       toolCalls: {},     // call_id -> {name, arguments, state, summary, media_ids}
       toolOrder: [],     // call ids in arrival order (current turn)
       pendingConfirm: null, // {call_id, name, arguments}
+      pendingElicit: null,  // {elicit_id, question, options, allow_freeform, multi}
       error: "",
       models: { endpoint: "", list: [], error: "", loading: false },
       // Autonomy mode (slider): minimal | yolo | orchestrator | swarm.
@@ -277,9 +278,21 @@ class Store extends EventTarget {
         this._set(patch);
         break;
       }
+      case "elicitation":
+        // A tool is asking the user a question (multiple choice + freeform).
+        if (forThisSession) {
+          this._set({ pendingElicit: {
+            elicit_id: msg.elicit_id, question: msg.question || "",
+            options: msg.options || [], allow_freeform: msg.allow_freeform !== false,
+            multi: !!msg.multi } });
+        }
+        break;
+      case "elicitation_done":
+        if (this.state.pendingElicit?.elicit_id === msg.elicit_id) this._set({ pendingElicit: null });
+        break;
       case "turn_done":
         if (forThisSession) {
-          this._set({ busy: false, streaming: "", drafting: null, quiet: 0 });
+          this._set({ busy: false, streaming: "", drafting: null, quiet: 0, pendingElicit: null });
           this.send({ type: "list_sessions" });
           this._refreshMedia();
         }
@@ -530,6 +543,15 @@ class Store extends EventTarget {
 
   confirm(callId, approve) {
     this.send({ type: "confirm", session_id: this.state.sessionId, call_id: callId, approve });
+  }
+
+  /** Answer an ask_user elicitation (choices + freeform), or dismiss it. */
+  elicitRespond(elicitId, choices, text, cancelled = false) {
+    this.send({
+      type: "elicit_response", session_id: this.state.sessionId,
+      elicit_id: elicitId, choices: choices || [], text: text || "", cancelled,
+    });
+    if (this.state.pendingElicit?.elicit_id === elicitId) this._set({ pendingElicit: null });
   }
 
   // Human decision on an agent-authored tool saved inert pending import

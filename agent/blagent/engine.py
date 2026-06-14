@@ -28,6 +28,7 @@ import json
 import logging
 import re
 import time
+import uuid
 
 from typing import Any, Awaitable, Callable
 
@@ -215,6 +216,10 @@ class AgentEngine:
         self.records: list[dict[str, Any]] = []
         # call_id -> Future resolved by the runtime on user confirm/deny.
         self.pending_confirms: dict[str, asyncio.Future[bool]] = {}
+        # Elicitation: a tool asking the user a question mid-turn (multiple
+        # choice + freeform). Keyed by elicit id; resolved by the runtime when
+        # the UI sends the answer. Mirrors the confirm gate.
+        self.pending_elicits: dict[str, asyncio.Future[dict[str, Any]]] = {}
         # Cleared when the endpoint rejects image content (text-only
         # model, e.g. vLLM without an image encoder) - the transcript
         # then renders media as text placeholders instead.
@@ -260,6 +265,14 @@ class AgentEngine:
         """
         self._abort.set()
         self._interrupt.set()
+        # Unblock anything waiting on the user (confirm / elicitation) so the
+        # turn can wind down instead of hanging until the timeout.
+        for fut in list(self.pending_confirms.values()):
+            if not fut.done():
+                fut.set_result(False)
+        for efut in list(self.pending_elicits.values()):
+            if not efut.done():
+                efut.set_result({"choices": [], "text": "", "cancelled": True})
 
     # ------------------------------------------------------------------
     # Transcript helpers.
@@ -603,7 +616,9 @@ class AgentEngine:
         })
 
         budget = TurnBudget(rounds_left=max_rounds, rounds_max=max_rounds * 2)
-        ctx = ToolContext(media=self._media, turn_budget=budget, session_id=session_id)
+        ctx = ToolContext(
+            media=self._media, turn_budget=budget, session_id=session_id,
+            elicit=lambda **kw: self._elicit(session_id, **kw))
         # Media produced by tools in the previous round, fed to the
         # model as a synthetic user record on the next one.
         feedback_media: list[str] = []
@@ -1115,4 +1130,51 @@ class AgentEngine:
         if future is None or future.done():
             return False
         future.set_result(approve)
+        return True
+
+    # ------------------------------------------------------------------
+    # Elicitation plumbing (a tool asking the user a question mid-turn).
+
+    async def _elicit(
+            self,
+            session_id: str,
+            *,
+            question: str,
+            options: list[str],
+            allow_freeform: bool = True,
+            multi: bool = False,
+            timeout: float = _CONFIRM_TIMEOUT,
+    ) -> dict[str, Any]:
+        """
+        Ask the user a question and block this turn until they answer (or the
+        timeout). Returns ``{"choices": [...], "text": str, "cancelled": bool}``.
+        Emitted as an ``elicitation`` event; resolved via ``resolve_elicit``.
+        """
+        elicit_id = "el-" + uuid.uuid4().hex[:12]
+        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        self.pending_elicits[elicit_id] = future
+        await self._emit({
+            "type": "elicitation",
+            "session_id": session_id,
+            "elicit_id": elicit_id,
+            "question": question,
+            "options": list(options or []),
+            "allow_freeform": bool(allow_freeform),
+            "multi": bool(multi),
+        })
+        try:
+            response = await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError:
+            response = {"choices": [], "text": "", "cancelled": True}
+        finally:
+            self.pending_elicits.pop(elicit_id, None)
+        await self._emit({
+            "type": "elicitation_done", "session_id": session_id, "elicit_id": elicit_id})
+        return response
+
+    def resolve_elicit(self, elicit_id: str, response: dict[str, Any]) -> bool:
+        future = self.pending_elicits.get(elicit_id)
+        if future is None or future.done():
+            return False
+        future.set_result(response)
         return True

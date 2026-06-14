@@ -13,6 +13,7 @@ discriminator inside the args.
 """
 
 __all__ = (
+    "AskUserTool",
     "ContinueWorkingTool",
     "MediaTool",
     "SetAutonomyTool",
@@ -23,6 +24,70 @@ from typing import Any, Awaitable, Callable
 
 from .store import AgentStore, search_skills
 from .tools import Tool, ToolContext, ToolError, ToolResult
+
+
+class AskUserTool(Tool):
+    name = "ask_user"
+    read_only = True  # asking is not scene work; don't burn a full round on it
+    description = (
+        "Ask the USER a question and wait for their answer before continuing. "
+        "Use when you need a decision only the user can make — a choice between "
+        "real alternatives, a missing preference, or confirmation of intent — "
+        "not for things you can determine yourself. Provide clear 'options' for "
+        "a quick pick; the user can always type a freeform answer too. Returns "
+        "the user's selection(s) and any freeform text. Prefer this over "
+        "guessing when the task is genuinely ambiguous."
+    )
+
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "The question to ask the user."},
+                "options": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Suggested choices (may be empty for a pure freeform ask).",
+                },
+                "allow_freeform": {
+                    "type": "boolean",
+                    "description": "Allow a typed answer in addition to the options (default true).",
+                },
+                "multi": {
+                    "type": "boolean",
+                    "description": "Allow selecting more than one option (default false).",
+                },
+            },
+            "required": ["question"],
+        }
+
+    async def call(self, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+        question = str(args.get("question", "")).strip()
+        if not question:
+            raise ToolError("question is required")
+        options = [str(o) for o in (args.get("options") or [])]
+        allow_freeform = bool(args.get("allow_freeform", True))
+        multi = bool(args.get("multi", False))
+        if ctx.elicit is None:
+            # No interactive user attached (e.g. headless chat API): don't block.
+            raise ToolError(
+                "no interactive user is attached to answer (elicitation unavailable in "
+                "this context) — proceed with your best judgement and state your assumption")
+        response = await ctx.elicit(
+            question=question, options=options, allow_freeform=allow_freeform, multi=multi)
+        if response.get("cancelled"):
+            return ToolResult(
+                summary="user dismissed the question without answering",
+                data={"cancelled": True})
+        choices = [str(c) for c in (response.get("choices") or [])]
+        text = str(response.get("text", "")).strip()
+        parts = []
+        if choices:
+            parts.append("chose: " + ", ".join(choices))
+        if text:
+            parts.append("said: " + text)
+        return ToolResult(
+            summary="; ".join(parts) or "(no answer)",
+            data={"choices": choices, "text": text})
 
 
 class SkillsTool(Tool):
