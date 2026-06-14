@@ -145,6 +145,15 @@ class AgentConfig:
     # models: ORT-web decode slows with sequence length, so a tight
     # budget is also a throughput knob.
     context_tokens: int = 16_384
+    # Autonomy mode (blagent.autonomy): the orchestrator pursues user
+    # OBJECTIVES across rounds, spawning worker sub-agents and a blind
+    # evaluator, instead of running one task per message.
+    autonomy_mode: bool = False
+    # "auto_until_done" runs round after round until objectives are met or
+    # max_autonomy_rounds is hit; "pause_when_blocked" also hands control
+    # back when the evaluator reports no path forward.
+    autonomy_policy: str = "auto_until_done"
+    max_autonomy_rounds: int = 6
 
     @classmethod
     def load(cls, path: str) -> "AgentConfig":
@@ -184,6 +193,9 @@ class AgentConfig:
             "max_rounds": self.max_rounds,
             "budget_review": self.budget_review,
             "context_tokens": self.context_tokens,
+            "autonomy_mode": self.autonomy_mode,
+            "autonomy_policy": self.autonomy_policy,
+            "max_autonomy_rounds": self.max_autonomy_rounds,
         }
 
 

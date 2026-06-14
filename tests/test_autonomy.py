@@ -18,6 +18,7 @@ import importlib
 import importlib.util
 import os
 import sys
+import tempfile
 import unittest
 from typing import Any
 
@@ -182,6 +183,81 @@ class TestAutonomyLoop(unittest.TestCase):
         out = _run(a.SequentialScheduler().run(tasks, runner))
         self.assertEqual(order, ["t0", "t1", "t2", "t3"])
         self.assertEqual([r.task_id for r in out], ["t0", "t1", "t2", "t3"])
+
+
+@unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
+class TestChildSessionRunner(unittest.TestCase):
+    """
+    The child-session strategy made real: a worker task runs in its own
+    AgentEngine with the full tool surface, and the orchestrator gets back
+    the worker's final report as proof. Events are tagged for the bounded UI.
+    """
+
+    def test_worker_runs_real_turn_and_returns_proof(self) -> None:
+        for path in (os.path.join(_REPO_DIR, "mcp"), os.path.join(_REPO_DIR, "agent")):
+            if path not in sys.path:
+                sys.path.insert(0, path)
+        from blagent.autonomy import WorkerTask
+        from blagent.llm import LlmChunk, LlmClient
+        from blagent.media import MediaLibrary
+        from blagent.runtime import ChildSessionRunner
+        from blagent.tools import Tool, ToolRegistry, ToolResult
+
+        tool_calls: list[dict[str, Any]] = []
+
+        class StubTool(Tool):
+            name = "build_thing"
+            description = "build a thing"
+
+            def input_schema(self) -> dict[str, Any]:
+                return {"type": "object", "properties": {}}
+
+            async def call(self, ctx: Any, args: dict[str, Any]) -> Any:
+                tool_calls.append(args)
+                return ToolResult(summary="built", data={"created": "Cube"})
+
+        class FakeLlm(LlmClient):
+            def __init__(self) -> None:
+                self.round = 0
+
+            async def stream(self, request: dict[str, Any]) -> Any:
+                self.round += 1
+                if self.round == 1:
+                    yield LlmChunk(tool_calls=[{
+                        "index": 0, "id": "c1",
+                        "function": {"name": "build_thing", "arguments": "{}"},
+                    }])
+                else:
+                    yield LlmChunk(content="PROOF OF WORK: created object Cube.")
+
+        events: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            events.append(event)
+
+        tmp = tempfile.mkdtemp(prefix="worker_")
+        runner = ChildSessionRunner(
+            registry=ToolRegistry([StubTool()]),
+            make_llm=lambda: FakeLlm(),
+            model="m",
+            emit=emit,
+            system_prompt="",
+            media_factory=lambda agent_id: MediaLibrary(
+                os.path.join(tmp, agent_id.replace(":", "_"))),
+            parent_session_id="orch1",
+            autonomy="auto",
+            max_rounds=4,
+        )
+        result = _run(runner(WorkerTask(id="t1", objective_id="o1", instruction="build it")))
+
+        self.assertTrue(result.ok)
+        self.assertIn("Cube", result.proof)
+        self.assertEqual(result.transcript_ref, "orch1:w:t1")
+        self.assertEqual(len(tool_calls), 1)  # the worker really ran the tool
+        worker_events = [e for e in events if e.get("parent_session_id") == "orch1"]
+        self.assertTrue(worker_events)
+        self.assertTrue(all(e.get("role") == "worker" for e in worker_events))
+        self.assertTrue(any(e.get("session_id") == "orch1:w:t1" for e in worker_events))
 
 
 if __name__ == "__main__":

@@ -14,21 +14,118 @@ __all__ = (
 )
 
 import asyncio
+import json
 import logging
 import os
 
 
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from .agent_tools import ContinueWorkingTool, MediaTool, SkillsTool
 from .engine import AgentEngine
 from .llm import LlmClient, LlmError, LocalLlmBridgeClient, OpenAiHttpClient
 from .media import MediaLibrary
 from .store import AgentStore, SessionBusyError
-from .tools import Tool, ToolRegistry
+from .tools import Tool, ToolContext, ToolRegistry
 from .local_llm import LocalLlmBridge
 
 _log = logging.getLogger("blagent.runtime")
+
+# Appended to every worker task: the orchestrator demands proof, not prose.
+_WORKER_PROOF_SUFFIX = (
+    "\n\nWhen the task is complete, end your turn with a short PROOF OF WORK: "
+    "what you changed and concrete evidence (object names, counts, verify "
+    "output, screenshots taken). If you could not finish, say so plainly and "
+    "why."
+)
+
+
+class ChildSessionRunner:
+    """
+    The child-session isolation strategy made real: each worker task runs
+    in its OWN ``AgentEngine`` (isolated transcript + media) with the full
+    tool surface. The orchestrator gets back only the worker's proof — the
+    worker's chatter never enters the orchestrator's context. Events are
+    tagged with the worker's agent id + parent so the UI nests them in a
+    bounded panel.
+
+    Dependencies are explicit so it is testable without the full runtime.
+    """
+
+    def __init__(
+            self,
+            *,
+            registry: ToolRegistry,
+            make_llm: "Callable[[], LlmClient]",
+            model: str,
+            emit: "Callable[[dict[str, Any]], Awaitable[None]]",
+            system_prompt: str,
+            media_factory: "Callable[[str], MediaLibrary]",
+            parent_session_id: str,
+            autonomy: str = "auto",
+            max_rounds: int = 8,
+            context_tokens: int = 0,
+            budget_review: bool = False,
+    ) -> None:
+        self._registry = registry
+        self._make_llm = make_llm
+        self._model = model
+        self._emit = emit
+        self._system_prompt = system_prompt
+        self._media_factory = media_factory
+        self._parent = parent_session_id
+        self._autonomy = autonomy
+        self._max_rounds = max_rounds
+        self._context_tokens = context_tokens
+        self._budget_review = budget_review
+
+    async def __call__(self, task: Any) -> Any:
+        from .autonomy import WorkerResult
+
+        agent_id = "{:s}:w:{:s}".format(self._parent, task.id)
+        records: list[dict[str, Any]] = []
+
+        async def child_emit(event: dict[str, Any]) -> None:
+            await self._emit({**event, "parent_session_id": self._parent, "role": "worker"})
+
+        def append(record: dict[str, Any]) -> None:
+            records.append(record)
+
+        engine = AgentEngine(
+            registry=self._registry,
+            media=self._media_factory(agent_id),
+            system_prompt=self._system_prompt,
+            emit=child_emit,
+            append_record=append,
+        )
+        try:
+            await engine.run_turn(
+                session_id=agent_id,
+                user_text=task.instruction + _WORKER_PROOF_SUFFIX,
+                llm=self._make_llm(),
+                model=self._model,
+                autonomy=self._autonomy,
+                max_rounds=self._max_rounds,
+                context_tokens=self._context_tokens,
+                budget_review=self._budget_review,
+            )
+        except Exception as ex:  # pylint: disable=broad-except
+            _log.warning("worker %s failed: %s", task.id, ex)
+            return WorkerResult(
+                task_id=task.id, objective_id=task.objective_id,
+                proof="worker errored: {:s}".format(ex), ok=False, transcript_ref=agent_id)
+
+        proof = ""
+        for record in reversed(records):
+            if record.get("role") == "assistant":
+                content = str(record.get("content", "")).strip()
+                if content:
+                    proof = content
+                    break
+        return WorkerResult(
+            task_id=task.id, objective_id=task.objective_id,
+            proof=proof or "(worker produced no final report)",
+            ok=bool(proof), transcript_ref=agent_id)
 
 _SYSTEM_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "system_prompt.md")
 
@@ -259,6 +356,117 @@ class AgentRuntime:
                     "session_id": session_id,
                     "message": "internal error: {:s}: {:s}".format(type(ex).__name__, str(ex)),
                 })
+                await self.emit({"type": "turn_done", "session_id": session_id})
+
+        session.task = asyncio.create_task(_run())
+        return session_id
+
+    # ------------------------------------------------------------------
+    # Autonomy mode (blagent.autonomy).
+
+    def _make_probe(self, session_id: str) -> "Callable[[], Awaitable[str]]":
+        """A read-only scene snapshot for the goal evaluator (ground truth)."""
+
+        async def probe() -> str:
+            tool = self.registry.get("get_objects_summary")
+            if tool is None:
+                return "(get_objects_summary unavailable)"
+            media = self._get_or_load_session(session_id).media
+            try:
+                result = await tool.call(ToolContext(media=media, session_id=session_id), {})
+            except Exception as ex:  # pylint: disable=broad-except
+                return "(scene probe failed: {:s})".format(ex)
+            data = result.data if result.data is not None else result.summary
+            text = data if isinstance(data, str) else json.dumps(data, default=str)
+            return text[:6000]
+
+        return probe
+
+    async def run_autonomy_turn(
+            self,
+            session_id: str,
+            objectives: list[dict[str, Any]],
+            max_rounds: int | None = None,
+    ) -> str:
+        """
+        Pursue *objectives* (each {id?, text, acceptance}) via the autonomy
+        orchestrator: plan -> spawn worker child-sessions -> evaluate scene
+        state -> re-round. Runs as the session's turn task; events stream to
+        the UI. Returns the session id.
+        """
+        from .autonomy import (
+            AutonomyOrchestrator, AutoPauseWhenBlockedPolicy, AutoUntilDonePolicy,
+            LlmPlanner, Objective, SequentialScheduler, StateAwareEvaluator,
+        )
+
+        if not session_id:
+            session_id = self.new_session()
+        session = self._get_or_load_session(session_id)
+        if session.busy:
+            raise RuntimeError("a turn is already running in this session")
+
+        config = self.store.config
+        llm = self._make_llm()
+        model = self._model_name()
+
+        objs = [
+            Objective(
+                id=str(o.get("id") or "obj-{:d}".format(i)),
+                text=str(o.get("text", "")).strip(),
+                acceptance=str(o.get("acceptance", "")).strip(),
+            )
+            for i, o in enumerate(objectives)
+        ]
+
+        policy = (
+            AutoPauseWhenBlockedPolicy()
+            if config.autonomy_policy == "pause_when_blocked"
+            else AutoUntilDonePolicy()
+        )
+
+        def media_factory(agent_id: str) -> MediaLibrary:
+            safe = agent_id.replace(":", "_")
+            return MediaLibrary(os.path.join(self.store.session_dir(session_id), "workers", safe))
+
+        runner = ChildSessionRunner(
+            registry=self.registry,
+            make_llm=self._make_llm,
+            model=model,
+            emit=self.emit,
+            system_prompt=self._system_prompt,
+            media_factory=media_factory,
+            parent_session_id=session_id,
+            autonomy="auto",
+            max_rounds=config.max_rounds,
+            context_tokens=config.context_tokens,
+            budget_review=config.budget_review,
+        )
+        orchestrator = AutonomyOrchestrator(
+            planner=LlmPlanner(llm, model),
+            scheduler=SequentialScheduler(),
+            evaluator=StateAwareEvaluator(llm, model, probe=self._make_probe(session_id)),
+            policy=policy,
+            worker_runner=runner,
+            emit=self.emit,
+            session_id=session_id,
+        )
+        rounds = max_rounds or config.max_autonomy_rounds
+
+        async def _run() -> None:
+            try:
+                await orchestrator.run(objs, max_rounds=rounds)
+            except asyncio.CancelledError:
+                await self.emit({"type": "turn_done", "session_id": session_id, "aborted": True})
+                raise
+            except LlmError as ex:
+                await self.emit({"type": "error", "session_id": session_id, "message": str(ex)})
+            except Exception as ex:  # pylint: disable=broad-except
+                _log.error("autonomy turn failed session=%s: %s", session_id, ex)
+                await self.emit({
+                    "type": "error", "session_id": session_id,
+                    "message": "autonomy error: {:s}: {:s}".format(type(ex).__name__, str(ex)),
+                })
+            finally:
                 await self.emit({"type": "turn_done", "session_id": session_id})
 
         session.task = asyncio.create_task(_run())
