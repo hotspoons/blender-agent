@@ -27,6 +27,7 @@ export class BaComposer extends LitElement {
     _level: { state: true },         // autonomy level: ask|yolo|orchestrator|swarm
     _autoOpen: { state: true },      // is the autonomy slider expanded?
     _objRows: { state: true },       // guided-intake objective editor rows
+    _swarmPreflight: { state: true },// {ready, report} — swarm requirements
   };
 
   constructor() {
@@ -39,6 +40,7 @@ export class BaComposer extends LitElement {
     this._level = store.state.autonomyLevel;
     this._autoOpen = false;
     this._objRows = [];
+    this._swarmPreflight = store.state.swarmPreflight;
     this._lastDraftGoal = null;
     this._onLlmChange = () => this._onLocalLlmState();
   }
@@ -55,6 +57,7 @@ export class BaComposer extends LitElement {
           (a) => a.sessionId === store.state.sessionId);
       }
       if (keys.has("autonomyLevel")) this._level = store.state.autonomyLevel;
+      if (keys.has("swarmPreflight")) this._swarmPreflight = store.state.swarmPreflight;
       if (keys.has("autonomy")) {
         const d = store.state.autonomy?.draft;
         if (d && d.objectives?.length && d.goal !== this._lastDraftGoal) {
@@ -240,6 +243,16 @@ export class BaComposer extends LitElement {
     .auto-chip:hover { color: var(--text); border-color: var(--accent); }
     .auto-chip strong { color: var(--accent); font-weight: 700; }
     .auto-chip svg { width: 13px; height: 13px; }
+    /* Swarm requirements panel (per-OS readiness), shown while on swarm. */
+    .swarm-pf { margin-bottom: 8px; border: 1px solid var(--border);
+      border-radius: var(--radius-md); background: var(--surface-muted); padding: 8px 10px; }
+    .swarm-pf.warn { border-color: var(--warning); }
+    .swarm-pf .pf-head { display: flex; align-items: center; gap: 6px;
+      font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; }
+    .swarm-pf.warn .pf-head { color: var(--warning); }
+    .swarm-pf .pf-head svg { width: 14px; height: 14px; }
+    .swarm-pf pre { margin: 0; font-family: var(--font-mono); font-size: 11px;
+      color: var(--text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
     /* Guided-intake objectives editor. */
     .obj-editor {
       border: 1px solid var(--border); border-radius: var(--radius-md);
@@ -412,13 +425,26 @@ export class BaComposer extends LitElement {
    * Collapsed: a small "autonomy: <Level>" chip. Click to expand the
    * segmented slider; pick a level (or click the chip again) to dismiss.
    */
+  _renderSwarmPreflight() {
+    // Only while on swarm, and only if there's something worth flagging.
+    if (this._level !== "swarm" || !this._swarmPreflight?.report) return nothing;
+    const pf = this._swarmPreflight;
+    return html`
+      <div class="swarm-pf ${pf.ready ? "ok" : "warn"}">
+        <div class="pf-head">${icon(pf.ready ? "check" : "exclamation-triangle")}
+          ${pf.ready ? "Swarm ready — requirements" : "Swarm may not run — check requirements"}</div>
+        <pre>${pf.report}</pre>
+      </div>`;
+  }
+
   _renderAutonomyControl() {
     if (!this._autoOpen) {
       return html`
         <button class="auto-chip" title="Change autonomy level"
           @click=${() => { this._autoOpen = true; }}>
           autonomy: <strong>${this._levelLabel()}</strong> ${icon("chevron-down")}
-        </button>`;
+        </button>
+        ${this._renderSwarmPreflight()}`;
     }
     return html`
       <div class="autonomy" role="tablist" aria-label="Autonomy level">
@@ -428,7 +454,8 @@ export class BaComposer extends LitElement {
             @click=${() => this._pickLevel(val)}>${label}</button>`)}
         <button class="auto-dismiss" title="Dismiss"
           @click=${() => { this._autoOpen = false; }}>${icon("x-mark")}</button>
-      </div>`;
+      </div>
+      ${this._renderSwarmPreflight()}`;
   }
 
   _draftObjectives() {

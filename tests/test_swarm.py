@@ -206,6 +206,76 @@ class TestSwarmStreaming(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
+class TestSwarmRequirements(unittest.TestCase):
+    """Cross-platform preflight: surface swarm/off-screen-GL requirements."""
+
+    def _surface(self) -> Any:
+        for path in (os.path.join(_REPO_DIR, "mcp"), os.path.join(_REPO_DIR, "agent")):
+            if path not in sys.path:
+                sys.path.insert(0, path)
+        import importlib
+        return importlib.import_module("blagent.blender_surface")
+
+    def test_offscreen_gl_linux_with_and_without_xvfb(self) -> None:
+        s = self._surface()
+        import unittest.mock as mock
+        with mock.patch.object(s.sys, "platform", "linux"):
+            with mock.patch.object(s.shutil, "which", return_value="/usr/bin/Xvfb"):
+                ok, msg = s.offscreen_gl_support()
+                self.assertTrue(ok)
+                self.assertIn("Mesa", msg)  # software-GL guidance present
+            with mock.patch.object(s.shutil, "which", return_value=None):
+                ok, msg = s.offscreen_gl_support()
+                self.assertFalse(ok)
+                self.assertIn("xvfb", msg.lower())
+
+    def test_offscreen_gl_unsupported_on_mac_and_windows(self) -> None:
+        s = self._surface()
+        import unittest.mock as mock
+        for plat, needle in (("darwin", "macOS"), ("win32", "Windows")):
+            with mock.patch.object(s.sys, "platform", plat):
+                ok, msg = s.offscreen_gl_support()
+                self.assertFalse(ok)
+                self.assertIn(needle, msg)
+                self.assertIn("RENDER", msg)  # steered to the portable path
+
+    def test_swarm_preflight_blender_presence(self) -> None:
+        s = self._surface()
+        import unittest.mock as mock
+        with mock.patch.object(s.shutil, "which", return_value="/usr/bin/blender"):
+            ready, report = s.swarm_preflight()
+            self.assertTrue(ready)
+            self.assertIn("Blender found", report)
+        with mock.patch.object(s.shutil, "which", return_value=None), \
+                mock.patch.object(s.os.path, "isfile", return_value=False):
+            ready, report = s.swarm_preflight()
+            self.assertFalse(ready)
+            self.assertIn("Blender NOT found", report)
+        # Render is always advertised as the portable capture path.
+        self.assertIn("RENDER", report)
+
+    def test_set_swarm_level_includes_preflight(self) -> None:
+        for path in (os.path.join(_REPO_DIR, "mcp"), os.path.join(_REPO_DIR, "agent")):
+            if path not in sys.path:
+                sys.path.insert(0, path)
+        from blagent.runtime import AgentRuntime
+        from blagent.store import AgentStore
+        rt = AgentRuntime(AgentStore(tempfile.mkdtemp(prefix="agentdata_")), [])
+        sid = rt.new_session()
+        pub = rt.set_autonomy_level(sid, "swarm")
+        self.assertIn("swarm_preflight", pub)
+        pf = pub["swarm_preflight"]
+        assert isinstance(pf, dict)
+        self.assertIn("report", pf)
+        # The pushed notice carries the requirements so the agent sees them too.
+        notice = [r for r in rt.session_records(sid) if r.get("autonomy_notice") == "swarm"]
+        self.assertTrue(notice)
+        self.assertIn("requirements", str(notice[-1]["content"]).lower())
+        # Non-swarm levels don't carry a preflight payload.
+        self.assertNotIn("swarm_preflight", rt.set_autonomy_level(sid, "yolo"))
+
+
+@unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
 class TestWorkerControls(unittest.TestCase):
     """Runtime stop / interrupt / injection routing (in-process vs swarm)."""
 

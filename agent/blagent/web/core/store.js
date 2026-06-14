@@ -30,6 +30,7 @@ class Store extends EventTarget {
       models: { endpoint: "", list: [], error: "", loading: false },
       // Autonomy mode (slider): minimal | yolo | orchestrator | swarm.
       autonomyLevel: "yolo",
+      swarmPreflight: null,    // {ready, report} — swarm requirements (set on switch)
       // Live autonomy/swarm run state for the bounded nested UI.
       autonomy: {
         objectives: [],         // [{id, text, acceptance, status, evidence}]
@@ -282,12 +283,18 @@ class Store extends EventTarget {
           this._refreshMedia();
         }
         break;
-      case "config":
-        this._set({
+      case "config": {
+        const patch = {
           config: msg.config,
           autonomyLevel: msg.config?.autonomy_level || this.state.autonomyLevel,
-        });
+        };
+        // Swarm readiness report (Blender present? off-screen GL? per-OS) —
+        // surfaced when the user switches to swarm so missing requirements
+        // are visible before a run, not mid-failure.
+        if (msg.config?.swarm_preflight) patch.swarmPreflight = msg.config.swarm_preflight;
+        this._set(patch);
         break;
+      }
       case "autonomy_accepted":
         // Fresh objectives run: reset the live autonomy view (keep no draft).
         this._set({

@@ -30,13 +30,16 @@ __all__ = (
     "blender_ancestor_pid",
     "bridge_reachable",
     "build_blender_argv",
+    "offscreen_gl_support",
     "spawned_by_blender",
     "surface_decision",
+    "swarm_preflight",
 )
 
 import logging
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -145,6 +148,77 @@ def spawned_by_blender(env: "dict[str, str] | None" = None, _reader=_proc_parent
     if environ.get(_SPAWNED_MARKER):
         return True
     return blender_ancestor_pid(_reader=_reader) is not None
+
+
+def offscreen_gl_support(blender_path: "str | None" = None) -> "tuple[bool, str]":
+    """
+    Whether the OFF-SCREEN GL surface (headed Blender on a virtual display, so
+    viewport screenshot / GPU tools work) is usable here — with per-OS guidance
+    when it is not. ``blender_path`` is accepted for symmetry/future use.
+
+    Off-screen GL needs a virtual display + a working OpenGL stack:
+      - Linux: Xvfb, plus a GPU or a software GL (Mesa) for the GL context.
+      - macOS / Windows: no Xvfb; this mechanism does not apply. Use RENDER
+        (works headless everywhere) instead of screenshots.
+    """
+    del blender_path
+    plat = sys.platform
+    if plat.startswith("linux"):
+        if shutil.which("Xvfb") is not None:
+            return True, (
+                "off-screen GL: Xvfb found. On a host with NO GPU you also need a "
+                "software OpenGL (Mesa) — install it (Debian/Ubuntu: "
+                "'apt-get install libgl1-mesa-dri libglu1-mesa'; Fedora: "
+                "'dnf install mesa-dri-drivers') and, if a GL context still fails, "
+                "set LIBGL_ALWAYS_SOFTWARE=1.")
+        return False, (
+            "off-screen GL needs Xvfb, which is not installed (Debian/Ubuntu: "
+            "'apt-get install xvfb'; Fedora: 'dnf install xorg-x11-server-Xvfb'), "
+            "plus a software OpenGL on GPU-less hosts (Mesa: 'libgl1-mesa-dri'). "
+            "Without them, screenshots are unavailable — workers must RENDER instead.")
+    if plat == "darwin":
+        return False, (
+            "off-screen GL screenshots via a virtual display are NOT supported on "
+            "macOS (Blender uses Metal/Cocoa, there is no Xvfb). Swarm mode itself "
+            "works on macOS — workers RENDER images (works headless) instead of "
+            "taking viewport screenshots.")
+    if plat.startswith("win"):
+        return False, (
+            "off-screen GL screenshots via a virtual display are NOT supported on "
+            "Windows (no Xvfb). Swarm mode itself works on Windows — workers RENDER "
+            "images (works headless) instead of taking viewport screenshots.")
+    return False, (
+        "off-screen GL support is unknown on this platform; workers should RENDER "
+        "(media_io 'render') rather than rely on viewport screenshots.")
+
+
+def swarm_preflight(blender_path: "str | None" = None) -> "tuple[bool, str]":
+    """
+    Cross-platform readiness report for swarm mode. Returns
+    ``(ready, message)`` where *ready* means the hard requirement (a spawnable
+    Blender) is met; the message lists every requirement and its status so it
+    can be surfaced to the user before/at swarm launch.
+
+    Hard requirement: each worker spawns its OWN headless Blender, so Blender
+    must be on PATH (or BLENDER_PATH) with the blender-mcp add-on installed +
+    enabled. Soft: off-screen GL (for screenshots) — see ``offscreen_gl_support``.
+    """
+    blender = blender_path or os.environ.get("BLENDER_PATH", "blender")
+    found = shutil.which(blender) is not None or os.path.isfile(blender)
+    lines = ["Swarm mode requirements ({:s}):".format(sys.platform)]
+    if found:
+        lines.append("  ✓ Blender found ({:s}).".format(blender))
+    else:
+        lines.append(
+            "  ✗ Blender NOT found. Each swarm worker spawns its own headless "
+            "Blender — install Blender and put it on PATH (or set BLENDER_PATH). "
+            "It must have the blender-mcp add-on installed AND enabled.")
+    ok, detail = offscreen_gl_support(blender)
+    lines.append("  {:s} {:s}".format("✓" if ok else "•", detail))
+    lines.append(
+        "  ✓ RENDER (media_io 'render') works headless on every platform — it is "
+        "the portable way for workers to capture images, no display required.")
+    return found, "\n".join(lines)
 
 
 def bridge_reachable(host: str, port: int, timeout: float = 0.5) -> bool:
@@ -343,7 +417,10 @@ class BlenderSurface:
                 self._startup_script = self._write_startup_script()
                 _log.info("offscreen GL: full-GUI Blender on virtual display %s", display)
             except (RuntimeError, OSError) as ex:
-                _log.warning("offscreen GL unavailable (%s); falling back to --background", ex)
+                _log.warning(
+                    "offscreen GL unavailable (%s); falling back to --background "
+                    "(render works, viewport screenshots do not). %s",
+                    ex, offscreen_gl_support(self.blender_path)[1])
                 self.offscreen_gl = False
         argv = build_blender_argv(
             self.blender_path, self.host, self.port, self.blend_file, self.online_mode,

@@ -788,12 +788,25 @@ class AgentRuntime:
         config.autonomy = "ask" if level == "ask" else "auto"
         config.autonomy_workers = "swarm" if level == "swarm" else "in_process"
         self.store.save_config()
+        # Swarm spawns a Blender per worker on the host — surface its
+        # cross-platform requirements (and any missing ones) up front.
+        swarm_ready, swarm_report = True, ""
+        if level == "swarm":
+            from .blender_surface import swarm_preflight
+            swarm_ready, swarm_report = swarm_preflight()
         if session_id:
             session = self._get_or_load_session(session_id)
             notice = "[Autonomy changed] {:s}\n\nYour current tool catalog:\n{:s}".format(
                 self._AUTONOMY_NOTICE[level], self._tool_catalog_summary())
+            if swarm_report:
+                notice += "\n\n{:s}".format(swarm_report)
             session.engine.push_record({
                 "role": "user", "content": notice,
                 "synthetic": True, "autonomy_notice": level,
             })
-        return config.as_public()
+        public = config.as_public()
+        if level == "swarm":
+            # Let the UI warn the user about missing requirements (e.g. no
+            # Blender / no Xvfb) at the moment they pick swarm.
+            public["swarm_preflight"] = {"ready": swarm_ready, "report": swarm_report}
+        return public

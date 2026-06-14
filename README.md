@@ -250,6 +250,41 @@ the chat API), and you can inject a message straight into a running worker
 orchestrator context with workers) live in settings. Swarm worker subprocesses
 run in their own process group and are reaped with their Blender on teardown.
 
+### Swarm mode requirements (macOS / Linux / Windows)
+
+Each swarm worker spawns its **own headless Blender**, so the host needs:
+
+- **Blender on `PATH`** (or `BLENDER_PATH` set) with the blender-mcp add-on
+  **installed and enabled**, launched with online access (`--online-mode`,
+  which the spawner sets). This applies on all three OSes.
+- A reachable LLM endpoint (`BLENDER_AGENT_ENDPOINT` / `BLENDER_AGENT_MODEL`).
+
+When you switch the slider to **Swarm**, the composer runs a **preflight** and
+shows a per-OS readiness panel (Blender found? off-screen GL? what's missing),
+so unmet requirements surface *before* a run rather than mid-failure.
+
+**Capturing images — render is portable, screenshots need a display.** A
+headless worker has no GUI/GPU context, so viewport *screenshot* tools don't
+work there — but **rendering does, on every platform**. Workers are instructed
+to render (the `media_io` `render` verb / `render_thumbnail_to_path`); the
+screenshot tools return an actionable error pointing to render. That's the
+recommended, cross-platform way for workers to show their work.
+
+**Optional off-screen screenshots (Linux only).** If you genuinely need live
+*viewport screenshots* from headless workers, set `--offscreen-gl` /
+`BLENDER_AGENT_OFFSCREEN_GL=1`: the surface starts an **Xvfb** virtual display
+and runs a full-GUI Blender on it (no window shown) so the screenshot/GPU tools
+work. Requirements:
+
+- **Linux:** `Xvfb` (`apt-get install xvfb` / `dnf install
+  xorg-x11-server-Xvfb`) **plus** an OpenGL stack — a GPU, or software GL via
+  **Mesa** (`apt-get install libgl1-mesa-dri libglu1-mesa`), optionally forced
+  with `LIBGL_ALWAYS_SOFTWARE=1`. Without these it falls back to `--background`
+  (render-only) with a logged explanation.
+- **macOS / Windows:** not supported — there is no Xvfb, and Blender's GUI
+  needs a real window-server session. Use render instead (swarm itself works
+  fine on macOS and Windows).
+
 ## Deployment (Docker + Helm)
 
 The image bundles Blender itself (official binary on amd64, built from source
