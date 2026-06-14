@@ -12,6 +12,7 @@ Control-plane protocol (JSON over ``/ws``):
 Client -> server:
     ``{"type": "chat", "session_id": "", "content": "..."}``
     ``{"type": "objectives", "session_id": "", "objectives": [{"text", "acceptance"}], "max_rounds"?}``
+    ``{"type": "draft_objectives", "session_id": "", "goal": "..."}``  -> emits objectives_draft
     ``{"type": "inject", "agent_id": "...", "content": "...", "mode": "now"|"after_round"}``
     ``{"type": "set_autonomy_level", "session_id": "", "level": "minimal"|"yolo"|"orchestrator"|"swarm"}``
     ``{"type": "new_session"}``
@@ -217,6 +218,11 @@ async def _handle_control(runtime: AgentRuntime, ws: WebSocket, data: dict[str, 
                     max_rounds=int(mr) if isinstance(mr, int) else None,
                 )
                 await ws.send_json({"type": "autonomy_accepted", "session_id": session_id})
+        elif msg_type == "draft_objectives":
+            # Guided intake: turn a one-line goal into draft objectives.
+            goal = str(data.get("goal", "")).strip()
+            if goal:
+                runtime.draft_objectives(str(data.get("session_id", "")), goal)
         elif msg_type == "inject":
             # Voice of god: inject a message into a running worker's context.
             ok = runtime.inject_into_worker(

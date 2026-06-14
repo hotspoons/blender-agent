@@ -157,6 +157,17 @@ class TestAutonomyLoop(unittest.TestCase):
         self.assertEqual(blind, "")
         self.assertIn("watertight torso", informed)
 
+    def test_draft_objectives_parses_goal_into_objectives(self) -> None:
+        a = _import_autonomy()
+        llm = self._scripted_llm([
+            '{"objectives": [{"text": "a watertight torso", "acceptance": "is watertight"},'
+            ' {"text": "two arms", "acceptance": "two arm objects"}, {"text": "", "acceptance": "skip"}]}',
+        ])
+        objs = _run(a.draft_objectives(llm, "m", "build a robot"))
+        self.assertEqual(len(objs), 2)  # the empty-text one is dropped
+        self.assertEqual(objs[0]["text"], "a watertight torso")
+        self.assertEqual(objs[0]["acceptance"], "is watertight")
+
     def test_pause_when_blocked(self) -> None:
         a = _import_autonomy()
         llm = self._scripted_llm([

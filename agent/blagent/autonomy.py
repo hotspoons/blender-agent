@@ -31,6 +31,7 @@ __all__ = (
     "WorkerResult",
     "GoalVerdict",
     "RoundResult",
+    "draft_objectives",
     "LlmPlanner",
     "StateAwareEvaluator",
     "SequentialScheduler",
@@ -153,6 +154,36 @@ def _extract_json_object(text: str) -> dict[str, Any]:
         except ValueError:
             pass
     return {}
+
+
+# --------------------------------------------------------------------------
+# Guided intake — draft objectives from a one-line goal
+# --------------------------------------------------------------------------
+
+_DRAFT_SYSTEM = (
+    "You turn a user's one-line goal for a Blender project into a short list of "
+    "concrete, independently-verifiable OBJECTIVES. Each objective needs a clear "
+    "'acceptance' criterion the result can be checked against (object names, "
+    "counts, watertight, exported files, ...). Prefer 2-6 objectives. Reply with "
+    'ONLY a JSON object: {"objectives": [{"text": "<goal>", "acceptance": "<done-when>"}]}'
+)
+
+
+async def draft_objectives(llm: LlmClient, model: str, goal: str) -> list[dict[str, str]]:
+    """
+    Propose objectives (each {text, acceptance}) for *goal*. The user edits/
+    confirms before a run starts (guided intake, with an explicit-edit fallback).
+    """
+    text = await _complete(llm, model, _DRAFT_SYSTEM, "GOAL: " + goal)
+    data = _extract_json_object(text)
+    out: list[dict[str, str]] = []
+    for raw in data.get("objectives", []) or []:
+        if isinstance(raw, dict) and str(raw.get("text", "")).strip():
+            out.append({
+                "text": str(raw["text"]).strip(),
+                "acceptance": str(raw.get("acceptance", "")).strip(),
+            })
+    return out
 
 
 # --------------------------------------------------------------------------

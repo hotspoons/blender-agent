@@ -25,6 +25,7 @@ export class BaComposer extends LitElement {
     _dragOver: { state: true },
     _autoload: { state: true },      // loading a local model before send
     _level: { state: true },         // autonomy slider: minimal|yolo|orchestrator|swarm
+    _objRows: { state: true },       // guided-intake objective editor rows
   };
 
   constructor() {
@@ -35,6 +36,8 @@ export class BaComposer extends LitElement {
     this._dragOver = false;
     this._autoload = false;
     this._level = store.state.autonomyLevel;
+    this._objRows = [];
+    this._lastDraftGoal = null;
     this._onLlmChange = () => this._onLocalLlmState();
   }
 
@@ -50,6 +53,13 @@ export class BaComposer extends LitElement {
           (a) => a.sessionId === store.state.sessionId);
       }
       if (keys.has("autonomyLevel")) this._level = store.state.autonomyLevel;
+      if (keys.has("autonomy")) {
+        const d = store.state.autonomy?.draft;
+        if (d && d.objectives?.length && d.goal !== this._lastDraftGoal) {
+          this._lastDraftGoal = d.goal;
+          this._objRows = d.objectives.map((o) => ({ text: o.text || "", acceptance: o.acceptance || "" }));
+        }
+      }
     });
     localLlm.addEventListener("change", this._onLlmChange);
   }
@@ -214,6 +224,37 @@ export class BaComposer extends LitElement {
       box-shadow: 0 1px 2px rgba(0,0,0,0.25);
     }
     .autonomy .seg:disabled { cursor: default; opacity: 0.6; }
+    /* Guided-intake objectives editor. */
+    .obj-editor {
+      border: 1px solid var(--border); border-radius: var(--radius-md);
+      background: var(--surface-muted); padding: 8px; margin-bottom: 8px;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .oe-head { font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.04em; color: var(--text-muted); }
+    .oe-head .hint { font-weight: 500; text-transform: none; letter-spacing: 0; opacity: 0.8; }
+    .oe-row { display: flex; gap: 6px; align-items: center; }
+    .oe-row input { background: var(--surface); color: var(--text);
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: 5px 8px; font: inherit; font-size: 12.5px; }
+    .oe-row .oe-text { flex: 2; }
+    .oe-row .oe-acc { flex: 3; color: var(--text-muted); }
+    .oe-row .oe-x { background: transparent; border: none; color: var(--text-muted);
+      cursor: pointer; display: inline-flex; padding: 2px; }
+    .oe-row .oe-x:hover { color: var(--danger); }
+    .oe-actions { display: flex; align-items: center; gap: 6px; }
+    .oe-actions .spacer { flex: 1; }
+    .oe-add, .oe-discard, .oe-begin { font: inherit; font-size: 12px; cursor: pointer;
+      border-radius: var(--radius-sm); padding: 4px 10px; border: 1px solid var(--border); }
+    .oe-add, .oe-discard { background: transparent; color: var(--text-muted); }
+    .oe-add:hover, .oe-discard:hover { color: var(--text); }
+    .oe-begin { background: var(--accent); color: #0d0d0d; border-color: transparent; font-weight: 600; }
+    .oe-begin:disabled { opacity: 0.5; cursor: default; }
+    .draft-btn { background: var(--accent-soft); color: var(--accent); border: 1px solid transparent;
+      border-radius: var(--radius-md); padding: 6px 10px; font: inherit; font-size: 12.5px;
+      font-weight: 600; cursor: pointer; }
+    .draft-btn:hover:not(:disabled) { filter: brightness(1.15); }
+    .draft-btn:disabled { opacity: 0.5; cursor: default; }
     .chips { display: flex; gap: 6px; flex-wrap: wrap; padding-bottom: 6px; }
     .chip {
       display: inline-flex;
@@ -296,7 +337,8 @@ export class BaComposer extends LitElement {
     const ta = this.renderRoot.querySelector("textarea");
     const text = ta.value.trim();
     const ready = this._attachments.filter((a) => !a.uploading).map((a) => a.id);
-    if ((!text && !ready.length) || this._busy || !this._connected) return;
+    const hasRows = this._autonomyMode() && this._objRows.length > 0;
+    if ((!text && !ready.length && !hasRows) || this._busy || !this._connected) return;
     if (this._attachments.some((a) => a.uploading)) return;
     // Local model not loaded yet: kick off the load and defer the send
     // until it is ready (the Send button shows a spinner meanwhile).
@@ -308,10 +350,11 @@ export class BaComposer extends LitElement {
       return;
     }
     this._autoload = false;
-    if (this._level === "orchestrator" || this._level === "swarm") {
-      // Autonomy modes: the input establishes an objective. (Guided
-      // multi-objective intake is a later refinement; one line = one goal.)
-      store.objectives([{ text: text, acceptance: "" }]);
+    if (this._autonomyMode()) {
+      // Autonomy modes: an open objectives editor wins; otherwise the line
+      // is a single quick objective (the explicit shortcut).
+      if (this._objRows.length) this._beginRun();
+      else store.objectives([{ text: text, acceptance: "" }]);
     } else {
       store.chat(text || "(see attached image)", ready);
     }
@@ -326,6 +369,31 @@ export class BaComposer extends LitElement {
       ta.style.height = "auto";
       this._manualHeight = false;
     }
+  }
+
+  _autonomyMode() {
+    return this._level === "orchestrator" || this._level === "swarm";
+  }
+
+  _draftObjectives() {
+    const ta = this.renderRoot.querySelector("textarea");
+    store.draftObjectives((ta?.value || "").trim());
+  }
+
+  _setRow(i, field, value) {
+    const rows = [...this._objRows];
+    rows[i] = { ...rows[i], [field]: value };
+    this._objRows = rows;
+  }
+
+  _beginRun() {
+    const rows = this._objRows
+      .map((r) => ({ text: (r.text || "").trim(), acceptance: (r.acceptance || "").trim() }))
+      .filter((r) => r.text);
+    if (!rows.length) return;
+    store.objectives(rows);
+    this._objRows = [];
+    this._lastDraftGoal = null;
   }
 
   render() {
@@ -345,6 +413,29 @@ export class BaComposer extends LitElement {
               ?disabled=${this._busy}
               @click=${() => store.setAutonomyLevel(val)}>${label}</button>`)}
         </div>
+        ${this._autonomyMode() && this._objRows.length ? html`
+          <div class="obj-editor">
+            <div class="oe-head">Objectives <span class="hint">edit, then begin the run</span></div>
+            ${this._objRows.map((r, i) => html`
+              <div class="oe-row">
+                <input class="oe-text" .value=${r.text} placeholder="objective"
+                  @input=${(e) => this._setRow(i, "text", e.target.value)}>
+                <input class="oe-acc" .value=${r.acceptance} placeholder="done-when…"
+                  @input=${(e) => this._setRow(i, "acceptance", e.target.value)}>
+                <button class="oe-x" title="Remove"
+                  @click=${() => { this._objRows = this._objRows.filter((_, j) => j !== i); }}>
+                  ${icon("x-mark")}</button>
+              </div>`)}
+            <div class="oe-actions">
+              <button class="oe-add"
+                @click=${() => { this._objRows = [...this._objRows, { text: "", acceptance: "" }]; }}>+ objective</button>
+              <span class="spacer"></span>
+              <button class="oe-discard"
+                @click=${() => { this._objRows = []; this._lastDraftGoal = null; }}>discard</button>
+              <button class="oe-begin" ?disabled=${this._busy || !this._connected}
+                @click=${() => this._beginRun()}>Begin run</button>
+            </div>
+          </div>` : nothing}
         ${this._attachments.length ? html`
           <div class="chips">
             ${this._attachments.map((a) => html`
@@ -377,6 +468,10 @@ export class BaComposer extends LitElement {
             ${icon("plus")}</button>
           <input type="file" multiple
             @change=${(e) => { this._addFiles([...e.target.files]); e.target.value = ""; }}>
+          ${this._autonomyMode() ? html`
+            <button class="draft-btn" title="Draft objectives from your goal (guided intake)"
+              ?disabled=${this._busy || !this._connected} @click=${() => this._draftObjectives()}>✦ Draft</button>`
+            : nothing}
           <span class="spacer"></span>
           ${this._busy
             ? html`<button class="circle act abort" title="Stop"

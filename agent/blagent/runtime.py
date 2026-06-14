@@ -404,6 +404,26 @@ class AgentRuntime:
 
         return probe
 
+    def draft_objectives(self, session_id: str, goal: str) -> None:
+        """
+        Guided intake: draft objectives from a one-line *goal* (LLM), emitting
+        ``objectives_draft`` for the composer's editor. Fire-and-forget task.
+        """
+        from .autonomy import draft_objectives as _draft
+
+        async def _run() -> None:
+            try:
+                objs = await _draft(self._make_llm(), self._model_name(), goal)
+            except Exception as ex:  # pylint: disable=broad-except
+                _log.warning("draft_objectives failed: %s", ex)
+                objs = []
+            await self.emit({
+                "type": "objectives_draft", "session_id": session_id,
+                "goal": goal, "objectives": objs,
+            })
+
+        asyncio.create_task(_run())
+
     async def run_autonomy_turn(
             self,
             session_id: str,

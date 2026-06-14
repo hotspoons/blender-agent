@@ -38,6 +38,7 @@ class Store extends EventTarget {
         rounds: [],             // [{round, unmet, verdicts, allMet}]
         gathered: null,         // {master, components} when swarm gather completes
         done: null,             // {allMet, rounds} | {paused:true,...}
+        draft: null,            // {goal, objectives:[{text,acceptance}]} guided intake
       },
     };
     this._ws = null;
@@ -216,12 +217,17 @@ class Store extends EventTarget {
         });
         break;
       case "autonomy_accepted":
-        // Fresh objectives run: reset the live autonomy view.
+        // Fresh objectives run: reset the live autonomy view (keep no draft).
         this._set({
           busy: true, error: "",
-          autonomy: { objectives: [], agents: {}, agentOrder: [], rounds: [], gathered: null, done: null },
+          autonomy: { objectives: [], agents: {}, agentOrder: [], rounds: [], gathered: null, done: null, draft: null },
         });
         break;
+      case "objectives_draft": {
+        const a = { ...this.state.autonomy, draft: { goal: msg.goal || "", objectives: msg.objectives || [] } };
+        this._set({ autonomy: a });
+        break;
+      }
       case "autonomy_round_start":
       case "objectives_update": {
         const a = { ...this.state.autonomy, objectives: msg.objectives || this.state.autonomy.objectives };
@@ -362,6 +368,12 @@ class Store extends EventTarget {
   setAutonomyLevel(level) {
     this._set({ autonomyLevel: level });
     this.send({ type: "set_autonomy_level", session_id: this.state.sessionId, level });
+  }
+
+  /** Guided intake: ask the agent to draft objectives from a one-line goal. */
+  draftObjectives(goal) {
+    if (!goal) return;
+    this.send({ type: "draft_objectives", session_id: this.state.sessionId, goal });
   }
 
   /** Start an autonomy run from a list of {text, acceptance} objectives. */
