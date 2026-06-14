@@ -273,7 +273,8 @@ class Store extends EventTarget {
       case "agent_done": {
         const a = { ...this.state.autonomy, agents: { ...this.state.autonomy.agents } };
         const cur = a.agents[msg.agent_id] || { id: msg.agent_id, role: msg.role || "worker", events: [] };
-        a.agents[msg.agent_id] = { ...cur, state: "done", ok: msg.ok !== false, proof: msg.proof || "" };
+        a.agents[msg.agent_id] = { ...cur, state: "done", ok: msg.ok !== false, proof: msg.proof || "",
+          artifacts: msg.artifacts || cur.artifacts || [], ref: msg.ref || cur.ref };
         this._set({ autonomy: a });
         break;
       }

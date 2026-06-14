@@ -391,6 +391,7 @@ export class BaChatStage extends LitElement {
       border-radius: var(--radius-sm); background: var(--surface-muted); color: var(--text-muted);
       border: 1px solid var(--border); }
     .ev-chip.error, .ev-chip.rejected { color: var(--danger); border-color: var(--danger); }
+    .ev-chip.art { color: var(--accent-2); border-color: var(--accent-2); }
     .empty {
       margin: auto;
       text-align: center;
@@ -622,6 +623,10 @@ export class BaChatStage extends LitElement {
             ${agent.events.map((ev) => html`<span class="ev-chip ${ev.state}">${ev.name}</span>`)}
           </div>` : nothing}
         ${open && agent.proof ? html`<div class="proof">${agent.proof}</div>` : nothing}
+        ${open && agent.artifacts?.length ? html`
+          <div class="agent-events">
+            ${agent.artifacts.map((p) => html`<span class="ev-chip art">${p.split("/").pop()}</span>`)}
+          </div>` : nothing}
         ${agent.state === "running" ? html`
           <div class="inject">
             <input type="text" placeholder="Inject guidance into this worker…"

@@ -463,11 +463,15 @@ class AutonomyOrchestrator:
         await self._emit({
             "type": "agent_done",
             "session_id": self._session_id,
-            "agent_id": result.transcript_ref,
+            # Key on the SAME id we spawned with, so the UI updates the card it
+            # opened (the worker's URL/child-session id rides along separately).
+            "agent_id": agent_id,
+            "ref": result.transcript_ref,
             "role": "worker",
             "objective_id": task.objective_id,
             "ok": result.ok,
             "proof": result.proof,
+            "artifacts": result.artifacts,
         })
         return result
 
