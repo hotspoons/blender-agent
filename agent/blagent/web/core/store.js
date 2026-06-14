@@ -278,7 +278,8 @@ class Store extends EventTarget {
         break;
       }
       case "swarm_gathered": {
-        const a = { ...this.state.autonomy, gathered: { master: msg.master || null, components: msg.components || [] } };
+        const a = { ...this.state.autonomy, gathered: {
+          master: msg.master || null, components: msg.components || [], objects: msg.objects || [] } };
         this._set({ autonomy: a });
         break;
       }

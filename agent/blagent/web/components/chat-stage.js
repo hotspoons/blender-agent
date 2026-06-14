@@ -669,7 +669,8 @@ export class BaChatStage extends LitElement {
         })()}
         ${a.gathered?.master ? html`
           <div class="gather-done">⬇ merged ${a.gathered.components?.length || 0} components →
-            <code>${a.gathered.master.split("/").pop()}</code></div>` : nothing}
+            <code>${a.gathered.master.split("/").pop()}</code>
+            ${a.gathered.objects?.length ? html`<span class="ev"> · ${a.gathered.objects.length} objects: ${a.gathered.objects.join(", ")}</span>` : nothing}</div>` : nothing}
       </div>`;
   }
 

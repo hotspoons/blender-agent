@@ -37,6 +37,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -149,8 +150,11 @@ class WorkerInstance:
             allocator.release(self.bridge_port)
         _log.info("spawning worker %s: api=%d bridge=%d", self.worker_id, self.api_port, self.bridge_port)
         log_fh = open(self._log_path, "wb")  # pylint: disable=consider-using-with
+        # Own session/process-group so stop() can reap the whole tree (the
+        # agent AND the headless Blender it spawns) — no orphaned Blenders.
         self.proc = subprocess.Popen(  # pylint: disable=consider-using-with
-            argv, env=env, stdout=log_fh, stderr=subprocess.STDOUT)
+            argv, env=env, stdout=log_fh, stderr=subprocess.STDOUT,
+            start_new_session=True)
 
     async def wait_ready(self, timeout: float = 150.0, poll: float = 1.0) -> bool:
         """
@@ -183,13 +187,30 @@ class WorkerInstance:
         proc = self.proc
         if proc is None or proc.poll() is not None:
             return
-        proc.terminate()
+        # Reap the whole process group (agent + its headless Blender), so the
+        # spawned Blender can't be orphaned. Falls back to the bare process
+        # where process groups aren't available (e.g. Windows).
+        pgid = None
         try:
+            pgid = os.getpgid(proc.pid)
+        except (AttributeError, OSError):
+            pgid = None
+        try:
+            if pgid is not None:
+                os.killpg(pgid, signal.SIGTERM)
+            else:
+                proc.terminate()
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            proc.kill()
             with contextlib.suppress(Exception):
+                if pgid is not None:
+                    os.killpg(pgid, signal.SIGKILL)
+                else:
+                    proc.kill()
                 proc.wait(timeout=5.0)
+        except Exception:  # pylint: disable=broad-except
+            with contextlib.suppress(Exception):
+                proc.kill()
 
     def tail_log(self, n: int = 2000) -> str:
         try:

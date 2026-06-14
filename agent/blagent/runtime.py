@@ -564,10 +564,12 @@ class AgentRuntime:
                 # component .blends into one master scene.
                 if swarm_strategy is not None:
                     master = await swarm_strategy.gather()
+                    objects = await self._read_blend_objects(master) if master else []
                     await self.emit({
                         "type": "swarm_gathered", "session_id": session_id,
                         "master": master,
                         "components": swarm_strategy.list_components(),
+                        "objects": objects,
                     })
             except asyncio.CancelledError:
                 await self.emit({"type": "turn_done", "session_id": session_id, "aborted": True})
