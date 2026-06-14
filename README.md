@@ -307,6 +307,12 @@ Core tools (always present):
 - `welcome`, `skills_list`, `skills_search`, `skills_read` — onboarding and
   the skills library.
 
+Kit-bashing / mechanical-assembly helpers (`measure_joints`, `snap_fit`,
+`stack_parts`) ship as **bundled Tier-B tools** under
+`mcp/blmcp/data/agent_tools/` — not part of the always-on core surface;
+discovered via `search_agent_tools` / `list_agent_tools` and run via
+`run_agent_tool`. See that directory's README for the on-disk schema.
+
 With the extensions installed:
 
 - `rig` — deterministic rigging/animation for any creature or mechanism

@@ -1,0 +1,21 @@
+{
+  "name": "stack_parts",
+  "description": "Kit-bash assembly: stack an ordered chain of mesh parts tip-to-tail along a shared axis so their connection faces butt together collinearly. Uses end-cap centroids projected on the axis (robust to gear teeth / knurling / bolt detail that defeat ring-based joint detectors like measure_joints). The first part stays put (shoulder/base end); each subsequent part is translated so its near cap-center meets the previous part's far cap-center, offset by gap (negative = insertion overlap, e.g. seating a dowel into a socket). Optionally rotates each part so its principal axis aligns to the target axis first (off by default — PCA axis is unreliable for chunky/cube-ish parts). Returns the resolved axis, growth direction, and per-part displacement.",
+  "params_schema": {
+    "type": "object",
+    "properties": {
+      "names": {"type": "array", "items": {"type": "string"}, "description": "Ordered chain of mesh object names, shoulder/base end first."},
+      "axis": {"type": "array", "items": {"type": "number"}, "description": "Optional world-space stacking axis [x,y,z]. Default: principal axis of the most elongated part in the chain."},
+      "gap": {"type": "number", "description": "Spacing between consecutive cap centers along the axis. Negative inserts/overlaps (seat a dowel/peg into a socket). Default 0."},
+      "align_axes": {"type": "boolean", "description": "Rotate each part so its principal axis matches the target axis before stacking. Leave false for chunky parts whose PCA axis is unreliable. Default false."},
+      "frac": {"type": "number", "description": "Fraction of part length used for each end-cap slice when computing cap centroids. Default 0.12."}
+    },
+    "required": ["names"]
+  },
+  "granted_imports": [],
+  "approved": true,
+  "author": "modeler-agent",
+  "version": 1,
+  "created": "2026-06-14",
+  "pending_imports": []
+}

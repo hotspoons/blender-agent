@@ -1,0 +1,22 @@
+{
+  "name": "snap_fit",
+  "description": "Rigid-transform an object so one of its ports mates a target frame. Companion to measure_joints: give a source port (its world center + axis) and a target frame (center + axis), and the whole object is moved and rotated so the source center lands on the target center with the axes aligned. Use it to seat a part's socket onto another part's ball / a coupler stud, then chain components into an assembly. nearest (default true) flips the target axis if it points away, taking the nearest of the two opposite alignments; set false to align exactly.",
+  "params_schema": {
+    "type": "object",
+    "properties": {
+      "name": {"type": "string", "description": "Object to move."},
+      "source_center": {"type": "array", "items": {"type": "number"}, "description": "World-space center of the source port [x,y,z]."},
+      "source_axis": {"type": "array", "items": {"type": "number"}, "description": "World-space axis of the source port [x,y,z]."},
+      "target_center": {"type": "array", "items": {"type": "number"}, "description": "World-space center to mate to [x,y,z]."},
+      "target_axis": {"type": "array", "items": {"type": "number"}, "description": "World-space axis to align to [x,y,z]."},
+      "nearest": {"type": "boolean", "description": "Flip target axis if it points away (nearest of two alignments). Default true."}
+    },
+    "required": ["name", "source_center", "source_axis", "target_center", "target_axis"]
+  },
+  "granted_imports": [],
+  "approved": true,
+  "author": "modeler-agent",
+  "version": 1,
+  "created": "2026-06-14",
+  "pending_imports": []
+}

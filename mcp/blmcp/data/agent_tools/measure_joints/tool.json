@@ -1,0 +1,20 @@
+{
+  "name": "measure_joints",
+  "description": "Detect cylindrical joint \"ports\" (ball-sockets, hinges, pegs) on a mesh. For kit-bashing and mechanical assembly: returns each round joint's world-space center, axis, and radius, so you can mate parts. Pair with snap_fit to seat one part's port onto another's. Tunables: perp_thresh (perpendicular-normal strictness), axial_gap (min separation between two ports along an axis), radius_tol (how clean a ring must be). NOTE: ring detection is defeated by gear teeth / knurling / heavy surface detail — for those, stack parts on end-cap centroids instead (see the kitbash-axis-stacking skill / stack_parts tool). Read-only.",
+  "params_schema": {
+    "type": "object",
+    "properties": {
+      "name": {"type": "string", "description": "Mesh object to inspect."},
+      "perp_thresh": {"type": "number", "description": "Max |face_normal . axis| for a face to count as a cylinder side-face. Default 0.30."},
+      "axial_gap": {"type": "number", "description": "Min gap (object units) along the axis separating two distinct ports. Default 6.0."},
+      "radius_tol": {"type": "number", "description": "A ring is accepted only if its radius spread is within this fraction. Default 0.18."}
+    },
+    "required": ["name"]
+  },
+  "granted_imports": [],
+  "approved": true,
+  "author": "modeler-agent",
+  "version": 1,
+  "created": "2026-06-14",
+  "pending_imports": []
+}

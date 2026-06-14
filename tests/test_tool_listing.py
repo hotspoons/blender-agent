@@ -26,6 +26,202 @@ _REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # BEGIN: EXPECTED_TOOLS
 EXPECTED_TOOLS = [
     {
+        "name": "search_agent_tools",
+        "description": "\n"
+        "        Search the agent-authored tool library by intent. ALWAYS try this\n"
+        "        before solving a task from scratch with execute_blender_code \u2014 a\n"
+        "        tested tool may already exist. Returns ranked {name, description}.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "query": {
+                    "title": "Query",
+                    "type": "string"
+                },
+                "max_results": {
+                    "default": 8,
+                    "title": "Max Results",
+                    "type": "integer"
+                }
+            },
+            "required": [
+                "query"
+            ],
+            "title": "search_agent_toolsArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "list_agent_tools",
+        "description": "List every agent-authored tool with a one-line summary.",
+        "inputSchema": {
+            "properties": {},
+            "title": "list_agent_toolsArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "list_agent_skills",
+        "description": "\n"
+        "        List agent/user-authored skills (excludes shipped builtins and\n"
+        "        tools-extension bundles). Read one with skills_read(name).\n"
+        "        ",
+        "inputSchema": {
+            "properties": {},
+            "title": "list_agent_skillsArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "agent_tool_details",
+        "description": "\n"
+        "        Full detail for one capability: an authored tool's input schema +\n"
+        "        code + approval/imports, or \u2014 if *name* is a skill \u2014 its body.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "name": {
+                    "title": "Name",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "name"
+            ],
+            "title": "agent_tool_detailsArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "run_agent_tool",
+        "description": "\n"
+        "        Run an agent-authored tool by name with *args* (an object matching\n"
+        "        its params_schema). Executes in Blender through the same path as\n"
+        "        execute_blender_code, under the tool's approved import policy.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "name": {
+                    "title": "Name",
+                    "type": "string"
+                },
+                "args": {
+                    "anyOf": [
+                        {
+                            "additionalProperties": True,
+                            "type": "object"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Args"
+                }
+            },
+            "required": [
+                "name"
+            ],
+            "title": "run_agent_toolArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "author_tool",
+        "description": "\n"
+        "        Create (or update) a reusable agent tool. *code* (the entry) receives\n"
+        "        a dict ``params`` and must assign a dict ``result``; it runs in Blender\n"
+        "        with bpy. For bigger tools, pass *modules* = {name: source} \u2014 extra\n"
+        "        files importable by bare name from the entry and each other (a bundle).\n"
+        "        You may also import curated framework SDKs (e.g. `blrig`) to compose\n"
+        "        existing skills. Imports are jailed to a 3D-modeling allowlist; anything\n"
+        "        outside it (network, subprocess, etc.) prompts you for approval before\n"
+        "        the tool is saved. dry_run validates without saving.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "name": {
+                    "title": "Name",
+                    "type": "string"
+                },
+                "description": {
+                    "title": "Description",
+                    "type": "string"
+                },
+                "code": {
+                    "title": "Code",
+                    "type": "string"
+                },
+                "params_schema": {
+                    "anyOf": [
+                        {
+                            "additionalProperties": True,
+                            "type": "object"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Params Schema"
+                },
+                "modules": {
+                    "anyOf": [
+                        {
+                            "additionalProperties": {
+                                "type": "string"
+                            },
+                            "type": "object"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Modules"
+                },
+                "dry_run": {
+                    "default": False,
+                    "title": "Dry Run",
+                    "type": "boolean"
+                }
+            },
+            "required": [
+                "name",
+                "description",
+                "code"
+            ],
+            "title": "author_toolArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "author_skill",
+        "description": "\n"
+        "        Save a reusable skill (markdown recipe) so future agents can find\n"
+        "        it via skills_search / list_agent_skills. Write one after a recipe\n"
+        "        is confirmed to work. Skills are knowledge, not executed directly.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "name": {
+                    "title": "Name",
+                    "type": "string"
+                },
+                "body": {
+                    "title": "Body",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "name",
+                "body"
+            ],
+            "title": "author_skillArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "execute_blender_code",
         "description": "\n"
         "        Execute Python code in the connected Blender instance.\n"
