@@ -15,10 +15,11 @@ discriminator inside the args.
 __all__ = (
     "ContinueWorkingTool",
     "MediaTool",
+    "SetAutonomyTool",
     "SkillsTool",
 )
 
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from .store import AgentStore, search_skills
 from .tools import Tool, ToolContext, ToolError, ToolResult
@@ -171,3 +172,42 @@ class ContinueWorkingTool(Tool):
             summary="budget extended; {:g} round(s) left".format(balance),
             data={"rounds_left": balance},
         )
+
+
+_AUTONOMY_LEVELS = ("minimal", "yolo", "orchestrator", "swarm")
+
+
+class SetAutonomyTool(Tool):
+    name = "set_autonomy"
+    description = (
+        "Adjust YOUR OWN autonomy level for the rest of this session, without the "
+        "user touching the UI slider. Levels escalate capability: "
+        "'minimal' = act directly but pause for confirmation on each mutating tool "
+        "call; 'yolo' = act directly, no confirmations; 'orchestrator' = pursue "
+        "objectives by delegating to in-process worker agents; 'swarm' = fan "
+        "objectives out to parallel workers, each in its own headless Blender. Dial "
+        "caution UP before risky/irreversible edits, or escalate to delegation for "
+        "large multi-part jobs. Your tool catalog is re-issued to you afterward."
+    )
+
+    def __init__(self, set_level: "Callable[[str, str], Any]") -> None:
+        self._set_level = set_level
+
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "level": {"type": "string", "enum": list(_AUTONOMY_LEVELS),
+                          "description": "minimal | yolo | orchestrator | swarm"},
+            },
+            "required": ["level"],
+        }
+
+    async def call(self, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+        level = str(args.get("level", "")).strip()
+        if level not in _AUTONOMY_LEVELS:
+            raise ToolError("level must be one of: " + ", ".join(_AUTONOMY_LEVELS))
+        self._set_level(ctx.session_id, level)
+        return ToolResult(
+            summary="autonomy set to {:s}".format(level),
+            data={"autonomy_level": level})

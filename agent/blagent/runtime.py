@@ -21,7 +21,7 @@ import os
 
 from typing import Any, Awaitable, Callable
 
-from .agent_tools import ContinueWorkingTool, MediaTool, SkillsTool
+from .agent_tools import ContinueWorkingTool, MediaTool, SetAutonomyTool, SkillsTool
 from .engine import AgentEngine
 from .llm import LlmClient, LlmError, LocalLlmBridgeClient, OpenAiHttpClient
 from .media import MediaLibrary
@@ -184,6 +184,9 @@ class AgentRuntime:
         tools.append(SkillsTool(store))
         tools.append(MediaTool())
         tools.append(ContinueWorkingTool())
+        # Lets the agent adjust its own autonomy level (also over the OpenAI
+        # endpoint), instead of only via the UI slider.
+        tools.append(SetAutonomyTool(self.set_autonomy_level))
         self.registry = ToolRegistry(tools)
         self._sessions: dict[str, _Session] = {}
         # Live worker engines by agent id, for voice-of-god injection.

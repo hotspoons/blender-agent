@@ -157,6 +157,29 @@ class TestAutonomyLevel(unittest.TestCase):
         self.assertEqual(pub["autonomy"], "ask")
         self.assertFalse(pub["autonomy_mode"])
 
+    def test_set_autonomy_tool_over_endpoint(self) -> None:
+        for path in (os.path.join(_REPO_DIR, "mcp"), os.path.join(_REPO_DIR, "agent")):
+            if path not in sys.path:
+                sys.path.insert(0, path)
+        from blagent.runtime import AgentRuntime
+        from blagent.store import AgentStore
+        from blagent.tools import ToolContext, ToolError
+
+        rt = AgentRuntime(AgentStore(tempfile.mkdtemp(prefix="agentdata_")), [])
+        sid = rt.new_session()
+        tool = rt.registry.get("set_autonomy")
+        self.assertIsNotNone(tool, "the agent must expose a set_autonomy tool")
+        assert tool is not None
+        ctx = ToolContext(media=rt._get_or_load_session(sid).media, session_id=sid)
+
+        res = asyncio.new_event_loop().run_until_complete(tool.call(ctx, {"level": "swarm"}))
+        self.assertIn("swarm", res.summary)
+        self.assertEqual(rt.store.config.autonomy_level, "swarm")
+        self.assertEqual(rt.store.config.autonomy_workers, "swarm")
+
+        with self.assertRaises(ToolError):
+            asyncio.new_event_loop().run_until_complete(tool.call(ctx, {"level": "bogus"}))
+
 
 @unittest.skipUnless(
     os.environ.get("SWARM_E2E") == "1" and shutil.which("blender") and _HAS_AGENT_DEPS,
