@@ -24,7 +24,8 @@ export class BaComposer extends LitElement {
     _attachments: { state: true },   // [{id, sessionId, uploading}]
     _dragOver: { state: true },
     _autoload: { state: true },      // loading a local model before send
-    _level: { state: true },         // autonomy slider: minimal|yolo|orchestrator|swarm
+    _level: { state: true },         // autonomy level: ask|yolo|orchestrator|swarm
+    _autoOpen: { state: true },      // is the autonomy slider expanded?
     _objRows: { state: true },       // guided-intake objective editor rows
   };
 
@@ -36,6 +37,7 @@ export class BaComposer extends LitElement {
     this._dragOver = false;
     this._autoload = false;
     this._level = store.state.autonomyLevel;
+    this._autoOpen = false;
     this._objRows = [];
     this._lastDraftGoal = null;
     this._onLlmChange = () => this._onLocalLlmState();
@@ -224,6 +226,20 @@ export class BaComposer extends LitElement {
       box-shadow: 0 1px 2px rgba(0,0,0,0.25);
     }
     .autonomy .seg:disabled { cursor: default; opacity: 0.6; }
+    .autonomy .auto-dismiss { border: none; background: transparent; color: var(--text-muted);
+      cursor: pointer; padding: 0 6px; display: inline-flex; align-items: center; }
+    .autonomy .auto-dismiss:hover { color: var(--text); }
+    .autonomy .auto-dismiss svg { width: 14px; height: 14px; }
+    /* Collapsed autonomy control: a quiet chip that expands the slider. */
+    .auto-chip {
+      align-self: flex-start; display: inline-flex; align-items: center; gap: 5px;
+      margin-bottom: 8px; padding: 3px 10px;
+      background: var(--surface-muted); border: 1px solid var(--border);
+      border-radius: 999px; color: var(--text-muted); font: inherit; font-size: 12px; cursor: pointer;
+    }
+    .auto-chip:hover { color: var(--text); border-color: var(--accent); }
+    .auto-chip strong { color: var(--accent); font-weight: 700; }
+    .auto-chip svg { width: 13px; height: 13px; }
     /* Guided-intake objectives editor. */
     .obj-editor {
       border: 1px solid var(--border); border-radius: var(--radius-md);
@@ -375,6 +391,46 @@ export class BaComposer extends LitElement {
     return this._level === "orchestrator" || this._level === "swarm";
   }
 
+  static _LEVELS = [
+    ["ask", "Ask", "Act directly; confirm every mutating tool call"],
+    ["yolo", "YOLO", "Act directly; run tool calls without confirmation"],
+    ["orchestrator", "Orchestrator", "Pursue objectives via in-process worker agents"],
+    ["swarm", "Swarm", "Parallel workers, each its own headless Blender, merged at the end"],
+  ];
+
+  _levelLabel() {
+    const found = BaComposer._LEVELS.find(([v]) => v === this._level);
+    return found ? found[1] : this._level;
+  }
+
+  _pickLevel(val) {
+    store.setAutonomyLevel(val);
+    this._autoOpen = false; // collapse back to the chip after choosing
+  }
+
+  /**
+   * Collapsed: a small "autonomy: <Level>" chip. Click to expand the
+   * segmented slider; pick a level (or click the chip again) to dismiss.
+   */
+  _renderAutonomyControl() {
+    if (!this._autoOpen) {
+      return html`
+        <button class="auto-chip" title="Change autonomy level"
+          @click=${() => { this._autoOpen = true; }}>
+          autonomy: <strong>${this._levelLabel()}</strong> ${icon("chevron-down")}
+        </button>`;
+    }
+    return html`
+      <div class="autonomy" role="tablist" aria-label="Autonomy level">
+        ${BaComposer._LEVELS.map(([val, label, desc]) => html`
+          <button class="seg ${this._level === val ? "on" : ""}" title=${desc}
+            ?disabled=${this._busy}
+            @click=${() => this._pickLevel(val)}>${label}</button>`)}
+        <button class="auto-dismiss" title="Dismiss"
+          @click=${() => { this._autoOpen = false; }}>${icon("x-mark")}</button>
+      </div>`;
+  }
+
   _draftObjectives() {
     const ta = this.renderRoot.querySelector("textarea");
     store.draftObjectives((ta?.value || "").trim());
@@ -403,16 +459,7 @@ export class BaComposer extends LitElement {
         @dragleave=${() => { this._dragOver = false; }}
         @drop=${this._onDrop}>
         <div class="grip" title="Drag to resize" @pointerdown=${this._onGripDown}></div>
-        <div class="autonomy" role="tablist" aria-label="Autonomy level">
-          ${[["minimal", "Minimal", "Act directly; confirm every mutating tool call"],
-             ["yolo", "YOLO", "Act directly; run tool calls without confirmation"],
-             ["orchestrator", "Orchestrator", "Pursue objectives via in-process worker agents"],
-             ["swarm", "Swarm", "Parallel workers, each its own headless Blender, merged at the end"],
-            ].map(([val, label, desc]) => html`
-            <button class="seg ${this._level === val ? "on" : ""}" title=${desc}
-              ?disabled=${this._busy}
-              @click=${() => store.setAutonomyLevel(val)}>${label}</button>`)}
-        </div>
+        ${this._renderAutonomyControl()}
         ${this._autonomyMode() && this._objRows.length ? html`
           <div class="obj-editor">
             <div class="oe-head">Objectives <span class="hint">edit, then begin the run</span></div>

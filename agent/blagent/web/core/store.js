@@ -89,8 +89,79 @@ class Store extends EventTarget {
   // ----------------------------------------------------------------
   // Server event handling.
 
+  /**
+   * Fold a worker sub-agent's own event stream into its bounded card.
+   * Returns true once handled (the event never belongs to the main view).
+   */
+  _routeWorkerEvent(msg) {
+    const id = msg.session_id;
+    const agents = this.state.autonomy.agents;
+    const ag = agents[id];
+    if (!ag) return true; // unknown/younger worker — swallow, never main view
+    const patch = {};
+    const pushCall = (callId) => {
+      if (!ag.timeline.some((e) => e.kind === "call" && e.call_id === callId)) {
+        patch.timeline = [...(patch.timeline || ag.timeline), { kind: "call", call_id: callId }];
+      }
+    };
+    switch (msg.type) {
+      case "token":
+        patch.stream = (ag.stream || "") + (msg.text || "");
+        patch.drafting = null;
+        break;
+      case "tool_drafting":
+        patch.drafting = { name: msg.name, chars: msg.chars };
+        break;
+      case "assistant_done": {
+        const tl = [...ag.timeline];
+        if ((msg.content || "").trim()) tl.push({ kind: "text", content: msg.content });
+        for (const tc of (msg.tool_calls || [])) {
+          if (!tl.some((e) => e.kind === "call" && e.call_id === tc.id))
+            tl.push({ kind: "call", call_id: tc.id });
+        }
+        patch.timeline = tl;
+        patch.stream = "";
+        patch.drafting = null;
+        break;
+      }
+      case "tool_status": {
+        const calls = { ...ag.calls };
+        const ex = calls[msg.call_id] || {};
+        calls[msg.call_id] = {
+          ...ex, name: msg.name, arguments: msg.arguments, state: msg.state,
+          summary: msg.summary || ex.summary || "",
+          media_ids: msg.media_ids || ex.media_ids || [],
+        };
+        patch.calls = calls;
+        pushCall(msg.call_id);
+        break;
+      }
+      case "worker_media":
+        // Swarm: media arrives inline (data_url) — the parent has no copy.
+        patch.media = [...(ag.media || []), { id: msg.media_id, data_url: msg.data_url }];
+        break;
+      case "injected":
+        patch.timeline = [...ag.timeline, { kind: "injected", content: msg.content }];
+        patch.queued = null; // the queued message has now landed
+        break;
+      case "turn_done":
+        patch.stream = "";
+        patch.drafting = null;
+        break;
+      default:
+        return true; // swallow other worker-tagged events (error, user_record…)
+    }
+    this._set({ autonomy: { ...this.state.autonomy, agents: { ...agents, [id]: { ...ag, ...patch } } } });
+    return true;
+  }
+
   _handle(msg) {
     const forThisSession = !msg.session_id || msg.session_id === this.state.sessionId;
+    // Worker sub-agents stream their own events (token / tool_status /
+    // assistant_done / media) tagged with parent_session_id. Their
+    // session_id is the worker id, so they never match forThisSession —
+    // route them into the worker's bounded card instead of dropping them.
+    if (msg.parent_session_id && this._routeWorkerEvent(msg)) return;
     switch (msg.type) {
       case "hello":
         this._set({
@@ -179,19 +250,6 @@ class Store extends EventTarget {
         }
         break;
       case "tool_status": {
-        if (msg.parent_session_id) {
-          // A worker sub-agent's tool call → its bounded card's drill-down
-          // (terminal states only, so each call logs once).
-          if (msg.state === "ok" || msg.state === "error" || msg.state === "rejected") {
-            const a = { ...this.state.autonomy, agents: { ...this.state.autonomy.agents } };
-            const ag = a.agents[msg.session_id];
-            if (ag) {
-              a.agents[msg.session_id] = { ...ag, events: [...ag.events, { name: msg.name, state: msg.state }] };
-              this._set({ autonomy: a });
-            }
-          }
-          break;
-        }
         if (!forThisSession) break;
         const calls = { ...this.state.toolCalls };
         const existing = calls[msg.call_id] || {};
@@ -264,7 +322,11 @@ class Store extends EventTarget {
         const a = { ...this.state.autonomy, agents: { ...this.state.autonomy.agents } };
         const id = msg.agent_id;
         a.agents[id] = { id, role: msg.role || "worker", task: msg.task || "",
-          objectiveId: msg.objective_id || "", state: "running", proof: "", ok: null, events: [],
+          objectiveId: msg.objective_id || "", state: "running", proof: "", ok: null,
+          // Live activity, mirrored from the worker's own event stream:
+          timeline: [], calls: {}, stream: "", media: [],
+          // Voice-of-god two-step: queued = text awaiting next round.
+          queued: null, stopping: false,
           round: (msg.role === "gather") ? null : a.currentRound };
         if (!a.agentOrder.includes(id)) a.agentOrder = [...a.agentOrder, id];
         this._set({ autonomy: a });
@@ -405,9 +467,33 @@ class Store extends EventTarget {
     this.send({ type: "objectives", session_id: this.state.sessionId, objectives: list });
   }
 
-  /** Voice of god: inject a message into a live worker's context. */
-  injectWorker(agentId, content, mode = "after_round") {
-    this.send({ type: "inject", agent_id: agentId, content, mode });
+  /** Mutate one live worker card in place (helper for the controls below). */
+  _patchAgent(agentId, patch) {
+    const agents = this.state.autonomy.agents;
+    const ag = agents[agentId];
+    if (!ag) return;
+    this._set({ autonomy: { ...this.state.autonomy, agents: { ...agents, [agentId]: { ...ag, ...patch } } } });
+  }
+
+  /**
+   * Voice of god, step one: queue a message into a live worker's context
+   * (lands at its next round boundary). The card shows it as queued until
+   * the worker reports it landed (an `injected` event) or it is promoted.
+   */
+  injectWorker(agentId, content) {
+    this.send({ type: "inject", agent_id: agentId, content, mode: "after_round" });
+    this._patchAgent(agentId, { queued: content });
+  }
+
+  /** Step two: promote the queued message so it lands now (cut generation). */
+  interruptWorker(agentId) {
+    this.send({ type: "interrupt_worker", agent_id: agentId });
+  }
+
+  /** Cancel a runaway worker (cooperative abort / subprocess kill). */
+  stopWorker(agentId) {
+    this.send({ type: "stop_worker", agent_id: agentId });
+    this._patchAgent(agentId, { stopping: true });
   }
 
   /** Fetch the model list for an endpoint (debounced by callers). */

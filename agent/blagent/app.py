@@ -14,7 +14,9 @@ Client -> server:
     ``{"type": "objectives", "session_id": "", "objectives": [{"text", "acceptance"}], "max_rounds"?}``
     ``{"type": "draft_objectives", "session_id": "", "goal": "..."}``  -> emits objectives_draft
     ``{"type": "inject", "agent_id": "...", "content": "...", "mode": "now"|"after_round"}``
-    ``{"type": "set_autonomy_level", "session_id": "", "level": "minimal"|"yolo"|"orchestrator"|"swarm"}``
+    ``{"type": "interrupt_worker", "agent_id": "..."}``   -> promote a queued injection to land now
+    ``{"type": "stop_worker", "agent_id": "..."}``        -> cancel a runaway worker
+    ``{"type": "set_autonomy_level", "session_id": "", "level": "ask"|"yolo"|"orchestrator"|"swarm"}``
     ``{"type": "new_session"}``
     ``{"type": "load_session", "id": ...}``
     ``{"type": "delete_session", "id": ...}``
@@ -116,6 +118,16 @@ def create_app(runtime: AgentRuntime) -> Starlette:
             return Response(status_code=404)
         return FileResponse(item.path, media_type=item.mime)
 
+    async def worker_media(request: Request) -> Response:
+        # In-process worker (orchestrator mode) tool-produced media: served
+        # from the worker's own jail rather than the main session library.
+        agent_id = request.path_params["agent_id"]
+        media_id = request.path_params["media_id"]
+        item = runtime.worker_media_library(agent_id).get(media_id)
+        if item is None or not os.path.isfile(item.path):
+            return Response(status_code=404)
+        return FileResponse(item.path, media_type=item.mime)
+
     async def ws_control(ws: WebSocket) -> None:
         await ws.accept()
         queue = runtime.subscribe()
@@ -165,6 +177,7 @@ def create_app(runtime: AgentRuntime) -> Starlette:
         Route("/", index),
         Route("/healthz", healthz),
         Route("/media/{session_id}/{media_id}", media),
+        Route("/worker-media/{agent_id}/{media_id}", worker_media),
         Route("/upload/{session_id}", media_upload, methods=["POST"]),
         Route("/instance", instance_update, methods=["POST"]),
         WebSocketRoute("/ws", ws_control),
@@ -224,16 +237,34 @@ async def _handle_control(runtime: AgentRuntime, ws: WebSocket, data: dict[str, 
             if goal:
                 runtime.draft_objectives(str(data.get("session_id", "")), goal)
         elif msg_type == "inject":
-            # Voice of god: inject a message into a running worker's context.
+            # Voice of god: queue a message into a running worker's context
+            # (lands at its next round boundary).
+            agent_id = str(data.get("agent_id", ""))
             ok = runtime.inject_into_worker(
-                str(data.get("agent_id", "")),
+                agent_id,
                 str(data.get("content", "")),
                 now=str(data.get("mode", "")) == "now",
             )
             if not ok:
                 await ws.send_json({
                     "type": "error",
-                    "message": "no live worker {!r} to inject into".format(data.get("agent_id", "")),
+                    "message": "no live worker {!r} to inject into".format(agent_id),
+                })
+        elif msg_type == "interrupt_worker":
+            # Step two of injection: promote the queued message to land now.
+            ok = runtime.interrupt_worker(str(data.get("agent_id", "")))
+            if not ok:
+                await ws.send_json({
+                    "type": "error",
+                    "message": "no live worker {!r} to interrupt".format(data.get("agent_id", "")),
+                })
+        elif msg_type == "stop_worker":
+            # Cancel a runaway worker (cooperative abort / subprocess kill).
+            ok = runtime.stop_worker(str(data.get("agent_id", "")))
+            if not ok:
+                await ws.send_json({
+                    "type": "error",
+                    "message": "no live worker {!r} to stop".format(data.get("agent_id", "")),
                 })
         elif msg_type == "set_autonomy_level":
             # The composer's autonomy slider: minimal | yolo | orchestrator | swarm.

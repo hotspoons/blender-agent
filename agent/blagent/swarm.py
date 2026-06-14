@@ -33,6 +33,7 @@ __all__ = (
 import asyncio
 import contextlib
 import glob
+import json
 import logging
 import os
 import re
@@ -253,6 +254,9 @@ class RemoteWorkerStrategy:
             ready_timeout: float = 180.0,
             task_timeout: float = 900.0,
             emit: "Callable[[dict[str, Any]], Awaitable[None]] | None" = None,
+            session_id: str = "",
+            register_stop: "Callable[[str, Callable[[], None]], None] | None" = None,
+            unregister_stop: "Callable[[str], None] | None" = None,
     ) -> None:
         self._endpoint = endpoint
         self._model = model
@@ -263,7 +267,28 @@ class RemoteWorkerStrategy:
         self._ready_timeout = ready_timeout
         self._task_timeout = task_timeout
         self._emit = emit
+        # Parent (orchestrator) session id: streamed worker events are tagged
+        # with it so the UI files them under the matching bounded agent card.
+        self._session_id = session_id
+        self._register_stop = register_stop
+        self._unregister_stop = unregister_stop
         os.makedirs(exchange_dir, exist_ok=True)
+
+    def _agent_id(self, task_id: str) -> str:
+        # Mirror AutonomyOrchestrator._run_one_worker so streamed events land
+        # on the same card the orchestrator opened with agent_spawned.
+        return "{:s}:w:{:s}".format(self._session_id, task_id)
+
+    async def _emit_worker(self, agent_id: str, event: dict[str, Any]) -> None:
+        """Tag an event as belonging to *agent_id*'s worker card and emit it."""
+        if self._emit is None:
+            return
+        await self._emit({
+            **event,
+            "session_id": agent_id,
+            "parent_session_id": self._session_id,
+            "role": event.get("role", "worker"),
+        })
 
     def _build_prompt(self, task: Any, component: str) -> str:
         prompt = _WORKER_TASK_TEMPLATE.format(instruction=task.instruction, component=component)
@@ -281,22 +306,88 @@ class RemoteWorkerStrategy:
         shutil.copy2(newest, dest)
         return dest
 
-    async def _chat(self, base_url: str, prompt: str, user: str) -> str:
+    # OpenAI tool-call status (chat_api) -> the runtime's tool_status states,
+    # so streamed swarm activity matches what in-process workers emit.
+    _STATUS_TO_STATE = {"running": "running", "done": "ok", "error": "error"}
+
+    async def _chat(self, base_url: str, prompt: str, user: str,
+                    agent_id: "str | None" = None,
+                    cancel: "asyncio.Event | None" = None) -> str:
+        """
+        Drive a worker over its OpenAI endpoint and return its final text.
+
+        When *agent_id* is given and an emit sink is configured, stream the
+        response (SSE) and translate each delta into ``token`` / ``tool_status``
+        events tagged for that worker's card — so the user sees the worker's
+        tool calls and prose live, not just the final proof. *cancel* breaks
+        the stream early (the caller also kills the subprocess).
+        """
         import httpx  # pylint: disable=import-error
 
+        headers = {"Authorization": "Bearer " + self._api_key} if self._api_key else {}
+        stream = agent_id is not None and self._emit is not None
         body = {
             "model": "blender-agent",
             "messages": [{"role": "user", "content": prompt}],
             "user": user,
-            "stream": False,
+            "stream": stream,
         }
-        headers = {"Authorization": "Bearer " + self._api_key} if self._api_key else {}
+        if not stream:
+            async with httpx.AsyncClient(timeout=self._task_timeout) as client:
+                resp = await client.post(base_url + "/chat/completions", json=body, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+            message = (data.get("choices") or [{}])[0].get("message") or {}
+            return str(message.get("content") or "")
+
+        assert agent_id is not None
+        text_parts: list[str] = []
         async with httpx.AsyncClient(timeout=self._task_timeout) as client:
-            resp = await client.post(base_url + "/chat/completions", json=body, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-        message = (data.get("choices") or [{}])[0].get("message") or {}
-        return str(message.get("content") or "")
+            async with client.stream(
+                    "POST", base_url + "/chat/completions",
+                    json=body, headers=headers) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if cancel is not None and cancel.is_set():
+                        break
+                    if not line.startswith("data: "):
+                        continue
+                    payload = line[len("data: "):].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(payload)
+                    except ValueError:
+                        continue
+                    delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
+                    await self._stream_delta(agent_id, delta, text_parts)
+        return "".join(text_parts)
+
+    async def _stream_delta(self, agent_id: str, delta: dict[str, Any],
+                            text_parts: list[str]) -> None:
+        """Translate one OpenAI delta into worker-card events."""
+        content = delta.get("content")
+        if content:
+            text_parts.append(str(content))
+            await self._emit_worker(agent_id, {"type": "token", "text": str(content)})
+        for call in delta.get("blender_tool_calls") or ():
+            state = self._STATUS_TO_STATE.get(str(call.get("status")), "error")
+            await self._emit_worker(agent_id, {
+                "type": "tool_status",
+                "call_id": str(call.get("call_id", "")),
+                "name": str(call.get("name", "")),
+                "arguments": call.get("args_json", ""),
+                "state": state,
+                "summary": call.get("summary", ""),
+            })
+        for media in delta.get("blender_media") or ():
+            data_url = media.get("data_url")
+            if data_url:
+                await self._emit_worker(agent_id, {
+                    "type": "worker_media",
+                    "media_id": str(media.get("id", "")),
+                    "data_url": str(data_url),
+                })
 
     def list_components(self) -> "list[str]":
         """Component .blend files produced by workers, in the exchange dir."""
@@ -337,19 +428,25 @@ class RemoteWorkerStrategy:
                 "on this machine):\n{files}\n\n"
                 "End with a PROOF OF WORK: the total object count in the merged scene."
             ).format(master=master, files=files)
+            gather_id = "{:s}:gather".format(self._session_id)
             if self._emit is not None:
-                await self._emit({"type": "agent_spawned", "agent_id": worker.base_url,
-                                  "role": "gather", "task": "merge {:d} components".format(len(components))})
+                await self._emit({
+                    "type": "agent_spawned", "session_id": self._session_id,
+                    "agent_id": gather_id, "role": "gather",
+                    "task": "merge {:d} components".format(len(components))})
             try:
-                proof = await self._chat(worker.base_url, prompt, user="gather")
+                proof = await self._chat(worker.base_url, prompt, user="gather",
+                                         agent_id=gather_id)
             except Exception as ex:  # pylint: disable=broad-except
                 _log.warning("gather chat failed: %s", ex)
                 return None
             master_path = self._collect_blend(worker_dir, master)
             if self._emit is not None:
-                await self._emit({"type": "agent_done", "agent_id": worker.base_url,
-                                  "role": "gather", "ok": master_path is not None,
-                                  "proof": proof, "master": master_path})
+                await self._emit({
+                    "type": "agent_done", "session_id": self._session_id,
+                    "agent_id": gather_id, "role": "gather",
+                    "ok": master_path is not None,
+                    "proof": proof, "master": master_path})
             return master_path
         finally:
             worker.stop()
@@ -357,6 +454,7 @@ class RemoteWorkerStrategy:
     async def __call__(self, task: Any) -> Any:
         from .autonomy import WorkerResult
 
+        agent_id = self._agent_id(task.id)
         component = "component_{:s}".format(_safe(task.id))
         api_port = self._allocator.allocate()
         bridge_port = self._allocator.allocate()
@@ -365,6 +463,17 @@ class RemoteWorkerStrategy:
             worker_id=task.id, api_port=api_port, bridge_port=bridge_port,
             data_dir=worker_dir, endpoint=self._endpoint, model=self._model,
             host=self._host, api_key=self._api_key)
+        # Stop hook: cancel the live stream + kill the subprocess (with its
+        # headless Blender). Registered before start so a "lala land" worker
+        # can be stopped even while it is still coming up.
+        cancel = asyncio.Event()
+
+        def _stop() -> None:
+            cancel.set()
+            worker.stop()
+
+        if self._register_stop is not None:
+            self._register_stop(agent_id, _stop)
         worker.start(allocator=self._allocator)
         try:
             ready = await worker.wait_ready(self._ready_timeout)
@@ -375,12 +484,23 @@ class RemoteWorkerStrategy:
                     ok=False, transcript_ref=worker.base_url)
             prompt = self._build_prompt(task, component)
             try:
-                proof = await self._chat(worker.base_url, prompt, user=task.id)
+                proof = await self._chat(worker.base_url, prompt, user=task.id,
+                                         agent_id=agent_id, cancel=cancel)
             except Exception as ex:  # pylint: disable=broad-except
+                if cancel.is_set():
+                    return WorkerResult(
+                        task_id=task.id, objective_id=task.objective_id,
+                        proof="worker stopped by user", ok=False,
+                        transcript_ref=worker.base_url)
                 _log.warning("worker %s chat failed: %s", task.id, ex)
                 return WorkerResult(
                     task_id=task.id, objective_id=task.objective_id,
                     proof="worker chat failed: {:s}".format(ex), ok=False,
+                    transcript_ref=worker.base_url)
+            if cancel.is_set():
+                return WorkerResult(
+                    task_id=task.id, objective_id=task.objective_id,
+                    proof="worker stopped by user", ok=False,
                     transcript_ref=worker.base_url)
             artifact = self._collect_blend(worker_dir, component)
             artifacts = [artifact] if artifact else []
@@ -391,3 +511,5 @@ class RemoteWorkerStrategy:
                 transcript_ref=worker.base_url, artifacts=artifacts)
         finally:
             worker.stop()
+            if self._unregister_stop is not None:
+                self._unregister_stop(agent_id)

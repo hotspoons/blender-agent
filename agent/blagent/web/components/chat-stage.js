@@ -380,6 +380,37 @@ export class BaChatStage extends LitElement {
       font: inherit; font-size: 12px; cursor: pointer; }
     .agent .inject button:hover { color: var(--text); }
     .agent .inject button.now { color: var(--brand); border-color: var(--brand); }
+    /* Live worker activity: a compact mini-transcript inside the card. */
+    .agent-activity { padding: 8px 12px; border-top: 1px solid var(--border);
+      display: flex; flex-direction: column; gap: 6px; }
+    .agent-activity.media-strip { flex-direction: row; }
+    .wtext { font-size: 12.5px; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+    .wtext.stream { color: var(--text-muted); }
+    .winject { font-size: 12px; color: var(--accent); font-style: italic; }
+    .wdraft { font-size: 11.5px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+    .wdraft svg { width: 12px; height: 12px; animation: spin 1.4s linear infinite; }
+    .wcall { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+    .wcall-head { display: flex; align-items: center; gap: 6px; padding: 4px 8px; cursor: pointer; font-size: 12px; }
+    .wcall-head svg { width: 13px; height: 13px; flex: none; }
+    .wcall .wname { font-family: var(--font-mono); color: var(--text); }
+    .wcall .wsum { flex: 1; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .wcall .wbadge { display: inline-flex; }
+    .wcall .wbadge svg { width: 13px; height: 13px; }
+    .wcall.running .wbadge svg { animation: spin 1.4s linear infinite; color: var(--text-muted); }
+    .wcall.ok .wbadge, .wcall.done .wbadge { color: var(--success); }
+    .wcall.error .wbadge, .wcall.rejected .wbadge { color: var(--danger); }
+    .wcall-body { padding: 4px 8px 8px; }
+    .worker-controls { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border); }
+    .worker-controls .queued { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); }
+    .worker-controls .queued span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .worker-controls .queued button.now { background: var(--surface-muted); color: var(--brand);
+      border: 1px solid var(--brand); border-radius: var(--radius-sm); padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+    .worker-controls .inject-na { font-size: 11.5px; color: var(--text-muted); font-style: italic; }
+    .worker-controls .stop { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px;
+      background: transparent; color: var(--danger); border: 1px solid var(--danger); border-radius: var(--radius-sm);
+      padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+    .worker-controls .stop svg { width: 13px; height: 13px; }
+    .worker-controls .stop:disabled { opacity: 0.5; cursor: default; }
     .gather-done { font-size: 13px; color: var(--text-muted); padding: 4px 2px; }
     .gather-done code { color: var(--accent-2); }
     .round-div { display: flex; align-items: center; gap: 10px; margin: 4px 2px 2px;
@@ -596,12 +627,50 @@ export class BaChatStage extends LitElement {
     this._openAgents = s;
   }
 
-  _inject(e, agentId, now) {
+  _send(e, agentId) {
     const input = e.target.closest(".inject")?.querySelector("input");
     const v = (input?.value || "").trim();
     if (!v) return;
-    store.injectWorker(agentId, v, now ? "now" : "after_round");
+    store.injectWorker(agentId, v);
     input.value = "";
+  }
+
+  _renderWorkerMediaThumb(agentId, m) {
+    const src = `/worker-media/${agentId}/${m}`;
+    if (/\.stl$/i.test(m)) {
+      return html`<ba-stl-viewer thumb .src=${src} .label=${m}
+        @zoom=${(ev) => { this._lightbox = ev.detail; }}></ba-stl-viewer>`;
+    }
+    if (/^i\d+$/.test(m) || /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(m)) {
+      return html`<img src=${src} alt=${m} title=${m}
+        @click=${() => { this._lightbox = { src, alt: m }; }}>`;
+    }
+    return html`<a class="file-chip" href=${src} download=${m} title=${m}>
+      ${icon("arrow-down-tray")} ${m}</a>`;
+  }
+
+  /** A worker's tool call, compact: name · state · summary + media thumbs. */
+  _renderWorkerCall(agentId, callId, call) {
+    if (!call) return nothing;
+    const key = `${agentId}/${callId}`;
+    const open = this._expanded.has(key);
+    const badgeIcon = { running: "arrow-path", ok: "check", done: "check",
+      error: "exclamation-triangle", rejected: "x-mark" }[call.state];
+    return html`
+      <div class="wcall ${call.state}">
+        <div class="wcall-head" @click=${() => this._toggleSet("_expanded", key)}>
+          ${icon(open ? "chevron-down" : "chevron-right")}
+          <span class="wname">${call.name}</span>
+          <span class="wsum" title=${call.summary || ""}>${call.summary}</span>
+          <span class="wbadge ${call.state}">${badgeIcon ? icon(badgeIcon) : nothing}</span>
+        </div>
+        ${open && call.arguments ? html`
+          <div class="wcall-body"><ba-json label="Arguments" .data=${call.arguments}></ba-json></div>` : nothing}
+        ${call.media_ids?.length ? html`
+          <div class="wcall-body media-strip">
+            ${call.media_ids.map((m) => this._renderWorkerMediaThumb(agentId, m))}
+          </div>` : nothing}
+      </div>`;
   }
 
   _renderAgentCard(agent) {
@@ -611,6 +680,7 @@ export class BaChatStage extends LitElement {
     const badge = agent.state === "running"
       ? html`<span class="spin">${icon("arrow-path")}</span>`
       : (agent.ok === false ? "✗" : "✓");
+    const canInject = store.state.autonomyLevel !== "swarm"; // in-process only
     return html`
       <div class="agent ${roleClass} ${agent.state}">
         <div class="agent-head" @click=${() => this._toggleAgent(agent.id)}>
@@ -618,9 +688,20 @@ export class BaChatStage extends LitElement {
           <span class="task">${agent.task || agent.id}</span>
           <span class="state ${agent.ok === false ? "fail" : agent.state === "done" ? "ok" : ""}">${badge}</span>
         </div>
-        ${open && agent.events?.length ? html`
-          <div class="agent-events">
-            ${agent.events.map((ev) => html`<span class="ev-chip ${ev.state}">${ev.name}</span>`)}
+        ${open && agent.timeline?.length ? html`
+          <div class="agent-activity">
+            ${agent.timeline.map((e) => {
+              if (e.kind === "text") return html`<div class="wtext">${e.content}</div>`;
+              if (e.kind === "injected") return html`<div class="winject">⟶ ${e.content}</div>`;
+              return this._renderWorkerCall(agent.id, e.call_id, agent.calls[e.call_id]);
+            })}
+            ${agent.stream ? html`<div class="wtext stream">${agent.stream}</div>` : nothing}
+            ${agent.drafting ? html`<div class="wdraft">${icon("arrow-path")} drafting ${agent.drafting.name || ""}…</div>` : nothing}
+          </div>` : nothing}
+        ${open && agent.media?.length ? html`
+          <div class="agent-activity media-strip">
+            ${agent.media.map((mm) => html`<img src=${mm.data_url} alt=${mm.id} title=${mm.id}
+              @click=${() => { this._lightbox = { src: mm.data_url, alt: mm.id }; }}>`)}
           </div>` : nothing}
         ${open && agent.proof ? html`<div class="proof">${agent.proof}</div>` : nothing}
         ${open && agent.artifacts?.length ? html`
@@ -628,11 +709,23 @@ export class BaChatStage extends LitElement {
             ${agent.artifacts.map((p) => html`<span class="ev-chip art">${p.split("/").pop()}</span>`)}
           </div>` : nothing}
         ${agent.state === "running" ? html`
-          <div class="inject">
-            <input type="text" placeholder="Inject guidance into this worker…"
-              @keydown=${(e) => { if (e.key === "Enter") { e.preventDefault(); this._inject(e, agent.id, false); } }}>
-            <button title="Inject at the next round" @click=${(e) => this._inject(e, agent.id, false)}>inject</button>
-            <button class="now" title="Interrupt the worker now" @click=${(e) => this._inject(e, agent.id, true)}>now</button>
+          <div class="worker-controls">
+            ${canInject ? html`
+              <div class="inject">
+                <input type="text" placeholder="Inject guidance into this worker…"
+                  @keydown=${(e) => { if (e.key === "Enter") { e.preventDefault(); this._send(e, agent.id); } }}>
+                <button title="Queue for the worker's next round" @click=${(e) => this._send(e, agent.id)}>Send</button>
+              </div>
+              ${agent.queued ? html`
+                <div class="queued">
+                  <span title=${agent.queued}>⏳ queued: ${agent.queued}</span>
+                  <button class="now" title="Apply it now (interrupt)"
+                    @click=${() => store.interruptWorker(agent.id)}>Send now</button>
+                </div>` : nothing}`
+              : html`<div class="inject-na">injection isn't available for swarm workers (out of process)</div>`}
+            <button class="stop" ?disabled=${agent.stopping}
+              title="Cancel this worker" @click=${() => store.stopWorker(agent.id)}>
+              ${icon("x-mark")} ${agent.stopping ? "stopping…" : "Stop worker"}</button>
           </div>` : nothing}
       </div>`;
   }

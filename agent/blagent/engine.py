@@ -226,6 +226,10 @@ class AgentEngine:
         # (a running tool still finishes — a scene mutation can't be undone).
         self._injections: list[str] = []
         self._interrupt = asyncio.Event()
+        # Cooperative cancel: set by ``abort()`` to end the whole turn at the
+        # next safe point (a running tool still finishes). Distinct from
+        # ``_interrupt``, which only cuts one generation to re-plan.
+        self._abort = asyncio.Event()
 
     def inject(self, content: str, now: bool = False) -> None:
         """
@@ -239,6 +243,23 @@ class AgentEngine:
         self._injections.append(content)
         if now:
             self._interrupt.set()
+
+    def interrupt(self) -> None:
+        """
+        Promote an already-queued injection to land immediately: cut the
+        in-flight generation short without adding new content. No-op if
+        nothing is queued (the next round simply proceeds unchanged).
+        """
+        self._interrupt.set()
+
+    def abort(self) -> None:
+        """
+        Cooperatively cancel the running turn: the loop stops at the next
+        round boundary and a running tool is allowed to finish (a scene
+        mutation can't be half-undone). Cuts the in-flight generation too.
+        """
+        self._abort.set()
+        self._interrupt.set()
 
     # ------------------------------------------------------------------
     # Transcript helpers.
@@ -594,8 +615,15 @@ class AgentEngine:
         low_budget_warned = False
         self._injections = []
         self._interrupt.clear()
+        self._abort.clear()
 
         while True:
+            # A cooperative cancel ends the turn here, before committing to
+            # another round (any tool that was mid-flight has finished).
+            if self._abort.is_set():
+                await self._emit({
+                    "type": "turn_done", "session_id": session_id, "aborted": True})
+                return
             # Drain any voice-of-god injections into context before this
             # round decides anything; clear the interrupt for the new round.
             if self._injections:

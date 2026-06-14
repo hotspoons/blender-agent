@@ -28,6 +28,20 @@ pip install -e ./agent
 # Yaml stubs for mypy/Pylance.
 pip install types-PyYAML
 
+# Playwright drives the web agent UI in the browser for the end-to-end
+# tests (tests/e2e_*). Install the package, the Chromium build, and its
+# system libraries. Skip the (slow) browser download if already present;
+# set BLENDER_SKIP_PLAYWRIGHT=1 to opt out entirely.
+if [ "${BLENDER_SKIP_PLAYWRIGHT:-0}" != "1" ]; then
+    pip install playwright
+    if ! ls "$HOME/.cache/ms-playwright/"chromium-* >/dev/null 2>&1; then
+        python -m playwright install --with-deps chromium
+    else
+        # Browser cached from a prior build; just (re)install the system deps.
+        python -m playwright install-deps chromium || true
+    fi
+fi
+
 # bpy type stubs for Pylance only (python.analysis.stubPath points at
 # .devcontainer/typings). Kept out of site-packages on purpose: as a
 # PEP 561 package the stubs would also be used by mypy, whose strict

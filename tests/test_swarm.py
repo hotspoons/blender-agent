@@ -144,7 +144,6 @@ class TestAutonomyLevel(unittest.TestCase):
         pub = rt.set_autonomy_level(sid, "swarm")
         self.assertEqual(pub["autonomy_level"], "swarm")
         self.assertEqual(pub["autonomy_workers"], "swarm")
-        self.assertTrue(pub["autonomy_mode"])
         self.assertEqual(pub["autonomy"], "auto")
 
         recs = rt.session_records(sid)
@@ -152,10 +151,14 @@ class TestAutonomyLevel(unittest.TestCase):
         self.assertTrue(notice, "a mode-change notice must be pushed into the session")
         self.assertIn("tool catalog", str(notice[-1]["content"]).lower())
 
-        # minimal maps to confirm-mutations
-        pub = rt.set_autonomy_level(sid, "minimal")
+        # "ask" maps to confirm-mutations; in-process workers
+        pub = rt.set_autonomy_level(sid, "ask")
         self.assertEqual(pub["autonomy"], "ask")
-        self.assertFalse(pub["autonomy_mode"])
+        self.assertEqual(pub["autonomy_workers"], "in_process")
+
+        # legacy "minimal" is accepted as an alias for "ask"
+        pub = rt.set_autonomy_level(sid, "minimal")
+        self.assertEqual(pub["autonomy_level"], "ask")
 
     def test_set_autonomy_tool_over_endpoint(self) -> None:
         for path in (os.path.join(_REPO_DIR, "mcp"), os.path.join(_REPO_DIR, "agent")):

@@ -174,7 +174,7 @@ class ContinueWorkingTool(Tool):
         )
 
 
-_AUTONOMY_LEVELS = ("minimal", "yolo", "orchestrator", "swarm")
+_AUTONOMY_LEVELS = ("ask", "yolo", "orchestrator", "swarm")
 
 
 class SetAutonomyTool(Tool):
@@ -182,7 +182,7 @@ class SetAutonomyTool(Tool):
     description = (
         "Adjust YOUR OWN autonomy level for the rest of this session, without the "
         "user touching the UI slider. Levels escalate capability: "
-        "'minimal' = act directly but pause for confirmation on each mutating tool "
+        "'ask' = act directly but pause for confirmation on each mutating tool "
         "call; 'yolo' = act directly, no confirmations; 'orchestrator' = pursue "
         "objectives by delegating to in-process worker agents; 'swarm' = fan "
         "objectives out to parallel workers, each in its own headless Blender. Dial "
@@ -198,13 +198,15 @@ class SetAutonomyTool(Tool):
             "type": "object",
             "properties": {
                 "level": {"type": "string", "enum": list(_AUTONOMY_LEVELS),
-                          "description": "minimal | yolo | orchestrator | swarm"},
+                          "description": "ask | yolo | orchestrator | swarm"},
             },
             "required": ["level"],
         }
 
     async def call(self, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
         level = str(args.get("level", "")).strip()
+        if level == "minimal":  # legacy alias
+            level = "ask"
         if level not in _AUTONOMY_LEVELS:
             raise ToolError("level must be one of: " + ", ".join(_AUTONOMY_LEVELS))
         self._set_level(ctx.session_id, level)

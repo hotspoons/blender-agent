@@ -191,6 +191,9 @@ class AgentRuntime:
         self._sessions: dict[str, _Session] = {}
         # Live worker engines by agent id, for voice-of-god injection.
         self._workers: dict[str, AgentEngine] = {}
+        # Swarm (subprocess) workers by agent id -> stop hook. No live engine
+        # here, so these support stop/cancel but not injection.
+        self._swarm_stoppers: dict[str, "Callable[[], None]"] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._system_prompt = self._load_system_prompt()
 
@@ -520,7 +523,9 @@ class AgentRuntime:
             exchange_dir = os.path.join(self.store.session_dir(session_id), "exchange")
             swarm_strategy: "Any" = RemoteWorkerStrategy(
                 endpoint=config.endpoint, model=model, exchange_dir=exchange_dir,
-                api_key=config.api_key, emit=self.emit)
+                api_key=config.api_key, emit=self.emit, session_id=session_id,
+                register_stop=self._register_swarm_worker,
+                unregister_stop=self._unregister_swarm_worker)
             runner: "Callable[[Any], Awaitable[Any]]" = swarm_strategy
             scheduler: "Any" = ParallelScheduler(max_concurrency=4)
             # No local Blender in swarm mode: ground the evaluator on the
@@ -588,24 +593,81 @@ class AgentRuntime:
         session.task = asyncio.create_task(_run())
         return session_id
 
+    def worker_media_library(self, agent_id: str) -> MediaLibrary:
+        """
+        The media library for an in-process worker, by its agent id. Mirrors
+        ``media_factory`` in ``run_autonomy_turn``: workers write under the
+        parent session's ``workers/<agent_id>`` jail. Lets the HTTP media route
+        serve a worker's tool-produced images (screenshots, renders).
+        """
+        safe = agent_id.replace(":", "_")
+        # Parent session id is the agent id minus its worker/gather suffix.
+        parent = agent_id.split(":w:")[0].split(":gather")[0]
+        return MediaLibrary(os.path.join(self.store.session_dir(parent), "workers", safe))
+
     def _register_worker(self, agent_id: str, engine: AgentEngine) -> None:
         self._workers[agent_id] = engine
 
     def _unregister_worker(self, agent_id: str) -> None:
         self._workers.pop(agent_id, None)
 
+    def _register_swarm_worker(
+            self, agent_id: str, stop: "Callable[[], None]") -> None:
+        """Track a swarm (subprocess) worker so it can be stopped by id.
+
+        Swarm workers run out of process and are driven over HTTP, so they
+        have no live engine to inject into — only a *stop* hook (kill the
+        subprocess + cancel the in-flight request)."""
+        self._swarm_stoppers[agent_id] = stop
+
+    def _unregister_swarm_worker(self, agent_id: str) -> None:
+        self._swarm_stoppers.pop(agent_id, None)
+
+    def worker_supports_injection(self, agent_id: str) -> bool:
+        """True only for in-process workers (a live engine to inject into)."""
+        return agent_id in self._workers
+
     def inject_into_worker(self, agent_id: str, content: str, now: bool = False) -> bool:
         """
         Voice of god: push *content* straight into a running worker's context,
         bypassing the orchestrator. *now* cuts its in-flight generation short
         (applied after any running tool finishes); otherwise it lands at the
-        worker's next round boundary. Returns False if no such worker is live.
+        worker's next round boundary. Returns False if no such worker is live
+        (e.g. a swarm worker, which runs out of process with no engine here).
         """
         engine = self._workers.get(agent_id)
         if engine is None:
             return False
         engine.inject(content, now=now)
         return True
+
+    def interrupt_worker(self, agent_id: str) -> bool:
+        """
+        Promote a worker's already-queued injection to land now: cut its
+        in-flight generation so the guidance applies at once. In-process
+        workers only. Returns False if no such live worker.
+        """
+        engine = self._workers.get(agent_id)
+        if engine is None:
+            return False
+        engine.interrupt()
+        return True
+
+    def stop_worker(self, agent_id: str) -> bool:
+        """
+        Cancel a runaway worker. In-process: cooperatively abort its turn (a
+        running tool still finishes). Swarm: kill its subprocess + cancel the
+        in-flight request. Returns False if no such live worker.
+        """
+        engine = self._workers.get(agent_id)
+        if engine is not None:
+            engine.abort()
+            return True
+        stop = self._swarm_stoppers.get(agent_id)
+        if stop is not None:
+            stop()
+            return True
+        return False
 
     def confirm_tool(self, session_id: str, call_id: str, approve: bool) -> bool:
         session = self._sessions.get(session_id)
@@ -658,8 +720,6 @@ class AgentRuntime:
             config.budget_review = bool(updates["budget_review"])
         if "context_tokens" in updates:
             config.context_tokens = max(2_048, int(updates["context_tokens"]))
-        if "autonomy_mode" in updates:
-            config.autonomy_mode = bool(updates["autonomy_mode"])
         if "autonomy_policy" in updates:
             config.autonomy_policy = str(updates["autonomy_policy"])
         if "max_autonomy_rounds" in updates:
@@ -674,8 +734,8 @@ class AgentRuntime:
         return config.as_public()
 
     _AUTONOMY_NOTICE = {
-        "minimal": "Your autonomy was set to MINIMAL: you act directly, but every "
-                   "mutating tool call pauses for the user's confirmation.",
+        "ask": "Your autonomy was set to ASK: you act directly, but every "
+               "mutating tool call pauses for the user's confirmation.",
         "yolo": "Your autonomy was set to YOLO: you act directly and run tool calls "
                 "without confirmation. Move fast; verify your own work.",
         "orchestrator": "Your autonomy was set to ORCHESTRATOR: pursue the user's "
@@ -700,12 +760,13 @@ class AgentRuntime:
         with a notice that autonomy changed — so the agent re-grounds on its new
         mode on the next turn. Maps the level onto the concrete config knobs.
         """
+        if level == "minimal":  # legacy alias
+            level = "ask"
         if level not in self._AUTONOMY_NOTICE:
             level = "yolo"
         config = self.store.config
         config.autonomy_level = level
-        config.autonomy = "ask" if level == "minimal" else "auto"
-        config.autonomy_mode = level in ("orchestrator", "swarm")
+        config.autonomy = "ask" if level == "ask" else "auto"
         config.autonomy_workers = "swarm" if level == "swarm" else "in_process"
         self.store.save_config()
         if session_id:

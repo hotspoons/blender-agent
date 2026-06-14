@@ -24,6 +24,7 @@ export class BaSettingsModal extends LitElement {
     _policy: { state: true },
     _maxAutoRounds: { state: true },
     _shareContext: { state: true },
+    _workers: { state: true },
   };
 
   constructor() {
@@ -39,6 +40,7 @@ export class BaSettingsModal extends LitElement {
     this._policy = config.autonomy_policy || "auto_until_done";
     this._maxAutoRounds = config.max_autonomy_rounds || 6;
     this._shareContext = !!config.autonomy_share_context;
+    this._workers = config.autonomy_workers || "in_process";
     this._fetchTimer = null;
   }
 
@@ -149,6 +151,7 @@ export class BaSettingsModal extends LitElement {
       autonomy_policy: this._policy,
       max_autonomy_rounds: Math.max(1, parseInt(this._maxAutoRounds, 10) || 6),
       autonomy_share_context: this._shareContext,
+      autonomy_workers: this._workers,
     };
     if (this._apiKey) updates.api_key = this._apiKey;
     store.setConfig(updates);
@@ -215,7 +218,8 @@ export class BaSettingsModal extends LitElement {
           <ba-switch .on=${this._autonomy === "auto"}
             @input=${(e) => { this._autonomy = e.detail.value ? "auto" : "ask"; }}></ba-switch>
           <span>Full autonomy
-            <div class="sub">Off: destructive tool calls pause for an Allow/Deny confirmation.</div>
+            <div class="sub">Off: destructive tool calls pause for an Allow/Deny confirmation.
+              Same switch as the composer's <strong>Ask</strong> ↔ <strong>YOLO</strong> levels.</div>
           </span>
         </div>
 
@@ -227,6 +231,19 @@ export class BaSettingsModal extends LitElement {
           long sessions fast - in-browser models especially slow down as the context grows.</div>
 
         <div class="section">${icon("rectangle-group")} Autonomy (orchestrator / swarm)</div>
+        <label>Worker execution</label>
+        <ba-segmented
+          .options=${[
+            { value: "in_process", label: "In-process" },
+            { value: "swarm", label: "Swarm (subprocess)" },
+          ]}
+          .value=${this._workers}
+          @input=${(e) => { this._workers = e.detail.value; }}></ba-segmented>
+        <div class="hint">In-process: workers are child sessions in this process (the composer's
+          <strong>Orchestrator</strong> level). Swarm: each worker is a subprocess with its own headless
+          Blender, merged at the end (the composer's <strong>Swarm</strong> level). Picking a composer
+          level sets this for you; change it here to mix (e.g. swarm workers without switching the slider).</div>
+
         <label>Policy</label>
         <ba-segmented
           .options=${[

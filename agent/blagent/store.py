@@ -147,8 +147,9 @@ class AgentConfig:
     context_tokens: int = 16_384
     # Autonomy mode (blagent.autonomy): the orchestrator pursues user
     # OBJECTIVES across rounds, spawning worker sub-agents and a blind
-    # evaluator, instead of running one task per message.
-    autonomy_mode: bool = False
+    # evaluator, instead of running one task per message. Engaged when the
+    # autonomy_level is "orchestrator" or "swarm" (see below).
+    #
     # "auto_until_done" runs round after round until objectives are met or
     # max_autonomy_rounds is hit; "pause_when_blocked" also hands control
     # back when the evaluator reports no path forward.
@@ -163,7 +164,7 @@ class AgentConfig:
     # headless Blender (RemoteWorkerStrategy). Default keeps everything local.
     autonomy_workers: str = "in_process"
     # The composer's autonomy slider position, escalating capability:
-    #   "minimal"      -> chat, confirm mutative tool calls (autonomy="ask")
+    #   "ask"          -> chat, confirm mutative tool calls (autonomy="ask")
     #   "yolo"         -> chat, no confirms (autonomy="auto")
     #   "orchestrator" -> objectives loop, in-process workers
     #   "swarm"        -> objectives loop, subprocess workers (own Blender each)
@@ -207,7 +208,6 @@ class AgentConfig:
             "max_rounds": self.max_rounds,
             "budget_review": self.budget_review,
             "context_tokens": self.context_tokens,
-            "autonomy_mode": self.autonomy_mode,
             "autonomy_policy": self.autonomy_policy,
             "max_autonomy_rounds": self.max_autonomy_rounds,
             "autonomy_share_context": self.autonomy_share_context,
