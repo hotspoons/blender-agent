@@ -382,6 +382,15 @@ export class BaChatStage extends LitElement {
     .agent .inject button.now { color: var(--brand); border-color: var(--brand); }
     .gather-done { font-size: 13px; color: var(--text-muted); padding: 4px 2px; }
     .gather-done code { color: var(--accent-2); }
+    .round-div { display: flex; align-items: center; gap: 10px; margin: 4px 2px 2px;
+      font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+      color: var(--text-muted); }
+    .round-div::before, .round-div::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+    .agent-events { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 12px 0; }
+    .ev-chip { font-size: 11px; font-family: var(--font-mono); padding: 1px 6px;
+      border-radius: var(--radius-sm); background: var(--surface-muted); color: var(--text-muted);
+      border: 1px solid var(--border); }
+    .ev-chip.error, .ev-chip.rejected { color: var(--danger); border-color: var(--danger); }
     .empty {
       margin: auto;
       text-align: center;
@@ -608,6 +617,10 @@ export class BaChatStage extends LitElement {
           <span class="task">${agent.task || agent.id}</span>
           <span class="state ${agent.ok === false ? "fail" : agent.state === "done" ? "ok" : ""}">${badge}</span>
         </div>
+        ${open && agent.events?.length ? html`
+          <div class="agent-events">
+            ${agent.events.map((ev) => html`<span class="ev-chip ${ev.state}">${ev.name}</span>`)}
+          </div>` : nothing}
         ${open && agent.proof ? html`<div class="proof">${agent.proof}</div>` : nothing}
         ${agent.state === "running" ? html`
           <div class="inject">
@@ -640,7 +653,20 @@ export class BaChatStage extends LitElement {
               ${o.evidence ? html`<span class="ev" title=${o.evidence}>${o.evidence}</span>` : nothing}
             </div>`)}
         </div>
-        ${(a.agentOrder || []).map((id) => this._renderAgentCard(a.agents[id]))}
+        ${(() => {
+          const rows = [];
+          let lastRound;
+          for (const id of (a.agentOrder || [])) {
+            const ag = a.agents[id];
+            if (!ag) continue;
+            if (ag.round !== lastRound) {
+              lastRound = ag.round;
+              rows.push(html`<div class="round-div">${ag.round == null ? "Gather" : `Round ${ag.round + 1}`}</div>`);
+            }
+            rows.push(this._renderAgentCard(ag));
+          }
+          return rows;
+        })()}
         ${a.gathered?.master ? html`
           <div class="gather-done">⬇ merged ${a.gathered.components?.length || 0} components →
             <code>${a.gathered.master.split("/").pop()}</code></div>` : nothing}

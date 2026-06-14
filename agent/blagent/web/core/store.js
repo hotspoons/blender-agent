@@ -39,6 +39,7 @@ class Store extends EventTarget {
         gathered: null,         // {master, components} when swarm gather completes
         done: null,             // {allMet, rounds} | {paused:true,...}
         draft: null,            // {goal, objectives:[{text,acceptance}]} guided intake
+        currentRound: 0,        // round index agents are spawned under
       },
     };
     this._ws = null;
@@ -178,6 +179,19 @@ class Store extends EventTarget {
         }
         break;
       case "tool_status": {
+        if (msg.parent_session_id) {
+          // A worker sub-agent's tool call → its bounded card's drill-down
+          // (terminal states only, so each call logs once).
+          if (msg.state === "ok" || msg.state === "error" || msg.state === "rejected") {
+            const a = { ...this.state.autonomy, agents: { ...this.state.autonomy.agents } };
+            const ag = a.agents[msg.session_id];
+            if (ag) {
+              a.agents[msg.session_id] = { ...ag, events: [...ag.events, { name: msg.name, state: msg.state }] };
+              this._set({ autonomy: a });
+            }
+          }
+          break;
+        }
         if (!forThisSession) break;
         const calls = { ...this.state.toolCalls };
         const existing = calls[msg.call_id] || {};
@@ -228,7 +242,13 @@ class Store extends EventTarget {
         this._set({ autonomy: a });
         break;
       }
-      case "autonomy_round_start":
+      case "autonomy_round_start": {
+        const a = { ...this.state.autonomy,
+          objectives: msg.objectives || this.state.autonomy.objectives,
+          currentRound: msg.round ?? this.state.autonomy.currentRound };
+        this._set({ autonomy: a });
+        break;
+      }
       case "objectives_update": {
         const a = { ...this.state.autonomy, objectives: msg.objectives || this.state.autonomy.objectives };
         this._set({ autonomy: a });
@@ -244,7 +264,8 @@ class Store extends EventTarget {
         const a = { ...this.state.autonomy, agents: { ...this.state.autonomy.agents } };
         const id = msg.agent_id;
         a.agents[id] = { id, role: msg.role || "worker", task: msg.task || "",
-          objectiveId: msg.objective_id || "", state: "running", proof: "", ok: null, events: [] };
+          objectiveId: msg.objective_id || "", state: "running", proof: "", ok: null, events: [],
+          round: (msg.role === "gather") ? null : a.currentRound };
         if (!a.agentOrder.includes(id)) a.agentOrder = [...a.agentOrder, id];
         this._set({ autonomy: a });
         break;
