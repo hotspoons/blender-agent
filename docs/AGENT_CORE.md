@@ -85,6 +85,22 @@ calls `backend.state_probe`. The compute-surface lifecycle is `open`/`close`.
 
 Both satisfy the identical `ToolBackend` protocol, so core is transport-blind.
 
+**Wiring note (implemented).** `AgentRuntime` now holds a `ToolBackend` and
+reaches domain ground truth through `backend.state_probe(...)` (the autonomy
+evaluator + independent auditor no longer call `registry.get("get_objects_summary")`).
+Two construction paths:
+
+- **In-process (Blender today):** `AgentRuntime(store, [tools])` wraps the list
+  in a `PythonToolBackend` (probe hook wired) but builds the registry from the
+  **raw tools**, so the engine keeps executing them with its full `ToolContext`
+  — the `confirm`/`elicit` callbacks are local-only and cannot be conveyed by
+  the transport-neutral `call_tool(name, args, *, session_id, media)`. Routing
+  in-process calls through `BackendTool` would silently drop the confirm gate
+  and elicitation; **do not** "simplify" it that way.
+- **Generic/HTTP:** `await AgentRuntime.create(store, backend)` discovers tools
+  via `list_tools()` and adapts them with `BackendTool` (calls route over the
+  transport). Confirm/elicit don't apply across a wire, so nothing is lost.
+
 ---
 
 ## 2. HTTP contract (OpenAPI 3.1)

@@ -128,6 +128,14 @@ class PythonToolBackend(_DefaultBackendMixin):
         self._surface_open = surface_open
         self._surface_close = surface_close
 
+    @property
+    def tools(self) -> list[Tool]:
+        """The wrapped core tools. The in-process runtime executes these
+        directly (preserving the full ``ToolContext`` — confirm/elicit
+        callbacks the transport-neutral ``call_tool`` cannot convey); the
+        backend's role for the Python transport is probe + surface."""
+        return list(self._tools.values())
+
     async def list_tools(self) -> list[ToolSpec]:
         return [
             ToolSpec(

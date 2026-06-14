@@ -167,5 +167,78 @@ def _media() -> Any:
     return MediaLibrary(tempfile.mkdtemp(prefix="media_"))
 
 
+@unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
+class TestRuntimeBackendWiring(unittest.TestCase):
+    """The runtime holds a ToolBackend and reaches ground truth through it."""
+
+    def _runtime(self, tools: Any) -> Any:
+        from blagent.runtime import AgentRuntime
+        from blagent.store import AgentStore
+        store = AgentStore(data_dir=tempfile.mkdtemp(prefix="agentdata_"))
+        return AgentRuntime(store, tools)
+
+    def _probe_tool(self) -> Any:
+        from blagent.tools import Tool, ToolResult
+
+        class Probe(Tool):
+            name = "get_objects_summary"
+            description = "scene probe"
+            read_only = True
+
+            def input_schema(self) -> dict:
+                return {"type": "object", "properties": {}}
+
+            async def call(self, ctx: Any, args: dict) -> Any:
+                return ToolResult(summary="ok", data="scene: 3 cubes")
+
+        return Probe()
+
+    def test_list_is_wrapped_in_python_backend_with_probe(self) -> None:
+        b = _imp()
+        rt = self._runtime([self._probe_tool()])
+        self.assertIsInstance(rt.backend, b.PythonToolBackend)
+        # Backend advertises the probe hook the runtime wired in.
+        self.assertIn("probe", rt.backend.capabilities())
+        # Registry carries the domain tool AND the core harness tools.
+        names = {t.name for t in rt.registry}
+        self.assertIn("get_objects_summary", names)
+        self.assertTrue({"skills", "media", "ask_user"} <= names)
+
+    def test_probe_routes_through_backend(self) -> None:
+        rt = self._runtime([self._probe_tool()])
+        sid = rt.new_session()
+        text = _run(rt._make_probe(sid)())
+        self.assertEqual(text, "scene: 3 cubes")
+
+    def test_probe_handles_missing_tool(self) -> None:
+        rt = self._runtime([])           # no get_objects_summary
+        sid = rt.new_session()
+        text = _run(rt._make_probe(sid)())
+        self.assertIn("unavailable", text)
+
+    def test_create_builds_registry_from_generic_backend(self) -> None:
+        b = _imp()
+        from blagent.runtime import AgentRuntime
+        from blagent.store import AgentStore
+
+        class _Inline(b._DefaultBackendMixin):
+            async def list_tools(self):
+                return [b.ToolSpec(name="render", description="r",
+                                   input_schema={"type": "object", "properties": {}})]
+
+            async def call_tool(self, name, args, *, session_id, media=None):
+                return b.ToolCallResult(summary="rendered")
+
+        store = AgentStore(data_dir=tempfile.mkdtemp(prefix="agentdata_"))
+        rt = _run(AgentRuntime.create(store, _Inline()))
+        names = {t.name for t in rt.registry}
+        self.assertIn("render", names)                 # via BackendTool adapter
+        self.assertTrue({"skills", "ask_user"} <= names)  # core tools too
+
+    def test_bad_backend_type_raises(self) -> None:
+        with self.assertRaises(TypeError):
+            self._runtime("not a backend")  # type: ignore[arg-type]
+
+
 if __name__ == "__main__":
     unittest.main()

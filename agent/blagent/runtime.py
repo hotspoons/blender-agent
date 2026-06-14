@@ -23,6 +23,7 @@ import os
 from typing import Any, Awaitable, Callable
 
 from .agent_tools import AskUserTool, ContinueWorkingTool, MediaTool, SetAutonomyTool, SkillsTool
+from .backend import PythonToolBackend, ToolBackend
 from .engine import AgentEngine
 from .llm import LlmClient, LlmError, LocalLlmBridgeClient, OpenAiHttpClient
 from .media import MediaLibrary
@@ -180,23 +181,31 @@ class AgentRuntime:
     this object.
     """
 
-    def __init__(self, store: AgentStore, blender_tools: list[Tool]) -> None:
+    def __init__(self, store: AgentStore, backend: "ToolBackend | list[Tool]") -> None:
         self.store = store
         self.local_llm = LocalLlmBridge()
         # Instance label (e.g. the .blend file name) + bound UI port,
         # surfaced as the browser tab title to tell instances apart.
         self.instance_title = ""
         self.instance_port = 0
-        tools: list[Tool] = list(blender_tools)
-        tools.append(SkillsTool(store))
-        tools.append(MediaTool())
-        tools.append(ContinueWorkingTool())
-        # Lets the agent ask the user a question (multiple choice + freeform).
-        tools.append(AskUserTool())
-        # Lets the agent adjust its own autonomy level (also over the OpenAI
-        # endpoint), instead of only via the UI slider.
-        tools.append(SetAutonomyTool(self.set_autonomy_level))
-        self.registry = ToolRegistry(tools)
+        # The portable domain boundary. The Blender build passes a list of
+        # tools (or a PythonToolBackend); we wrap a bare list so the runtime
+        # always holds a ToolBackend and reaches the domain's ground-truth
+        # probe + compute surface through it — never via a Blender-named tool.
+        # In-process tool *execution* still uses the raw tools on the registry
+        # below, to preserve the engine's full ToolContext (confirm/elicit).
+        # A generic/HTTP backend is wired via AgentRuntime.create() (async).
+        if isinstance(backend, PythonToolBackend):
+            self.backend: ToolBackend = backend
+            domain_tools: list[Tool] = backend.tools
+        elif isinstance(backend, list):
+            domain_tools = list(backend)
+            self.backend = PythonToolBackend(domain_tools, probe=self._probe_state)
+        else:
+            raise TypeError(
+                "AgentRuntime(store, ...) takes a list[Tool] or PythonToolBackend; "
+                "for a generic/HTTP ToolBackend use `await AgentRuntime.create(...)`")
+        self.registry = ToolRegistry(list(domain_tools) + self._core_tools())
         self._sessions: dict[str, _Session] = {}
         # Live worker engines by agent id, for voice-of-god injection.
         self._workers: dict[str, AgentEngine] = {}
@@ -207,6 +216,47 @@ class AgentRuntime:
         self._autonomy_objs: dict[str, list[Any]] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._system_prompt = self._load_system_prompt()
+
+    def _core_tools(self) -> list[Tool]:
+        """The domain-agnostic harness tools added to every registry,
+        regardless of backend/transport."""
+        return [
+            SkillsTool(self.store),
+            MediaTool(),
+            ContinueWorkingTool(),
+            # Lets the agent ask the user a question (multiple choice + freeform).
+            AskUserTool(),
+            # Lets the agent adjust its own autonomy level (also over the OpenAI
+            # endpoint), instead of only via the UI slider.
+            SetAutonomyTool(self.set_autonomy_level),
+        ]
+
+    @classmethod
+    async def create(cls, store: AgentStore, backend: ToolBackend) -> "AgentRuntime":
+        """
+        Async constructor for a generic ``ToolBackend`` (e.g. an HTTP backend):
+        the tool list is discovered via ``backend.list_tools()`` and adapted
+        with ``BackendTool``, so tool calls route over the transport. (For an
+        HTTP backend the engine's confirm/elicit callbacks are local-only and
+        do not cross the wire — there is nothing to lose by routing through
+        ``call_tool``.) The in-process Blender path uses the sync constructor.
+        """
+        from .backend import registry_from_backend
+
+        self = cls.__new__(cls)
+        self.store = store
+        self.local_llm = LocalLlmBridge()
+        self.instance_title = ""
+        self.instance_port = 0
+        self.backend = backend
+        self.registry = await registry_from_backend(backend, extra=self._core_tools())
+        self._sessions = {}
+        self._workers = {}
+        self._swarm_stoppers = {}
+        self._autonomy_objs = {}
+        self._subscribers = set()
+        self._system_prompt = self._load_system_prompt()
+        return self
 
     def _load_system_prompt(self) -> str:
         # No skills index here: the prompt compels a `welcome` call, whose
@@ -404,22 +454,30 @@ class AgentRuntime:
     # Autonomy mode (blagent.autonomy).
 
     def _make_probe(self, session_id: str) -> "Callable[[], Awaitable[str]]":
-        """A read-only scene snapshot for the goal evaluator (ground truth)."""
+        """A read-only state snapshot for the goal evaluator (ground truth),
+        obtained through the domain backend rather than a named tool."""
 
         async def probe() -> str:
-            tool = self.registry.get("get_objects_summary")
-            if tool is None:
-                return "(get_objects_summary unavailable)"
-            media = self._get_or_load_session(session_id).media
-            try:
-                result = await tool.call(ToolContext(media=media, session_id=session_id), {})
-            except Exception as ex:  # pylint: disable=broad-except
-                return "(scene probe failed: {:s})".format(ex)
-            data = result.data if result.data is not None else result.summary
-            text = data if isinstance(data, str) else json.dumps(data, default=str)
-            return text[:6000]
+            text = await self.backend.state_probe(session_id=session_id)
+            return text or "(no state probe available)"
 
         return probe
+
+    async def _probe_state(self, session_id: str) -> str:
+        """The Blender ground-truth probe wired into the PythonToolBackend:
+        a read-only scene snapshot via ``get_objects_summary``. (Lives here
+        until the Blender backend factory owns it after the package split.)"""
+        tool = self.registry.get("get_objects_summary")
+        if tool is None:
+            return "(get_objects_summary unavailable)"
+        media = self._get_or_load_session(session_id).media
+        try:
+            result = await tool.call(ToolContext(media=media, session_id=session_id), {})
+        except Exception as ex:  # pylint: disable=broad-except
+            return "(scene probe failed: {:s})".format(ex)
+        data = result.data if result.data is not None else result.summary
+        text = data if isinstance(data, str) else json.dumps(data, default=str)
+        return text[:6000]
 
     async def _read_blend_objects(self, path: str) -> list[str]:
         """Open a .blend headless and return its object names (best-effort)."""
