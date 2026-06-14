@@ -11,6 +11,7 @@ Control-plane protocol (JSON over ``/ws``):
 
 Client -> server:
     ``{"type": "chat", "session_id": "", "content": "..."}``
+    ``{"type": "objectives", "session_id": "", "objectives": [{"text", "acceptance"}], "max_rounds"?}``
     ``{"type": "new_session"}``
     ``{"type": "load_session", "id": ...}``
     ``{"type": "delete_session", "id": ...}``
@@ -196,6 +197,24 @@ async def _handle_control(runtime: AgentRuntime, ws: WebSocket, data: dict[str, 
                 media_ids=attachments or None,
             )
             await ws.send_json({"type": "chat_accepted", "session_id": session_id})
+        elif msg_type == "objectives":
+            # Autonomy mode: pursue a set of objectives across rounds.
+            raw = data.get("objectives", [])
+            objectives = [
+                {"id": str(o.get("id", "")), "text": str(o.get("text", "")),
+                 "acceptance": str(o.get("acceptance", ""))}
+                for o in raw if isinstance(o, dict) and str(o.get("text", "")).strip()
+            ]
+            if not objectives:
+                await ws.send_json({"type": "error", "message": "no objectives provided"})
+            else:
+                mr = data.get("max_rounds")
+                session_id = await runtime.run_autonomy_turn(
+                    str(data.get("session_id", "")),
+                    objectives,
+                    max_rounds=int(mr) if isinstance(mr, int) else None,
+                )
+                await ws.send_json({"type": "autonomy_accepted", "session_id": session_id})
         elif msg_type == "new_session":
             session_id = runtime.new_session()
             await ws.send_json({"type": "session_loaded", "session_id": session_id, "records": [], "media": []})
