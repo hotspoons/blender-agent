@@ -228,6 +228,28 @@ blender-agent --port 10102
 See [agent/readme.md](agent/readme.md) for the full flag/env reference,
 standalone-launch internals, and the recursion guard.
 
+## Autonomy mode
+
+A composer **autonomy slider** escalates how the agent works:
+
+- **Minimal** — acts directly; every mutating tool call pauses for confirmation.
+- **YOLO** — acts directly, no confirmations.
+- **Orchestrator** — you set **objectives** (not one-off tasks); the agent plans
+  tasks, delegates to **in-process worker sub-agents**, and a context-blind
+  evaluator checks the result against each objective's acceptance criteria,
+  re-rounding until met (or `pause_when_blocked`).
+- **Swarm** — objectives fan out to **parallel worker agents, each a real
+  subprocess with its own headless Blender**, driven agent-to-agent over their
+  OpenAI `/v1/chat/completions` endpoint; each exports a component `.blend` to a
+  shared exchange dir, and a final **gather** agent merges them into one master
+  scene. Opt-in (`autonomy_workers="swarm"`); the default keeps workers local.
+
+The agent can also adjust its own level via the `set_autonomy` tool (e.g. over
+the chat API), and you can inject a message straight into a running worker
+("voice of god"), now or at its next round. Knobs (policy, max rounds, share
+orchestrator context with workers) live in settings. Swarm worker subprocesses
+run in their own process group and are reaped with their Blender on teardown.
+
 ## Deployment (Docker + Helm)
 
 The image bundles Blender itself (official binary on amd64, built from source
