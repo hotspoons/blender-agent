@@ -93,7 +93,10 @@ class WorkerResult:
     objective_id: str
     proof: str
     ok: bool = True
-    transcript_ref: str = ""   # child session / agent id for UI drill-down
+    transcript_ref: str = ""   # child session / agent id (or worker URL) for drill-down
+    # Files the worker produced for downstream steps (e.g. a component .blend
+    # in the shared exchange dir, for the gather agent to merge).
+    artifacts: list[str] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass

@@ -73,6 +73,78 @@ class TestPortAllocator(unittest.TestCase):
         self.assertEqual(w.base_url, "http://localhost:12345/v1")
 
 
+@unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
+class TestRemoteWorkerStrategy(unittest.TestCase):
+
+    def _strategy(self, exchange: str) -> Any:
+        swarm = _import_swarm()
+        return swarm.RemoteWorkerStrategy(
+            endpoint="http://x/v1", model="m", exchange_dir=exchange)
+
+    def test_build_prompt_demands_blend_export_and_proof(self) -> None:
+        import types
+        exch = tempfile.mkdtemp(prefix="exch_")
+        strat = self._strategy(exch)
+        task = types.SimpleNamespace(id="char_a", objective_id="o1",
+                                     instruction="model a knight", context="")
+        prompt = strat._build_prompt(task, "component_char_a")
+        self.assertIn("model a knight", prompt)
+        self.assertIn("component_char_a.blend", prompt)
+        self.assertIn("PROOF OF WORK", prompt)
+        # context is prepended only when present
+        task.context = "objectives: knight + dragon"
+        self.assertIn("Orchestrator context", strat._build_prompt(task, "component_char_a"))
+
+    def test_collect_blend_copies_newest_to_exchange(self) -> None:
+        exch = tempfile.mkdtemp(prefix="exch_")
+        strat = self._strategy(exch)
+        wdir = tempfile.mkdtemp(prefix="wdir_")
+        nested = os.path.join(wdir, "sessions", "s1", "media")
+        os.makedirs(nested, exist_ok=True)
+        blend = os.path.join(nested, "scene.blend")
+        with open(blend, "wb") as fh:
+            fh.write(b"BLENDER-fake")
+        dest = strat._collect_blend(wdir, "component_x")
+        self.assertIsNotNone(dest)
+        self.assertEqual(os.path.basename(dest), "component_x.blend")
+        self.assertTrue(os.path.isfile(dest))
+        with open(dest, "rb") as fh:
+            self.assertEqual(fh.read(), b"BLENDER-fake")
+        # no .blend -> None
+        self.assertIsNone(strat._collect_blend(tempfile.mkdtemp(prefix="empty_"), "c2"))
+
+
+@unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
+class TestAutonomyLevel(unittest.TestCase):
+
+    def test_set_level_maps_config_and_pushes_notice(self) -> None:
+        for path in (os.path.join(_REPO_DIR, "mcp"), os.path.join(_REPO_DIR, "agent")):
+            if path not in sys.path:
+                sys.path.insert(0, path)
+        from blagent.runtime import AgentRuntime
+        from blagent.store import AgentStore
+
+        store = AgentStore(tempfile.mkdtemp(prefix="agentdata_"))
+        rt = AgentRuntime(store, [])
+        sid = rt.new_session()
+
+        pub = rt.set_autonomy_level(sid, "swarm")
+        self.assertEqual(pub["autonomy_level"], "swarm")
+        self.assertEqual(pub["autonomy_workers"], "swarm")
+        self.assertTrue(pub["autonomy_mode"])
+        self.assertEqual(pub["autonomy"], "auto")
+
+        recs = rt.session_records(sid)
+        notice = [r for r in recs if r.get("autonomy_notice") == "swarm"]
+        self.assertTrue(notice, "a mode-change notice must be pushed into the session")
+        self.assertIn("tool catalog", str(notice[-1]["content"]).lower())
+
+        # minimal maps to confirm-mutations
+        pub = rt.set_autonomy_level(sid, "minimal")
+        self.assertEqual(pub["autonomy"], "ask")
+        self.assertFalse(pub["autonomy_mode"])
+
+
 @unittest.skipUnless(
     os.environ.get("SWARM_E2E") == "1" and shutil.which("blender") and _HAS_AGENT_DEPS,
     "real worker spawn (set SWARM_E2E=1, needs Blender + a reachable remote LLM)")

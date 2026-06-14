@@ -450,24 +450,38 @@ class AgentRuntime:
             safe = agent_id.replace(":", "_")
             return MediaLibrary(os.path.join(self.store.session_dir(session_id), "workers", safe))
 
-        runner = ChildSessionRunner(
-            registry=self.registry,
-            make_llm=self._make_llm,
-            model=model,
-            emit=self.emit,
-            system_prompt=self._system_prompt,
-            media_factory=media_factory,
-            parent_session_id=session_id,
-            autonomy="auto",
-            max_rounds=config.max_rounds,
-            context_tokens=config.context_tokens,
-            budget_review=config.budget_review,
-            register=self._register_worker,
-            unregister=self._unregister_worker,
-        )
+        # Worker strategy + scheduler by mode. Default in-process (local child
+        # sessions, sequential); swarm = real subprocess workers (own Blender
+        # each), fanned out in parallel, exchanging .blend via a shared dir.
+        if config.autonomy_workers == "swarm" and config.endpoint:
+            from .autonomy import ParallelScheduler
+            from .swarm import RemoteWorkerStrategy
+
+            exchange_dir = os.path.join(self.store.session_dir(session_id), "exchange")
+            runner: "Callable[[Any], Awaitable[Any]]" = RemoteWorkerStrategy(
+                endpoint=config.endpoint, model=model, exchange_dir=exchange_dir,
+                api_key=config.api_key, emit=self.emit)
+            scheduler: "Any" = ParallelScheduler(max_concurrency=4)
+        else:
+            runner = ChildSessionRunner(
+                registry=self.registry,
+                make_llm=self._make_llm,
+                model=model,
+                emit=self.emit,
+                system_prompt=self._system_prompt,
+                media_factory=media_factory,
+                parent_session_id=session_id,
+                autonomy="auto",
+                max_rounds=config.max_rounds,
+                context_tokens=config.context_tokens,
+                budget_review=config.budget_review,
+                register=self._register_worker,
+                unregister=self._unregister_worker,
+            )
+            scheduler = SequentialScheduler()
         orchestrator = AutonomyOrchestrator(
             planner=LlmPlanner(llm, model),
-            scheduler=SequentialScheduler(),
+            scheduler=scheduler,
             evaluator=StateAwareEvaluator(llm, model, probe=self._make_probe(session_id)),
             policy=policy,
             worker_runner=runner,
@@ -567,5 +581,62 @@ class AgentRuntime:
             config.budget_review = bool(updates["budget_review"])
         if "context_tokens" in updates:
             config.context_tokens = max(2_048, int(updates["context_tokens"]))
+        if "autonomy_mode" in updates:
+            config.autonomy_mode = bool(updates["autonomy_mode"])
+        if "autonomy_policy" in updates:
+            config.autonomy_policy = str(updates["autonomy_policy"])
+        if "max_autonomy_rounds" in updates:
+            config.max_autonomy_rounds = max(1, int(updates["max_autonomy_rounds"]))
+        if "autonomy_share_context" in updates:
+            config.autonomy_share_context = bool(updates["autonomy_share_context"])
+        if "autonomy_workers" in updates:
+            config.autonomy_workers = str(updates["autonomy_workers"])
+        if "autonomy_level" in updates:
+            config.autonomy_level = str(updates["autonomy_level"])
         self.store.save_config()
+        return config.as_public()
+
+    _AUTONOMY_NOTICE = {
+        "minimal": "Your autonomy was set to MINIMAL: you act directly, but every "
+                   "mutating tool call pauses for the user's confirmation.",
+        "yolo": "Your autonomy was set to YOLO: you act directly and run tool calls "
+                "without confirmation. Move fast; verify your own work.",
+        "orchestrator": "Your autonomy was set to ORCHESTRATOR: pursue the user's "
+                        "OBJECTIVES by planning tasks and delegating to in-process "
+                        "worker sub-agents, then verify their proof against the scene.",
+        "swarm": "Your autonomy was set to SWARM: objectives are fanned out to "
+                 "parallel worker agents, each in its own headless Blender; their "
+                 "component .blend files are merged by a final gather agent.",
+    }
+
+    def _tool_catalog_summary(self) -> str:
+        lines = []
+        for tool in self.registry:
+            desc = (tool.description or "").strip().splitlines()
+            first = desc[0][:100] if desc else ""
+            lines.append("- {:s}: {:s}".format(tool.name, first))
+        return "\n".join(lines)
+
+    def set_autonomy_level(self, session_id: str, level: str) -> dict[str, object]:
+        """
+        Set the autonomy slider and, in the session, re-issue the tool catalog
+        with a notice that autonomy changed — so the agent re-grounds on its new
+        mode on the next turn. Maps the level onto the concrete config knobs.
+        """
+        if level not in self._AUTONOMY_NOTICE:
+            level = "yolo"
+        config = self.store.config
+        config.autonomy_level = level
+        config.autonomy = "ask" if level == "minimal" else "auto"
+        config.autonomy_mode = level in ("orchestrator", "swarm")
+        config.autonomy_workers = "swarm" if level == "swarm" else "in_process"
+        self.store.save_config()
+        if session_id:
+            session = self._get_or_load_session(session_id)
+            notice = "[Autonomy changed] {:s}\n\nYour current tool catalog:\n{:s}".format(
+                self._AUTONOMY_NOTICE[level], self._tool_catalog_summary())
+            session.engine.push_record({
+                "role": "user", "content": notice,
+                "synthetic": True, "autonomy_notice": level,
+            })
         return config.as_public()

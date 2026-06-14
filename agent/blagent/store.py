@@ -158,6 +158,16 @@ class AgentConfig:
     # (informed worker); when False (default), workers run blind on just
     # their task — so the two can be compared on the same problem.
     autonomy_share_context: bool = False
+    # Where worker sub-agents run. "in_process" (default) = ChildSessionRunner
+    # in this process; "swarm" = each worker a real subprocess with its own
+    # headless Blender (RemoteWorkerStrategy). Default keeps everything local.
+    autonomy_workers: str = "in_process"
+    # The composer's autonomy slider position, escalating capability:
+    #   "minimal"      -> chat, confirm mutative tool calls (autonomy="ask")
+    #   "yolo"         -> chat, no confirms (autonomy="auto")
+    #   "orchestrator" -> objectives loop, in-process workers
+    #   "swarm"        -> objectives loop, subprocess workers (own Blender each)
+    autonomy_level: str = "yolo"
 
     @classmethod
     def load(cls, path: str) -> "AgentConfig":
@@ -201,6 +211,8 @@ class AgentConfig:
             "autonomy_policy": self.autonomy_policy,
             "max_autonomy_rounds": self.max_autonomy_rounds,
             "autonomy_share_context": self.autonomy_share_context,
+            "autonomy_workers": self.autonomy_workers,
+            "autonomy_level": self.autonomy_level,
         }
 
 

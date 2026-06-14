@@ -27,20 +27,29 @@ enabled, and Blender 5.x reachable (``BlenderSurface`` spawns it with
 __all__ = (
     "PortAllocator",
     "WorkerInstance",
+    "RemoteWorkerStrategy",
 )
 
 import asyncio
 import contextlib
+import glob
 import logging
 import os
+import re
+import shutil
 import socket
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
+from typing import Any, Awaitable, Callable
 
 _log = logging.getLogger("blagent.swarm")
+
+
+def _safe(name: str) -> str:
+    return re.sub(r"[^a-z0-9_-]+", "_", name.lower()).strip("_") or "x"
 
 
 class PortAllocator:
@@ -188,3 +197,118 @@ class WorkerInstance:
                 return fh.read()[-n:].decode("utf-8", "replace")
         except OSError:
             return ""
+
+
+_WORKER_TASK_TEMPLATE = (
+    "{instruction}\n\n"
+    "This is ONE component of a larger assembly being built in parallel by other "
+    "agents. Work only on your component. When finished, export the whole scene as "
+    "a Blender file with the media_io tool (export, format 'blend', filename "
+    "'{component}.blend') so it can be merged into the master scene. Then end with a "
+    "short PROOF OF WORK: the objects you created, with counts."
+)
+
+
+class RemoteWorkerStrategy:
+    """
+    Swarm worker_runner: for each task, spawn a real worker subprocess (its own
+    headless Blender + chat API), drive it over its OpenAI endpoint to build a
+    component and export a ``.blend``, copy that ``.blend`` into the shared
+    exchange dir, and return the proof + artifact. Drop-in for
+    ``AutonomyOrchestrator``'s ``worker_runner``; pair with ``ParallelScheduler``.
+    """
+
+    def __init__(
+            self,
+            *,
+            endpoint: str,
+            model: str,
+            exchange_dir: str,
+            allocator: "PortAllocator | None" = None,
+            host: str = "localhost",
+            api_key: str = "",
+            ready_timeout: float = 180.0,
+            task_timeout: float = 900.0,
+            emit: "Callable[[dict[str, Any]], Awaitable[None]] | None" = None,
+    ) -> None:
+        self._endpoint = endpoint
+        self._model = model
+        self._exchange_dir = exchange_dir
+        self._allocator = allocator or PortAllocator(host)
+        self._host = host
+        self._api_key = api_key
+        self._ready_timeout = ready_timeout
+        self._task_timeout = task_timeout
+        self._emit = emit
+        os.makedirs(exchange_dir, exist_ok=True)
+
+    def _build_prompt(self, task: Any, component: str) -> str:
+        prompt = _WORKER_TASK_TEMPLATE.format(instruction=task.instruction, component=component)
+        if getattr(task, "context", ""):
+            prompt = "Orchestrator context:\n{:s}\n\n{:s}".format(task.context, prompt)
+        return prompt
+
+    def _collect_blend(self, worker_dir: str, component: str) -> "str | None":
+        """Find the worker's exported .blend under its jail; copy to exchange."""
+        cands = glob.glob(os.path.join(worker_dir, "**", "*.blend"), recursive=True)
+        if not cands:
+            return None
+        newest = max(cands, key=os.path.getmtime)
+        dest = os.path.join(self._exchange_dir, "{:s}.blend".format(component))
+        shutil.copy2(newest, dest)
+        return dest
+
+    async def _chat(self, base_url: str, prompt: str, user: str) -> str:
+        import httpx  # pylint: disable=import-error
+
+        body = {
+            "model": "blender-agent",
+            "messages": [{"role": "user", "content": prompt}],
+            "user": user,
+            "stream": False,
+        }
+        headers = {"Authorization": "Bearer " + self._api_key} if self._api_key else {}
+        async with httpx.AsyncClient(timeout=self._task_timeout) as client:
+            resp = await client.post(base_url + "/chat/completions", json=body, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+        message = (data.get("choices") or [{}])[0].get("message") or {}
+        return str(message.get("content") or "")
+
+    async def __call__(self, task: Any) -> Any:
+        from .autonomy import WorkerResult
+
+        component = "component_{:s}".format(_safe(task.id))
+        api_port = self._allocator.allocate()
+        bridge_port = self._allocator.allocate()
+        worker_dir = os.path.join(self._exchange_dir, "worker_{:s}".format(_safe(task.id)))
+        worker = WorkerInstance(
+            worker_id=task.id, api_port=api_port, bridge_port=bridge_port,
+            data_dir=worker_dir, endpoint=self._endpoint, model=self._model,
+            host=self._host, api_key=self._api_key)
+        worker.start(allocator=self._allocator)
+        try:
+            ready = await worker.wait_ready(self._ready_timeout)
+            if not ready:
+                return WorkerResult(
+                    task_id=task.id, objective_id=task.objective_id,
+                    proof="worker failed to start:\n" + worker.tail_log(800),
+                    ok=False, transcript_ref=worker.base_url)
+            prompt = self._build_prompt(task, component)
+            try:
+                proof = await self._chat(worker.base_url, prompt, user=task.id)
+            except Exception as ex:  # pylint: disable=broad-except
+                _log.warning("worker %s chat failed: %s", task.id, ex)
+                return WorkerResult(
+                    task_id=task.id, objective_id=task.objective_id,
+                    proof="worker chat failed: {:s}".format(ex), ok=False,
+                    transcript_ref=worker.base_url)
+            artifact = self._collect_blend(worker_dir, component)
+            artifacts = [artifact] if artifact else []
+            return WorkerResult(
+                task_id=task.id, objective_id=task.objective_id,
+                proof=proof or "(worker produced no report)",
+                ok=bool(proof) and artifact is not None,
+                transcript_ref=worker.base_url, artifacts=artifacts)
+        finally:
+            worker.stop()

@@ -13,6 +13,7 @@ Client -> server:
     ``{"type": "chat", "session_id": "", "content": "..."}``
     ``{"type": "objectives", "session_id": "", "objectives": [{"text", "acceptance"}], "max_rounds"?}``
     ``{"type": "inject", "agent_id": "...", "content": "...", "mode": "now"|"after_round"}``
+    ``{"type": "set_autonomy_level", "session_id": "", "level": "minimal"|"yolo"|"orchestrator"|"swarm"}``
     ``{"type": "new_session"}``
     ``{"type": "load_session", "id": ...}``
     ``{"type": "delete_session", "id": ...}``
@@ -228,6 +229,11 @@ async def _handle_control(runtime: AgentRuntime, ws: WebSocket, data: dict[str, 
                     "type": "error",
                     "message": "no live worker {!r} to inject into".format(data.get("agent_id", "")),
                 })
+        elif msg_type == "set_autonomy_level":
+            # The composer's autonomy slider: minimal | yolo | orchestrator | swarm.
+            public = runtime.set_autonomy_level(
+                str(data.get("session_id", "")), str(data.get("level", "")))
+            await runtime.emit({"type": "config", "config": public})
         elif msg_type == "new_session":
             session_id = runtime.new_session()
             await ws.send_json({"type": "session_loaded", "session_id": session_id, "records": [], "media": []})
