@@ -96,15 +96,20 @@ export class BaArtifactPanel extends LitElement {
         ? html`<div class="empty">Screenshots and renders produced by the agent appear here.</div>`
         : html`
           <div class="grid">
-            ${this._media.map((m) => html`
+            ${this._media.map((m) => {
+              // `url` is server-provided (session media -> /media, worker
+              // media -> /worker-media); fall back for older payloads.
+              const src = m.url || `/media/${this._sessionId}/${m.id}`;
+              const cap = `${m.id}${m.worker ? " · worker" : ""} · ${m.label || m.mime}`;
+              return html`
               <div class="card">
                 ${renderMediaThumb({
-                  mime: m.mime, name: m.id,
-                  src: `/media/${this._sessionId}/${m.id}`,
-                  onZoom: (d) => { this._lightbox = { ...d, alt: `${m.id} · ${m.label || m.mime}` }; },
+                  mime: m.mime, name: m.id, src,
+                  onZoom: (d) => { this._lightbox = { ...d, alt: cap }; },
                 })}
-                <div class="cap">${m.id} · ${m.label || m.mime}</div>
-              </div>`)}
+                <div class="cap">${cap}</div>
+              </div>`;
+            })}
           </div>`}
       ${this._lightbox ? html`
         <ba-lightbox .src=${this._lightbox.src} .alt=${this._lightbox.alt}

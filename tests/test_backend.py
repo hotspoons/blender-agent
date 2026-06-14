@@ -254,6 +254,25 @@ class TestRuntimeBackendWiring(unittest.TestCase):
         rt = AgentRuntime(store, [], profile=AgentProfile(title="Foo", brand_word="Foo"))
         self.assertEqual(rt.public_ui_profile()["title"], "Foo")
 
+    def test_session_media_aggregates_worker_media(self) -> None:
+        from blagent.media import MediaLibrary
+        rt = self._runtime([])
+        sid = rt.new_session()
+        rt._get_or_load_session(sid).media.register_bytes(b"OWN", mime="image/png", label="own")
+        # A worker writes a render into its own media jail.
+        agent_id = "{:s}:w:task-0".format(sid)
+        wdir = os.path.join(rt.store.session_dir(sid), "workers", agent_id.replace(":", "_"))
+        wid = MediaLibrary(wdir).register_bytes(b"RENDER", mime="image/png", label="render")
+
+        items = rt.session_media(sid)
+        urls = {it["url"] for it in items}
+        self.assertIn("/media/{:s}/i1".format(sid), urls)                 # session's own
+        worker_items = [it for it in items if it.get("worker") == agent_id]
+        self.assertEqual(len(worker_items), 1)                            # aggregated
+        self.assertEqual(worker_items[0]["url"], "/worker-media/{:s}/{:s}".format(agent_id, wid))
+        # The /worker-media route resolver maps the agent id back to that dir.
+        self.assertIsNotNone(rt.worker_media_library(agent_id).get(wid))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -389,8 +389,45 @@ class AgentRuntime:
             session.engine.records[:] = self.store.load_records(session_id)
         return session.engine.records
 
+    @staticmethod
+    def _agent_id_from_safe(session_id: str, safe: str) -> "str | None":
+        """Reverse ``agent_id.replace(':', '_')`` for this session's workers/
+        gather dirs (session ids carry no colons, so this is unambiguous)."""
+        w = session_id + "_w_"
+        g = session_id + "_gather"
+        if safe.startswith(w):
+            return session_id + ":w:" + safe[len(w):]
+        if safe.startswith(g):
+            return session_id + ":gather" + safe[len(g):]
+        return None
+
     def session_media(self, session_id: str) -> list[dict[str, object]]:
-        return self._get_or_load_session(session_id).media.list_public()
+        session = self._get_or_load_session(session_id)
+        # Each item carries an explicit `url`; the session's own media serve
+        # from /media, worker-produced media from /worker-media.
+        items: list[dict[str, object]] = [
+            {**it, "url": "/media/{:s}/{:s}".format(session_id, str(it["id"]))}
+            for it in session.media.list_public()
+        ]
+        # Aggregate media produced by this session's workers (renders, etc.) so
+        # they appear in the session artifacts panel — not only inside each
+        # worker card.
+        workers_dir = os.path.join(self.store.session_dir(session_id), "workers")
+        if os.path.isdir(workers_dir):
+            for safe in sorted(os.listdir(workers_dir)):
+                agent_id = self._agent_id_from_safe(session_id, safe)
+                if agent_id is None:
+                    continue
+                try:
+                    lib = MediaLibrary(os.path.join(workers_dir, safe))
+                except Exception:  # pylint: disable=broad-except
+                    continue
+                for it in lib.list_public():
+                    items.append({
+                        **it, "worker": agent_id,
+                        "url": "/worker-media/{:s}/{:s}".format(agent_id, str(it["id"])),
+                    })
+        return items
 
     def delete_session(self, session_id: str) -> None:
         session = self._sessions.pop(session_id, None)
