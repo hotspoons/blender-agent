@@ -179,25 +179,113 @@ def surface_decision(*, bridge_up: bool, is_blender_child: bool, want_spawn: boo
     return "none"
 
 
+# Startup script for the OFF-SCREEN GL surface: a *full GUI* Blender (running
+# on a virtual X display) where the add-on's interactive bridge server is
+# started via its operator. This path has a real window/GPU context, so
+# ``bpy.app.background`` is False and the screenshot / GPU tools work — unlike
+# ``--command blender_mcp``, which runs background-style even when headed.
+_OFFSCREEN_STARTUP = """\
+import bpy
+_HOST, _PORT = {host!r}, {port}
+# Find the enabled add-on that provides the bridge operator; enable known
+# module names if needed (extension install vs legacy add-on).
+if not hasattr(bpy.ops, "blmcp") or not hasattr(bpy.ops.blmcp, "server_start"):
+    for _mod in ("bl_ext.user_default.mcp", "blender_mcp_addon"):
+        try:
+            bpy.ops.preferences.addon_enable(module=_mod)
+            break
+        except Exception:
+            continue
+for _name in bpy.context.preferences.addons.keys():
+    if _name.endswith("mcp") or _name.endswith("blender_mcp_addon"):
+        _prefs = bpy.context.preferences.addons[_name].preferences
+        try:
+            _prefs.host = _HOST
+            _prefs.port = _PORT
+            _prefs.use_port_auto = False
+        except Exception:
+            pass
+        break
+bpy.ops.blmcp.server_start()
+"""
+
+
 def build_blender_argv(
         blender_path: str,
         host: str,
         port: int,
         blend_file: "str | None",
         online_mode: bool,
+        offscreen_gl: bool = False,
+        startup_script: "str | None" = None,
 ) -> "list[str]":
     """
-    Argv for a headless bridge surface: the add-on's ``blender_mcp`` CLI
-    command, bound to *host:port*. ``--online-mode`` grants the network
-    permission the bridge's TCP server needs in background mode.
+    Argv for the Blender compute surface, bound to *host:port*.
+
+    Default (``offscreen_gl`` False): ``blender --background --command
+    blender_mcp`` — cheap, but runs background-style, so viewport screenshot
+    tools and GPU offscreen draw are unavailable; only the offline render
+    engine works.
+
+    ``offscreen_gl`` True: a *full GUI* ``blender --python <startup_script>``
+    (no ``--background``, no ``--command``), meant to run on a virtual X
+    display (see ``BlenderSurface``). The startup script starts the add-on's
+    interactive bridge server, so there is a real window/GPU context and the
+    screenshot tools work — off-screen, with no window ever shown to a user.
+    ``--online-mode`` grants the bridge's network permission either way.
     """
-    argv = [blender_path, "--background"]
+    argv = [blender_path]
+    if offscreen_gl:
+        if blend_file:
+            argv.append(blend_file)
+        if online_mode:
+            argv.append("--online-mode")
+        argv += ["--python", startup_script or ""]
+        return argv
+    argv.append("--background")
     if blend_file:
         argv.append(blend_file)
     if online_mode:
         argv.append("--online-mode")
     argv += ["--command", "blender_mcp", "--host", host, "--port", str(port)]
     return argv
+
+
+def _start_xvfb(width: int = 1280, height: int = 1024, depth: int = 24) -> "tuple[subprocess.Popen[bytes], str]":
+    """
+    Start an Xvfb virtual X server on a free display and return
+    ``(process, ":N")``. Raises ``RuntimeError`` if Xvfb is unavailable or
+    never comes up. The display has no physical screen — Blender renders into
+    it off-screen, so screenshots work with no window ever shown.
+    """
+    import shutil  # local: only needed on the offscreen path
+    if shutil.which("Xvfb") is None:
+        raise RuntimeError(
+            "offscreen GL surface needs Xvfb, which is not installed "
+            "(apt-get install xvfb). Falling back is the caller's choice.")
+    # Pick a display number unlikely to collide; Xvfb fails fast if taken.
+    for display_num in range(99, 130):
+        lock = "/tmp/.X{:d}-lock".format(display_num)
+        if os.path.exists(lock):
+            continue
+        display = ":{:d}".format(display_num)
+        # pylint: disable-next=consider-using-with
+        proc = subprocess.Popen(
+            ["Xvfb", display, "-screen", "0", "{:d}x{:d}x{:d}".format(width, height, depth),
+             "-nolisten", "tcp"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                break  # this display was taken / Xvfb died; try the next
+            if os.path.exists(lock):
+                return proc, display
+            time.sleep(0.1)
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+    raise RuntimeError("could not start Xvfb on any display :99-:129")
 
 
 class BlenderSurface:
@@ -214,6 +302,7 @@ class BlenderSurface:
             blender_path: "str | None" = None,
             blend_file: "str | None" = None,
             online_mode: bool = True,
+            offscreen_gl: "bool | None" = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -221,7 +310,24 @@ class BlenderSurface:
         self.blender_path = blender_path or os.environ.get("BLENDER_PATH", "blender")
         self.blend_file = blend_file
         self.online_mode = online_mode
+        # Off-screen GL: run Blender headed on a virtual X display (Xvfb) so
+        # screenshot/GPU tools work, with no window ever shown. Opt-in (heavier
+        # than --background); default off. Env BLENDER_AGENT_OFFSCREEN_GL=1.
+        if offscreen_gl is None:
+            offscreen_gl = os.environ.get("BLENDER_AGENT_OFFSCREEN_GL", "").lower() in (
+                "1", "true", "yes", "on")
+        self.offscreen_gl = offscreen_gl
         self.proc: "subprocess.Popen[bytes] | None" = None
+        self._xvfb: "subprocess.Popen[bytes] | None" = None
+        self._startup_script: "str | None" = None
+
+    def _write_startup_script(self) -> str:
+        """Write the off-screen GUI startup script to a temp file; return its path."""
+        import tempfile
+        fd, path = tempfile.mkstemp(prefix="blmcp_offscreen_", suffix=".py")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(_OFFSCREEN_STARTUP.format(host=self.host, port=self.port))
+        return path
 
     def start(self, timeout: float = 60.0, poll: float = 0.25) -> None:
         """
@@ -229,13 +335,24 @@ class BlenderSurface:
         ``RuntimeError`` if Blender exits early or the bridge never
         comes up within *timeout*.
         """
+        env = dict(os.environ)
+        if self.offscreen_gl:
+            try:
+                self._xvfb, display = _start_xvfb()
+                env["DISPLAY"] = display
+                self._startup_script = self._write_startup_script()
+                _log.info("offscreen GL: full-GUI Blender on virtual display %s", display)
+            except (RuntimeError, OSError) as ex:
+                _log.warning("offscreen GL unavailable (%s); falling back to --background", ex)
+                self.offscreen_gl = False
         argv = build_blender_argv(
-            self.blender_path, self.host, self.port, self.blend_file, self.online_mode)
+            self.blender_path, self.host, self.port, self.blend_file, self.online_mode,
+            offscreen_gl=self.offscreen_gl, startup_script=self._startup_script)
         _log.info("spawning Blender compute surface: %s", " ".join(argv))
         try:
             # pylint: disable-next=consider-using-with
             self.proc = subprocess.Popen(
-                argv,
+                argv, env=env,
                 # Windows: spawn headless Blender without a console window flash.
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except FileNotFoundError as ex:
@@ -262,17 +379,34 @@ class BlenderSurface:
                 self.host, self.port, timeout))
 
     def stop(self) -> None:
-        """Terminate the spawned Blender. Never raises."""
+        """Terminate the spawned Blender (and its Xvfb, if any). Never raises."""
         proc = self.proc
-        if proc is None or proc.poll() is not None:
-            return
-        try:
-            proc.terminate()
+        if proc is not None and proc.poll() is None:
             try:
-                proc.wait(timeout=10.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-        except OSError:
-            pass
-        finally:
-            _log.info("stopped Blender compute surface (pid %d)", proc.pid)
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            except OSError:
+                pass
+            finally:
+                _log.info("stopped Blender compute surface (pid %d)", proc.pid)
+        # Tear down the virtual display last (after its Blender client is gone).
+        xvfb = self._xvfb
+        if xvfb is not None and xvfb.poll() is None:
+            try:
+                xvfb.terminate()
+                try:
+                    xvfb.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    xvfb.kill()
+            except OSError:
+                pass
+        self._xvfb = None
+        if self._startup_script:
+            try:
+                os.unlink(self._startup_script)
+            except OSError:
+                pass
+            self._startup_script = None

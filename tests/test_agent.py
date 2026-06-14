@@ -279,6 +279,18 @@ class TestBlenderSurface(unittest.TestCase):
         self.assertNotIn("--online-mode", bare)
         self.assertEqual([a for a in bare if a.endswith(".blend")], [])
 
+    def test_argv_offscreen_gl_is_gui_not_background(self) -> None:
+        s = self._surface()
+        argv = s.build_blender_argv(
+            "blender", "localhost", 9876, None, True,
+            offscreen_gl=True, startup_script="/tmp/start.py")
+        # Off-screen GL runs a full GUI Blender (no --background / --command),
+        # driven by a startup script that starts the interactive bridge.
+        self.assertNotIn("--background", argv)
+        self.assertNotIn("--command", argv)
+        self.assertIn("--online-mode", argv)
+        self.assertEqual(argv[-2:], ["--python", "/tmp/start.py"])
+
     def test_bridge_reachable(self) -> None:
         s = self._surface()
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

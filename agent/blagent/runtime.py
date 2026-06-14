@@ -39,8 +39,10 @@ _MIN_BLEND_BYTES = 1024
 _WORKER_PROOF_SUFFIX = (
     "\n\nWhen the task is complete, end your turn with a short PROOF OF WORK: "
     "what you changed and concrete evidence (object names, counts, verify "
-    "output, screenshots taken). If you could not finish, say so plainly and "
-    "why."
+    "output, a rendered image). If you want to show the scene visually, RENDER "
+    "it (media_io verb 'render', or render_thumbnail_to_path) — this Blender is "
+    "headless, so viewport screenshot tools do not work. If you could not "
+    "finish, say so plainly and why."
 )
 
 

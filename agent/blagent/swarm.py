@@ -249,7 +249,10 @@ _WORKER_TASK_TEMPLATE = (
     "finished, export the whole scene as a Blender file with the media_io tool "
     "(export, format 'blend', filename '{component}.blend') so it can be merged "
     "into the master scene. Then end with a short PROOF OF WORK: the objects you "
-    "created, with counts."
+    "created, with counts.\n\n"
+    "NOTE: your Blender runs HEADLESS (no GUI) — viewport screenshot tools do "
+    "not work here. To show your work visually, RENDER an image (media_io with "
+    "verb 'render', or render_thumbnail_to_path), don't try to screenshot."
 )
 
 

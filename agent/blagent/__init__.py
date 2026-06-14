@@ -328,7 +328,19 @@ def main() -> int:
         default=None,
         help="Blender bridge port to attach to / spawn (default: $BLENDER_MCP_PORT or 9876).",
     )
+    parser.add_argument(
+        "--offscreen-gl",
+        dest="offscreen_gl",
+        action="store_true",
+        help="Run the spawned Blender headed on a virtual X display (Xvfb) instead of "
+             "--background, so viewport screenshot / GPU tools work off-screen (no window "
+             "shown). Heavier; needs Xvfb. Also settable via BLENDER_AGENT_OFFSCREEN_GL=1.",
+    )
     args = parser.parse_args()
+    # Propagate via env so a spawned surface (and any swarm worker subprocesses,
+    # which inherit the environment) pick it up uniformly.
+    if args.offscreen_gl:
+        os.environ["BLENDER_AGENT_OFFSCREEN_GL"] = "1"
     if args.no_ui and args.mcp_port is None:
         parser.error("--no-ui requires --mcp-port (there would be nothing to serve)")
 

@@ -76,7 +76,12 @@ def main(params: Params) -> Result:
     from bpy import context  # pylint: disable=import-error,no-name-in-module
 
     if bpy.app.background:
-        return Result(status="error", message="Screenshots are not available in background mode")
+        return Result(status="error", message=(
+            "Screenshots are not available in background (headless) mode — there is no "
+            "GUI window to capture. To produce an image of the scene, RENDER instead: "
+            "use the media_io tool with verb 'render', or render_viewport_to_path / "
+            "render_thumbnail_to_path. (A render works headless; a viewport screenshot "
+            "does not.)"))
 
     window = context.window
     if window is None:
