@@ -202,10 +202,12 @@ class WorkerInstance:
 _WORKER_TASK_TEMPLATE = (
     "{instruction}\n\n"
     "This is ONE component of a larger assembly being built in parallel by other "
-    "agents. Work only on your component. When finished, export the whole scene as "
-    "a Blender file with the media_io tool (export, format 'blend', filename "
-    "'{component}.blend') so it can be merged into the master scene. Then end with a "
-    "short PROOF OF WORK: the objects you created, with counts."
+    "agents. FIRST start from a clean scene — delete the default Camera, Cube and "
+    "Light so only your component remains. Work only on your component. When "
+    "finished, export the whole scene as a Blender file with the media_io tool "
+    "(export, format 'blend', filename '{component}.blend') so it can be merged "
+    "into the master scene. Then end with a short PROOF OF WORK: the objects you "
+    "created, with counts."
 )
 
 
@@ -303,13 +305,15 @@ class RemoteWorkerStrategy:
                 return None
             files = "\n".join("- {:s}".format(c) for c in components)
             prompt = (
-                "You are the GATHER agent for a parallel assembly. Merge these "
-                "component Blender files into ONE scene: for each file, append all "
-                "of its objects into the current scene (use bpy, e.g. "
-                "bpy.ops.wm.append from each file's Object directory), keeping every "
-                "object. Then export the merged scene as a Blender file via the "
-                "media_io tool (export, format 'blend', filename '{master}.blend'). "
-                "Component files (absolute paths on this machine):\n{files}\n\n"
+                "You are the GATHER agent for a parallel assembly. Start from a clean "
+                "empty scene (delete the default Camera, Cube and Light). Merge these "
+                "component Blender files into that ONE scene: for each file, append "
+                "its real objects (use bpy, e.g. bpy.ops.wm.append from each file's "
+                "Object directory), but SKIP each component's leftover default Camera, "
+                "Cube and Light so they don't pile up as duplicates. Then export the "
+                "merged scene as a Blender file via the media_io tool (export, format "
+                "'blend', filename '{master}.blend'). Component files (absolute paths "
+                "on this machine):\n{files}\n\n"
                 "End with a PROOF OF WORK: the total object count in the merged scene."
             ).format(master=master, files=files)
             if self._emit is not None:

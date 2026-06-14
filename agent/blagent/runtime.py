@@ -407,6 +407,43 @@ class AgentRuntime:
 
         return probe
 
+    async def _read_blend_objects(self, path: str) -> list[str]:
+        """Open a .blend headless and return its object names (best-effort)."""
+        blender = os.environ.get("BLENDER_PATH", "blender")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                blender, "-b", "--online-mode", path, "--python-expr",
+                "import bpy;print('OBJ:'+'|'.join(sorted(o.name for o in bpy.data.objects)))",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+        except Exception:  # pylint: disable=broad-except
+            return []
+        for line in out.decode("utf-8", "replace").splitlines():
+            if line.startswith("OBJ:"):
+                return [x for x in line[4:].split("|") if x]
+        return []
+
+    def _make_swarm_probe(self, exchange_dir: str) -> "Callable[[], Awaitable[str]]":
+        """
+        Ground truth for the evaluator in swarm mode (the orchestrator has no
+        Blender of its own): read the object lists of the component .blend
+        files workers have written to the exchange dir.
+        """
+        import glob
+
+        async def probe() -> str:
+            comps = sorted(glob.glob(os.path.join(exchange_dir, "component_*.blend")))
+            if not comps:
+                return "(no component .blend files produced yet)"
+            lines = ["Components produced so far (objects per file):"]
+            for path in comps:
+                objs = await self._read_blend_objects(path)
+                lines.append("- {:s}: {:s}".format(
+                    os.path.basename(path), ", ".join(objs) if objs else "(empty/unreadable)"))
+            return "\n".join(lines)
+
+        return probe
+
     def draft_objectives(self, session_id: str, goal: str) -> None:
         """
         Guided intake: draft objectives from a one-line *goal* (LLM), emitting
@@ -486,8 +523,12 @@ class AgentRuntime:
                 api_key=config.api_key, emit=self.emit)
             runner: "Callable[[Any], Awaitable[Any]]" = swarm_strategy
             scheduler: "Any" = ParallelScheduler(max_concurrency=4)
+            # No local Blender in swarm mode: ground the evaluator on the
+            # component .blends the workers wrote to the exchange dir.
+            probe: "Callable[[], Awaitable[str]]" = self._make_swarm_probe(exchange_dir)
         else:
             swarm_strategy = None
+            probe = self._make_probe(session_id)
             runner = ChildSessionRunner(
                 registry=self.registry,
                 make_llm=self._make_llm,
@@ -507,7 +548,7 @@ class AgentRuntime:
         orchestrator = AutonomyOrchestrator(
             planner=LlmPlanner(llm, model),
             scheduler=scheduler,
-            evaluator=StateAwareEvaluator(llm, model, probe=self._make_probe(session_id)),
+            evaluator=StateAwareEvaluator(llm, model, probe=probe),
             policy=policy,
             worker_runner=runner,
             emit=self.emit,
