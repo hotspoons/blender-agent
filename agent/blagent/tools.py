@@ -43,10 +43,12 @@ class TurnBudget:
     the cap mid-turn (mirrors Foyer's ``TurnBudgetHandle``).
     """
 
-    rounds_left: int
+    # Fractional: a pure-introspection round costs less than a whole one
+    # (see _READ_ONLY_ROUND_WEIGHT in engine.py), so the balance is a float.
+    rounds_left: float
     rounds_max: int
 
-    def extend(self, rounds: int) -> int:
+    def extend(self, rounds: int) -> float:
         """
         Add *rounds* (clamped to the original max) and return the new balance.
         """
@@ -91,6 +93,12 @@ class Tool:
     # the engine ages these out of the context harder (they are cheap
     # to re-run).
     volatile: bool = False
+    # Introspection — does not mutate the scene or do the expensive
+    # productive work (screenshots, scene/object summaries, skill reads,
+    # searches). Used by the engine to charge a fraction of a round for
+    # pure-look rounds. Distinct from ``volatile`` (which is about context
+    # aging): a skill read is read_only but NOT volatile.
+    read_only: bool = False
 
     def input_schema(self) -> dict[str, Any]:
         raise NotImplementedError

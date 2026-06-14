@@ -26,6 +26,9 @@ from .tools import Tool, ToolContext, ToolError, ToolResult
 
 class SkillsTool(Tool):
     name = "skills"
+    # Introspection: list/get/search/memory dominate, and even save writes a
+    # cheap skill file (not scene work) — so a pure-skills round is discounted.
+    read_only = True
     description = (
         "Playbook library of proven Blender recipes (manifold repair, fillets, "
         "booleans, texturing, lighting, rigging, ...) plus persistent agent memory. "
@@ -165,6 +168,6 @@ class ContinueWorkingTool(Tool):
             raise ToolError("no turn budget attached")
         balance = ctx.turn_budget.extend(int(args.get("rounds", 1)))
         return ToolResult(
-            summary="budget extended; {:d} round(s) left".format(balance),
+            summary="budget extended; {:g} round(s) left".format(balance),
             data={"rounds_left": balance},
         )

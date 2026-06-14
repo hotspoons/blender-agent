@@ -71,6 +71,7 @@ class BlenderTool(Tool):
             schema: dict[str, Any],
             destructive: bool,
             volatile: bool = False,
+            read_only: bool = False,
     ) -> None:
         self._mcp = mcp
         self.name = name
@@ -78,6 +79,7 @@ class BlenderTool(Tool):
         self._schema = schema
         self.destructive = destructive
         self.volatile = volatile
+        self.read_only = read_only
 
     def input_schema(self) -> dict[str, Any]:
         return self._schema
@@ -172,7 +174,10 @@ async def build_blender_registry() -> tuple[FastMCP, list[Tool]]:
         destructive = bool(annotations.destructiveHint) if annotations is not None else False
         # Read-only tools are scene queries: their results are volatile
         # (stale after the next edit) and age out of the context harder.
-        volatile = bool(annotations.readOnlyHint) if annotations is not None else False
+        # readOnlyHint also marks them as cheap introspection for the
+        # weighted round budget.
+        read_only = bool(annotations.readOnlyHint) if annotations is not None else False
+        volatile = read_only
         tools.append(BlenderTool(
             mcp,
             name=spec.name,
@@ -180,5 +185,6 @@ async def build_blender_registry() -> tuple[FastMCP, list[Tool]]:
             schema=spec.inputSchema,
             destructive=destructive,
             volatile=volatile,
+            read_only=read_only,
         ))
     return mcp, tools

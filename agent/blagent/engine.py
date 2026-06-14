@@ -82,6 +82,13 @@ _QUIET_EMIT_INTERVAL = 1.0
 # worker stuck in a loop.
 _MAX_BUDGET_REVIEWS = 2
 
+# A round that calls ONLY read-only introspection tools (screenshots,
+# scene/object summaries, skill reads, searches) costs this fraction of a
+# round instead of a whole one. Looking is cheap and shouldn't be charged
+# at the same rate as mutating/productive work (execute_blender_code,
+# rigging, media export); any non-read-only call in the round charges full.
+_READ_ONLY_ROUND_WEIGHT = 0.25
+
 _CLOSING_PROMPT = (
     "(Your tool budget for this turn is exhausted and your pending tool "
     "calls were skipped. Close out for the USER now: state plainly what "
@@ -564,6 +571,7 @@ class AgentEngine:
         nudges_left = 2
         turn_had_tool_calls = False
         reviews_done = 0
+        low_budget_warned = False
 
         while True:
             if feedback_media:
@@ -706,14 +714,23 @@ class AgentEngine:
                     })
                     break
                 budget.rounds_left = granted
+                low_budget_warned = False
                 post_dispatch_note = (
                     "(Budget review: the reviewer granted {:d} more tool rounds. "
                     "Reviewer's note: {:s}{:s})").format(
                         granted, review_summary,
                         " This is the FINAL extension - finish or report."
                         if final_review else "")
-            budget.rounds_left -= 1
-            if budget.rounds_left == 1 and not post_dispatch_note:
+            # Charge the round, weighted by what it did: a round of pure
+            # read-only introspection (screenshots, scene/object summaries,
+            # skill reads) costs a fraction; any mutating/productive or
+            # unknown tool charges a full round.
+            round_tools = [self._registry.get(c["name"]) for c in tool_calls]
+            all_read_only = bool(round_tools) and all(
+                t is not None and t.read_only for t in round_tools)
+            budget.rounds_left -= _READ_ONLY_ROUND_WEIGHT if all_read_only else 1.0
+            if 0 < budget.rounds_left <= 1.0 and not low_budget_warned and not post_dispatch_note:
+                low_budget_warned = True
                 # Forewarn the worker instead of cutting it off cold.
                 post_dispatch_note = (
                     "(Budget notice: only 1 tool round remains before a budget "

@@ -1091,5 +1091,72 @@ class TestLlmOutputParser(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, "node tests failed:\n" + proc.stdout + proc.stderr)
 
 
+@unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
+class TestWeightedRoundBudget(unittest.TestCase):
+    """
+    Read-only introspection rounds (screenshots, scene/object summaries,
+    skill reads, searches) cost a fraction of a round; mutating/productive
+    rounds cost a full one. So a turn that only *looks* survives many more
+    rounds than the flat round budget would allow, while mutating work is
+    charged at the old rate.
+    """
+
+    def _rounds_until_exhaustion(self, tool_name: str, read_only: bool) -> int:
+        _import_blagent()
+        from blagent.engine import AgentEngine
+        from blagent.llm import LlmChunk, LlmClient
+        from blagent.tools import Tool, ToolRegistry, ToolResult
+
+        class Stub(Tool):
+            def __init__(self, name: str, ro: bool) -> None:
+                self.name = name
+                self.description = ""
+                self.read_only = ro
+
+            def input_schema(self) -> dict:
+                return {"type": "object", "properties": {}}
+
+            async def call(self, ctx: Any, args: dict) -> Any:
+                return ToolResult(summary="ok", data={})
+
+        async def emit(event: dict[str, Any]) -> None:
+            pass
+
+        engine = AgentEngine(
+            registry=ToolRegistry([Stub(tool_name, read_only)]),
+            media=None,
+            system_prompt="",
+            emit=emit,
+            append_record=lambda record: None,
+        )
+
+        class EndlessCaller(LlmClient):
+            def __init__(self) -> None:
+                self.rounds = 0
+
+            async def stream(self, request: dict[str, Any]) -> Any:
+                self.rounds += 1
+                yield LlmChunk(tool_calls=[{
+                    "index": 0, "id": "c{:d}".format(self.rounds),
+                    "function": {"name": tool_name, "arguments": "{}"},
+                }])
+
+        caller = EndlessCaller()
+        asyncio.new_event_loop().run_until_complete(engine.run_turn(
+            "s1", "go", caller, "m", autonomy="auto", max_rounds=2,
+            budget_review=False))
+        return caller.rounds
+
+    def test_read_only_rounds_are_discounted(self) -> None:
+        mutating = self._rounds_until_exhaustion("edit_scene", read_only=False)
+        looking = self._rounds_until_exhaustion("peek_scene", read_only=True)
+        # Flat cost (1.0/round) exhausts max_rounds=2 after ~2 work rounds
+        # (+ the exhaustion-detect round + the close-out stream = ~4 calls).
+        self.assertLessEqual(mutating, 4)
+        # At 0.25/round the same budget lasts ~4x longer (~8 work rounds).
+        self.assertGreaterEqual(looking, 8)
+        self.assertGreater(looking, 2 * mutating)
+
+
 if __name__ == "__main__":
     unittest.main()
