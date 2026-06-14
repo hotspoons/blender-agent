@@ -242,7 +242,12 @@ class WorkerInstance:
 
 
 _WORKER_TASK_TEMPLATE = (
-    "{instruction}\n\n"
+    "You are an autonomous worker sub-agent. There is NO user to ask — do not "
+    "ask clarifying questions or offer options; make the most reasonable "
+    "interpretation, act, verify, and report.\n\n"
+    "## YOUR TASK\n{instruction}\n\n"
+    "## OBJECTIVE THIS SERVES\n{goal}\n\n"
+    "## DONE WHEN\n{acceptance}\n\n"
     "This is ONE component of a larger assembly being built in parallel by other "
     "agents. FIRST start from a clean scene — delete the default Camera, Cube and "
     "Light so only your component remains. Work only on your component. When "
@@ -314,7 +319,10 @@ class RemoteWorkerStrategy:
         })
 
     def _build_prompt(self, task: Any, component: str) -> str:
-        prompt = _WORKER_TASK_TEMPLATE.format(instruction=task.instruction, component=component)
+        prompt = _WORKER_TASK_TEMPLATE.format(
+            instruction=task.instruction, component=component,
+            goal=getattr(task, "goal", "") or "(not specified)",
+            acceptance=getattr(task, "acceptance", "") or "the task is accomplished and verifiable")
         if getattr(task, "context", ""):
             prompt = "Orchestrator context:\n{:s}\n\n{:s}".format(task.context, prompt)
         return prompt

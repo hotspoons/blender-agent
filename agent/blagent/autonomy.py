@@ -79,6 +79,11 @@ class WorkerTask:
     id: str
     objective_id: str
     instruction: str
+    # The objective this task serves + its acceptance criteria. Always passed
+    # to the worker (pinned in its system prompt) so it knows WHY it is acting
+    # and what "done" means — independent of the share_context experiment.
+    goal: str = ""
+    acceptance: str = ""
     # Orchestrator context shared with the worker (objectives + status).
     # Empty == the worker runs blind on just its instruction. Set by the
     # orchestrator when share_context is on, so blind vs informed workers
@@ -216,23 +221,24 @@ class LlmPlanner:
         text = await _complete(self._llm, self._model, _PLANNER_SYSTEM,
                                "UNMET OBJECTIVES:\n" + listing)
         data = _extract_json_object(text)
-        valid_ids = {o.id for o in unmet}
+        by_id = {o.id: o for o in unmet}
         tasks: list[WorkerTask] = []
         for i, raw in enumerate(data.get("tasks", []) or []):
             if not isinstance(raw, dict):
                 continue
             instruction = str(raw.get("instruction", "")).strip()
             oid = str(raw.get("objective_id", "")).strip()
-            if oid not in valid_ids:
-                oid = unmet[0].id  # mis-tagged task still belongs to the round
+            obj = by_id.get(oid) or unmet[0]  # mis-tagged task still belongs to the round
             if instruction:
                 tasks.append(WorkerTask(
                     id="task-{:d}-{:d}".format(len(tasks), i),
-                    objective_id=oid, instruction=instruction))
+                    objective_id=obj.id, instruction=instruction,
+                    goal=obj.text, acceptance=obj.acceptance))
         if not tasks:
             # Degrade to one task per unmet objective rather than stalling.
             tasks = [
-                WorkerTask(id="task-{:d}".format(i), objective_id=o.id, instruction=o.text)
+                WorkerTask(id="task-{:d}".format(i), objective_id=o.id,
+                           instruction=o.text, goal=o.text, acceptance=o.acceptance)
                 for i, o in enumerate(unmet)
             ]
         return tasks

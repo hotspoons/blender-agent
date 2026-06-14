@@ -38,25 +38,55 @@ _log = logging.getLogger("blagent.runtime")
 # below it is almost certainly a failed/partial export, surfaced as suspect.
 _MIN_BLEND_BYTES = 1024
 
-# Appended to every worker task: the orchestrator demands proof, not prose.
-_WORKER_PROOF_SUFFIX = (
-    "\n\nWhen the task is complete, end your turn with a short PROOF OF WORK: "
-    "what you changed and concrete evidence (object names, counts, verify "
-    "output, a rendered image). If you want to show the scene visually, RENDER "
-    "it (media_io verb 'render', or render_thumbnail_to_path) — this Blender is "
-    "headless, so viewport screenshot tools do not work. If you could not "
-    "finish, say so plainly and why."
-)
+# Tools that belong to the ORCHESTRATOR / interactive user only — never
+# handed to a worker sub-agent. A worker that can change autonomy or ask the
+# user a question breaks the delegation model (and is what made workers sit
+# there asking questions instead of doing their task).
+_WORKER_TOOL_DENYLIST = frozenset({"set_autonomy", "ask_user"})
+
+# Pinned into the worker's SYSTEM prompt (which _fit_context never trims), so
+# the mission survives even after huge welcome/scene-summary tool results
+# balloon the context. Reframes the worker as autonomous: no user to ask.
+_WORKER_MISSION = """
+
+---
+# YOUR ROLE: autonomous worker sub-agent
+An orchestrator has delegated ONE task to you. You are NOT in a conversation
+with a human — there is no user to ask. Do NOT ask clarifying questions, do
+NOT offer menus of options, and do NOT wait for confirmation or approval.
+Make the most reasonable interpretation, ACT, verify, and report. Note any
+assumptions in your proof of work.
+
+## YOUR TASK
+{instruction}
+
+## OBJECTIVE THIS SERVES
+{goal}
+
+## DONE WHEN
+{acceptance}
+{context}
+Stay strictly on this task — do not wander, do not "tidy up" unrelated things,
+do not redo other workers' work. This section is your ground truth: if the
+running conversation is ever trimmed, your assignment still lives HERE.
+
+When finished, end your turn with a short PROOF OF WORK: what you changed and
+concrete evidence (object names, counts, verify output, a rendered image). To
+show the scene visually, RENDER it (media_io verb 'render', or
+render_thumbnail_to_path) — this Blender is headless, so viewport screenshot
+tools do not work. If you could not finish, say so plainly and why.
+"""
 
 
 class ChildSessionRunner:
     """
     The child-session isolation strategy made real: each worker task runs
-    in its OWN ``AgentEngine`` (isolated transcript + media) with the full
-    tool surface. The orchestrator gets back only the worker's proof — the
-    worker's chatter never enters the orchestrator's context. Events are
-    tagged with the worker's agent id + parent so the UI nests them in a
-    bounded panel.
+    in its OWN ``AgentEngine`` (isolated transcript + media) with a
+    RESTRICTED tool surface (no orchestrator/user-facing meta-tools — see
+    ``_WORKER_TOOL_DENYLIST``) and its mission pinned in the system prompt.
+    The orchestrator gets back only the worker's proof — the worker's
+    chatter never enters the orchestrator's context. Events are tagged with
+    the worker's agent id + parent so the UI nests them in a bounded panel.
 
     Dependencies are explicit so it is testable without the full runtime.
     """
@@ -78,7 +108,11 @@ class ChildSessionRunner:
             register: "Callable[[str, AgentEngine], None] | None" = None,
             unregister: "Callable[[str], None] | None" = None,
     ) -> None:
-        self._registry = registry
+        # Workers run on a restricted surface: strip orchestrator/user-only
+        # tools (set_autonomy, ask_user) so a worker can't change autonomy or
+        # sit waiting on a user that does not exist.
+        self._registry = ToolRegistry(
+            [t for t in registry if t.name not in _WORKER_TOOL_DENYLIST])
         self._make_llm = make_llm
         self._model = model
         self._emit = emit
@@ -106,28 +140,34 @@ class ChildSessionRunner:
         def append(record: dict[str, Any]) -> None:
             records.append(record)
 
+        # Pin the full mission in the SYSTEM prompt (which _fit_context never
+        # trims), so huge welcome/scene-summary tool results can't push the
+        # worker's task out of context and disorient it. The informed-worker
+        # context (share_context) rides along here too — pinned, not a
+        # trimmable synthetic user turn.
+        context_block = ""
+        if getattr(task, "context", ""):
+            context_block = "\n## ORCHESTRATOR CONTEXT\n{:s}\n".format(task.context)
+        worker_system = self._system_prompt + _WORKER_MISSION.format(
+            instruction=task.instruction,
+            goal=getattr(task, "goal", "") or "(not specified)",
+            acceptance=getattr(task, "acceptance", "") or "the task is accomplished and verifiable",
+            context=context_block,
+        )
         engine = AgentEngine(
             registry=self._registry,
             media=self._media_factory(agent_id),
-            system_prompt=self._system_prompt,
+            system_prompt=worker_system,
             emit=child_emit,
             append_record=append,
         )
-        # Informed worker: seed the orchestrator's context before the turn.
-        # Blind worker (default): task.context is empty, nothing is seeded.
-        if getattr(task, "context", ""):
-            engine.push_record({
-                "role": "user",
-                "content": "[Orchestrator context]\n{:s}".format(task.context),
-                "synthetic": True,
-                "shared_context": True,
-            })
         if self._register is not None:
             self._register(agent_id, engine)
         try:
             await engine.run_turn(
                 session_id=agent_id,
-                user_text=task.instruction + _WORKER_PROOF_SUFFIX,
+                user_text="Begin now — execute your assigned task end to end, "
+                          "then report your proof of work.",
                 llm=self._make_llm(),
                 model=self._model,
                 autonomy=self._autonomy,

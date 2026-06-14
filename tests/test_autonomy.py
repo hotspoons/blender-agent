@@ -405,6 +405,65 @@ class TestChildSessionRunner(unittest.TestCase):
         self.assertTrue(all(e.get("role") == "worker" for e in worker_events))
         self.assertTrue(any(e.get("session_id") == "orch1:w:t1" for e in worker_events))
 
+    def test_worker_registry_restricted_and_mission_pinned(self) -> None:
+        for path in (os.path.join(_REPO_DIR, "mcp"), os.path.join(_REPO_DIR, "agent")):
+            if path not in sys.path:
+                sys.path.insert(0, path)
+        from blagent.autonomy import WorkerTask
+        from blagent.llm import LlmChunk, LlmClient
+        from blagent.media import MediaLibrary
+        from blagent.runtime import ChildSessionRunner
+        from blagent.tools import Tool, ToolRegistry, ToolResult
+
+        def _stub(tool_name: str) -> Any:
+            class _T(Tool):
+                name = tool_name
+                description = tool_name
+
+                def input_schema(self) -> dict[str, Any]:
+                    return {"type": "object", "properties": {}}
+
+                async def call(self, ctx: Any, args: dict[str, Any]) -> Any:
+                    return ToolResult(summary="ok")
+            return _T()
+
+        seen: dict[str, Any] = {}
+
+        class FakeLlm(LlmClient):
+            async def stream(self, request: dict[str, Any]) -> Any:
+                seen.setdefault("system", request["messages"][0]["content"])
+                seen.setdefault("tools", [t["function"]["name"] for t in request.get("tools", [])])
+                yield LlmChunk(content="PROOF OF WORK: done.")
+
+        async def emit(_e: dict[str, Any]) -> None:
+            pass
+
+        tmp = tempfile.mkdtemp(prefix="worker_")
+        runner = ChildSessionRunner(
+            registry=ToolRegistry([_stub("build_thing"), _stub("set_autonomy"), _stub("ask_user")]),
+            make_llm=lambda: FakeLlm(),
+            model="m",
+            emit=emit,
+            system_prompt="BASE PROMPT.",
+            media_factory=lambda agent_id: MediaLibrary(os.path.join(tmp, agent_id.replace(":", "_"))),
+            parent_session_id="orch1",
+        )
+        _run(runner(WorkerTask(
+            id="t1", objective_id="o1", instruction="model a peg",
+            goal="assemble the arm", acceptance="peg mates with socket")))
+
+        # Orchestrator/user-only tools are stripped from the worker surface.
+        self.assertIn("build_thing", seen["tools"])
+        self.assertNotIn("set_autonomy", seen["tools"])
+        self.assertNotIn("ask_user", seen["tools"])
+        # Mission is pinned in the SYSTEM prompt (survives context trimming).
+        sysmsg = seen["system"]
+        self.assertIn("BASE PROMPT.", sysmsg)
+        self.assertIn("model a peg", sysmsg)
+        self.assertIn("assemble the arm", sysmsg)
+        self.assertIn("peg mates with socket", sysmsg)
+        self.assertIn("no user to ask", sysmsg.lower())
+
 
 if __name__ == "__main__":
     unittest.main()
