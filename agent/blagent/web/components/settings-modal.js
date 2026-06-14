@@ -21,6 +21,9 @@ export class BaSettingsModal extends LitElement {
     _autonomy: { state: true },
     _contextTokens: { state: true },
     _models: { state: true },
+    _policy: { state: true },
+    _maxAutoRounds: { state: true },
+    _shareContext: { state: true },
   };
 
   constructor() {
@@ -33,6 +36,9 @@ export class BaSettingsModal extends LitElement {
     this._autonomy = config.autonomy || "ask";
     this._contextTokens = config.context_tokens || 16384;
     this._models = store.state.models;
+    this._policy = config.autonomy_policy || "auto_until_done";
+    this._maxAutoRounds = config.max_autonomy_rounds || 6;
+    this._shareContext = !!config.autonomy_share_context;
     this._fetchTimer = null;
   }
 
@@ -140,6 +146,9 @@ export class BaSettingsModal extends LitElement {
       model: this._model.trim(),
       autonomy: this._autonomy,
       context_tokens: Math.max(2048, parseInt(this._contextTokens, 10) || 16384),
+      autonomy_policy: this._policy,
+      max_autonomy_rounds: Math.max(1, parseInt(this._maxAutoRounds, 10) || 6),
+      autonomy_share_context: this._shareContext,
     };
     if (this._apiKey) updates.api_key = this._apiKey;
     store.setConfig(updates);
@@ -216,6 +225,32 @@ export class BaSettingsModal extends LitElement {
           @input=${(e) => { this._contextTokens = e.target.value; }}>
         <div class="hint">Older exchanges are trimmed to fit this budget. Lower values keep
           long sessions fast - in-browser models especially slow down as the context grows.</div>
+
+        <div class="section">${icon("rectangle-group")} Autonomy (orchestrator / swarm)</div>
+        <label>Policy</label>
+        <ba-segmented
+          .options=${[
+            { value: "auto_until_done", label: "Auto until done" },
+            { value: "pause_when_blocked", label: "Pause when blocked" },
+          ]}
+          .value=${this._policy}
+          @input=${(e) => { this._policy = e.detail.value; }}></ba-segmented>
+        <div class="hint">Auto until done runs round after round until objectives are met or the
+          round cap; pause when blocked hands control back when the evaluator sees no path forward.</div>
+
+        <label>Max autonomy rounds</label>
+        <input class="text" type="number" min="1" step="1"
+          .value=${String(this._maxAutoRounds)}
+          @input=${(e) => { this._maxAutoRounds = e.target.value; }}>
+
+        <div class="switchrow">
+          <ba-switch .on=${this._shareContext}
+            @input=${(e) => { this._shareContext = e.detail.value; }}></ba-switch>
+          <span>Share orchestrator context with workers
+            <div class="sub">Off (default): workers run blind on just their task. On: each worker is
+              seeded with the objective list - so blind vs informed can be compared.</div>
+          </span>
+        </div>
 
         <div slot="footer" style="display: flex; gap: 8px;">
           <button class="btn cancel" @click=${() => this.dispatchEvent(new CustomEvent("close"))}>Cancel</button>
