@@ -37,3 +37,13 @@ def skills_dir() -> str:
 def register(mcp) -> None:
     from . import tools
     tools.register(mcp)
+
+    # Expose blrig as a curated SDK so agent-authored tools can COMPOSE the
+    # rigging framework (perception / contract / existing skills) in a single
+    # jailed tool, instead of reinventing it — see blrig.api. Optional: the
+    # agent registry only exists in recent cores.
+    try:
+        from blmcp.agent_registry import sandbox
+        sandbox.register_sdk_modules("rigging", ["blrig"])
+    except ImportError:
+        pass

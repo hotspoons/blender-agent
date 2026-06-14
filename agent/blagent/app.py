@@ -226,6 +226,20 @@ async def _handle_control(runtime: AgentRuntime, ws: WebSocket, data: dict[str, 
             )
             if not ok:
                 await ws.send_json({"type": "error", "message": "no pending confirmation for that call"})
+        elif msg_type == "approve_agent_tool":
+            name = str(data.get("name", ""))
+            approve = bool(data.get("approve", False))
+            ok = runtime.approve_agent_tool(name, approve)
+            await runtime.emit({
+                "type": "agent_tool_approval",
+                "name": name,
+                "approved": bool(approve and ok),
+                "ok": ok,
+            })
+            if not ok:
+                await ws.send_json({
+                    "type": "error",
+                    "message": "no agent tool {!r} awaiting approval".format(name)})
         elif msg_type == "abort":
             runtime.abort(str(data.get("session_id", "")))
         elif msg_type == "ping":

@@ -298,6 +298,13 @@ class Store extends EventTarget {
     this.send({ type: "confirm", session_id: this.state.sessionId, call_id: callId, approve });
   }
 
+  // Human decision on an agent-authored tool saved inert pending import
+  // approval (the registry's "Tier B" escape path). Trusted server-side;
+  // the model cannot reach this.
+  approveAgentTool(name, approve) {
+    this.send({ type: "approve_agent_tool", name, approve });
+  }
+
   abort() {
     this.send({ type: "abort", session_id: this.state.sessionId });
   }

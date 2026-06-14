@@ -61,6 +61,7 @@ export class BaChatStage extends LitElement {
     _openThinks: { state: true },
     _closedThinks: { state: true },
     _lightbox: { state: true },
+    _approvals: { state: true },
   };
 
   constructor() {
@@ -69,6 +70,9 @@ export class BaChatStage extends LitElement {
     this._streaming = "";
     this._toolOrder = [];
     this._pending = null;
+    // tool-name -> "approved" | "rejected", once the human decides on a
+    // pending agent-authored tool.
+    this._approvals = {};
     this._error = "";
     this._busy = false;
     this._drafting = null;
@@ -509,6 +513,7 @@ export class BaChatStage extends LitElement {
               <div style="margin-top: 8px;">
                 <ba-json label="Result" .data=${call.data}></ba-json>
               </div>` : nothing}
+            ${this._renderToolApproval(call.data)}
           </div>` : nothing}
         ${call.media_ids?.length ? html`
           <div class="tool-body media-strip">
@@ -680,6 +685,40 @@ export class BaChatStage extends LitElement {
               </div>` : nothing}
           </div>`;
       })}
+    `;
+  }
+
+  _approveTool(name, approve) {
+    store.approveAgentTool(name, approve);
+    this._approvals = { ...this._approvals, [name]: approve ? "approved" : "rejected" };
+  }
+
+  /**
+   * When an author_tool result is INERT pending import approval, show the
+   * human an Allow/Deny gate (the in-process counterpart to the MCP
+   * elicitation external clients get). The model cannot reach this path.
+   */
+  _renderToolApproval(data) {
+    if (!data || typeof data !== "object" || !data.needs_approval) return nothing;
+    const name = data.name;
+    const imports = data.needs_approval.imports || [];
+    const flags = data.needs_approval.flags || [];
+    const decided = this._approvals[name];
+    if (decided) {
+      return html`<div class="confirm"><div class="q">
+        Tool <code>${name}</code> ${decided === "approved" ? "approved — it can run now." : "rejected and discarded."}
+      </div></div>`;
+    }
+    const wants = [
+      imports.length ? `imports: ${imports.join(", ")}` : "",
+      flags.length ? `dynamic exec: ${flags.join(", ")}` : "",
+    ].filter(Boolean).join("; ");
+    return html`
+      <div class="confirm">
+        <div class="q">Agent tool <code>${name}</code> is saved but INERT — it requests ${wants}, outside the 3D-modeling allowlist. Approve so it can run?</div>
+        <button class="yes" @click=${() => this._approveTool(name, true)}>${icon("check")} Approve</button>
+        <button class="no" @click=${() => this._approveTool(name, false)}>${icon("x-mark")} Reject</button>
+      </div>
     `;
   }
 

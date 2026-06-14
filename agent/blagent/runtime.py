@@ -270,6 +270,23 @@ class AgentRuntime:
             return False
         return session.engine.resolve_confirm(call_id, approve)
 
+    def approve_agent_tool(self, name: str, approve: bool) -> bool:
+        """
+        Human decision on an agent-authored tool that was saved INERT
+        pending import approval. Trusted path (the model cannot reach it):
+        flips the registry store so an approved tool becomes runnable, or a
+        rejected one is removed. Returns True when a pending tool matched.
+        """
+        try:
+            from blmcp.agent_registry import store
+        except ImportError:
+            return False
+        tool = store.get(name)
+        if tool is None or not tool.pending_imports:
+            return False
+        store.set_approval(name, approve)
+        return True
+
     def abort(self, session_id: str) -> bool:
         session = self._sessions.get(session_id)
         if session is None or session.task is None or session.task.done():

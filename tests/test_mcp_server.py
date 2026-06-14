@@ -83,7 +83,9 @@ def _source_tool_definitions() -> dict[str, dict[str, object]]:
         with open(path, encoding="utf-8") as fh:
             module = ast.parse(fh.read(), filename=path)
         for node in ast.walk(module):
-            if not isinstance(node, ast.FunctionDef):
+            # async tools (e.g. author_tool, which awaits ctx.elicit) are
+            # AsyncFunctionDef — count them too.
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             is_tool = any(
                 isinstance(deco, ast.Call) and
@@ -93,9 +95,23 @@ def _source_tool_definitions() -> dict[str, dict[str, object]]:
             )
             if not is_tool:
                 continue
-            arg_names = [arg.arg for arg in node.args.args]
-            required_count = len(arg_names) - len(node.args.defaults)
-            required_names = arg_names[:required_count]
+            # FastMCP injects Context-typed params and excludes them from the
+            # input schema, so they are not tool arguments — skip them here
+            # too (and keep the default/required alignment correct).
+            all_args = node.args.args
+            n_default = len(node.args.defaults)
+            first_default = len(all_args) - n_default
+            arg_names = []
+            required_names = []
+            for index, arg in enumerate(all_args):
+                ann = arg.annotation
+                is_ctx = (isinstance(ann, ast.Name) and ann.id == "Context") or \
+                         (isinstance(ann, ast.Attribute) and ann.attr == "Context")
+                if is_ctx:
+                    continue
+                arg_names.append(arg.arg)
+                if index < first_default:
+                    required_names.append(arg.arg)
             tool_defs[node.name] = {
                 "args": arg_names,
                 "required": required_names,

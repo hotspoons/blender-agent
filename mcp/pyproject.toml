@@ -27,6 +27,8 @@ where = ["."]
     "data/welcome_prompt.md",
     # Builtin skill collection (Anthropic SKILL.md layout).
     "data/skills/**/*",
+    # Bundled Tier-B agent tools (search-discovered, NOT core/golden).
+    "data/agent_tools/**/*",
     # Blender Python API reference.
     "data/api/**/*.rst",
     # Blender user manual.
@@ -48,6 +50,7 @@ module = [
     "bpy", "bpy.*",
     "bmesh", "bmesh.*",
     "mathutils", "mathutils.*",
+    "numpy", "numpy.*",
     "mcp", "mcp.*",
 ]
 ignore_missing_imports = true

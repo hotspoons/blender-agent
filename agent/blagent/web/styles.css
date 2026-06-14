@@ -88,8 +88,8 @@ html[data-theme="light"] {
   --radius-lg: 0.75rem;
   --font-sans: "Jost", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --overlay-blur: 3px;
-  --overlay-saturate: 100%;
+  --overlay-blur: 14px;
+  --overlay-saturate: 240%;
 }
 
 * { box-sizing: border-box; }

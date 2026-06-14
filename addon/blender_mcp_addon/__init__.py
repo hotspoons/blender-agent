@@ -302,9 +302,13 @@ class _BlenderMCPPreferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         max=_PORT_MAX,
     )
     agent_open_browser: BoolProperty(  # type: ignore[valid-type]
-        name="Open Browser",
-        description="Open the agent web UI in a browser when the agent starts",
-        default=True,
+        name="Open Agent on Startup",
+        description=(
+            "When the agent auto-starts with Blender, also open its web UI in a "
+            "browser. Off by default - opt in if you want the UI every launch.\n"
+            "(Clicking Start manually always opens the UI regardless.)"
+        ),
+        default=False,
     )
 
     def _update_skills_config(self, _context: bpy.types.Context) -> None:
@@ -529,24 +533,56 @@ def _agent_title_sync_handler(_filepath: object = None) -> None:
     agent_launch.update_title(_instance_title())
 
 
+def _agent_start_from_prefs(prefs: "_BlenderMCPPreferences", open_browser: bool) -> str:
+    """
+    Start the web agent per preferences - the Web UI and/or MCP-over-HTTP,
+    whichever are enabled. Requires the bridge server to be running. Opens the
+    browser when *open_browser* and the UI is enabled. Returns the launch kind;
+    raises RuntimeError with a user-facing message on failure.
+
+    Port conflicts (another Blender instance holding the preferred port) are
+    resolved inside ``agent_launch.start``, which walks both the UI and MCP
+    ports upward to the next free slot. Shared by the manual Start operator and
+    the startup auto-start path.
+    """
+    from . import agent_launch
+
+    ui_port = prefs.agent_port if prefs.use_agent else None
+    mcp_port = prefs.agent_mcp_port if prefs.agent_use_mcp else None
+    if ui_port is None and mcp_port is None:
+        raise RuntimeError("Enable the Web Agent UI and/or Serve MCP over HTTP first")
+    if not mcp_to_blender_server.is_running():
+        raise RuntimeError("The MCP bridge server must be running first")
+
+    kind = agent_launch.start(
+        host="127.0.0.1",
+        port=ui_port,
+        mcp_port=mcp_port,
+        bridge_host=prefs.host,
+        bridge_port=_State.bridge_port_actual or prefs.port,
+        title=_instance_title(),
+    )
+    agent_port, _mcp_port = agent_launch.running_ports()
+    # The caller decides whether to open the browser (manual Start: always;
+    # auto-start: only when the opt-in "Open Agent on Startup" pref is set).
+    if open_browser and prefs.use_agent and agent_port:
+        # Give the server a moment to bind before the browser hits it.
+        url = "http://127.0.0.1:{:d}/".format(agent_port)
+        bpy.app.timers.register(
+            lambda: bpy.ops.wm.url_open(url=url) and None,
+            first_interval=1.0,
+        )
+    return kind
+
+
 class _BLMCP_OT_agent_start(bpy.types.Operator):  # type: ignore[misc]
     bl_idname = "blmcp.agent_start"
     bl_label = "Start Agent"
     bl_description = "Start the web agent server for this Blender instance"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        from . import agent_launch
-
         prefs = context.preferences.addons[__package__].preferences
         _State.agent_error = ""
-
-        # The Web Agent UI and MCP over HTTP are independent; serve whichever
-        # are enabled. At least one must be on.
-        ui_port = prefs.agent_port if prefs.use_agent else None
-        mcp_port = prefs.agent_mcp_port if prefs.agent_use_mcp else None
-        if ui_port is None and mcp_port is None:
-            self.report({"ERROR"}, "Enable the Web Agent UI and/or Serve MCP over HTTP first")
-            return {"CANCELLED"}
 
         # Both services' tools execute through the TCP bridge - make sure
         # it is up first (auto-start usually has it running already).
@@ -555,32 +591,13 @@ class _BLMCP_OT_agent_start(bpy.types.Operator):  # type: ignore[misc]
                 bpy.ops.blmcp.server_start()
             except Exception:  # pylint: disable=broad-exception-caught
                 pass
-            if not mcp_to_blender_server.is_running():
-                self.report({"ERROR"}, "The MCP bridge server must be running first")
-                return {"CANCELLED"}
 
         try:
-            kind = agent_launch.start(
-                host="127.0.0.1",
-                port=ui_port,
-                mcp_port=mcp_port,
-                bridge_host=prefs.host,
-                bridge_port=_State.bridge_port_actual or prefs.port,
-                title=_instance_title(),
-            )
+            kind = _agent_start_from_prefs(prefs, open_browser=True)
         except RuntimeError as ex:
             _State.agent_error = str(ex)
             self.report({"ERROR"}, str(ex))
             return {"CANCELLED"}
-
-        agent_port, _mcp_port = agent_launch.running_ports()
-        if prefs.use_agent and prefs.agent_open_browser and agent_port:
-            # Give the server a moment to bind before the browser hits it.
-            url = "http://127.0.0.1:{:d}/".format(agent_port)
-            bpy.app.timers.register(
-                lambda: bpy.ops.wm.url_open(url=url) and None,
-                first_interval=1.0,
-            )
         self.report({"INFO"}, "Started ({:s})".format(kind))
         return {"FINISHED"}
 
@@ -687,6 +704,16 @@ def _autostart_timer() -> None:
         execute_interactive.run,
         first_interval=mcp_to_blender_server.TIMER_INTERVAL_ACTIVE,
         persistent=True)
+
+    # Auto-start the web agent / MCP-over-HTTP as well when enabled, so a single
+    # Blender startup brings up everything the user turned on (not just the
+    # bridge). Port conflicts are resolved inside the agent launcher; a failure
+    # only surfaces in the preferences UI and never blocks the bridge.
+    if prefs.use_agent or prefs.agent_use_mcp:
+        try:
+            _agent_start_from_prefs(prefs, open_browser=prefs.agent_open_browser)
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            _State.agent_error = str(ex)
 
 
 def _cli_execute_handler(argv: list[str]) -> int:
