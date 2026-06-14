@@ -63,6 +63,55 @@ straight limb. If a part is flipped end-for-end (hand pointing the wrong way),
 rotate that one part 180° about the axis before stacking — the stacker aligns
 positions, not which end is "out."
 
+## Find the joint axis from the SOURCE part — don't guess on the copy
+
+The slow, wrong way to assemble a kit limb is to detect sockets on the
+already-placed/rotated/scaled copies: they have multiple square features (a
+cog-center hole, side box pockets, a claw) and you cannot tell which one the
+designer meant. **Go back to the clean source part instead** — its connector
+geometry is unambiguous.
+
+Kit connectors are almost always **coaxial with the joint**: the designer parks
+a loose square peg island at the part's cog center, running along the cog axis,
+so it threads through the square hole in the middle of the toothed cog face. The
+side "boxes" are just housing around that axial joint — not separate sockets.
+
+`find_kit_connector` (bundled Tier-B tool) extracts this for you:
+
+1. Decomposes the mesh into loose islands.
+2. Detects the **cog tooth ring** — a group of >=4 near-identical small square
+   posts. That ring *defines* the joint axis and center (robust: teeth come in a
+   ring, so they're trivially distinguished from the lone peg).
+3. Returns the lone elongated square island that is **coaxial** with the ring
+   (axis parallel, centered on the ring axis) as the `connector`, plus
+   `joint_axis` and `joint_center`.
+
+Run it on the source parts of a chain (e.g. `modular_rotator`, `modular_elbow`)
+— if they report the same connector cross-section + a consistent axis, that IS
+the kit's connector and the axis you assemble along.
+
+### Assembling a pegged chain
+
+With the connector length `L` and an insertion depth `d` (~1.5mm), stack
+`[partA, peg, partB]` along `joint_axis` so the peg threads through both
+cog-center holes:
+
+- peg inserts `d` into partA and `d` into partB,
+- the **exposed** connector between the two cog faces is `L - 2*d` (set the
+  cog-face spacing to this so the peg reads as a visible connector, not buried).
+
+Use `stack_parts` with a negative gap for the insertion, or place by cap-centroid
+math directly. The parts stay three separate solids — printable, and the peg is
+its own part.
+
+## Don't punt the hard part
+
+If an assembly is fiddly, the answer is to **read the source geometry and derive
+the constraint deterministically** (as above) — not to hand the 3D reasoning back
+to the user. The whole point of this toolkit is that a model figures the kit out
+once and ships a tool so nobody re-derives it. Solve the task, then generalise it
+into a tool/skill so the next run starts from the solution.
+
 ## When to reach for what
 
 - Clean cylindrical ports (smooth bores, ball-sockets, plain pegs) →

@@ -1,0 +1,19 @@
+{
+  "name": "find_kit_connector",
+  "description": "Kit-bash analysis: find a kit part's joining peg and the joint AXIS it threads along, robustly, without guessing from ambiguous box faces or gear teeth. Method: decompose the mesh into loose islands; detect the cog 'tooth ring' (a group of >=4 near-identical small square posts) which DEFINES the joint axis and center; then return the lone elongated square island that is COAXIAL with that ring (axis parallel, centered on the ring's axis) as the connector peg. Returns {connector:{center,axis,length,cross_section,squareness,verts}, joint_axis, joint_center, teeth_count}. Falls back to a connector-likeness ranking when no clear tooth ring exists. Read-only. Pair with stack_parts: stack [partA, peg, partB] along joint_axis with a negative gap so the peg inserts through both center holes (exposed = peg_length - 2*insert). See the kitbash-axis-stacking skill.",
+  "params_schema": {
+    "type": "object",
+    "properties": {
+      "name": {"type": "string", "description": "Mesh object to decompose."},
+      "min_verts": {"type": "integer", "description": "Ignore islands smaller than this. Default 8."},
+      "coax_dist": {"type": "number", "description": "Max perpendicular distance from the ring axis for an island to count as coaxial. Default 6."}
+    },
+    "required": ["name"]
+  },
+  "granted_imports": [],
+  "approved": true,
+  "author": "modeler-agent",
+  "version": 2,
+  "created": "2026-06-14",
+  "pending_imports": []
+}
