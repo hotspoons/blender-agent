@@ -55,6 +55,51 @@ one mesh first (faster, single modifier). For repeated hole patterns,
 instance one cutter with an Array modifier, then use it as the
 boolean object (apply the array on the cutter first).
 
+For N operands that *overlap each other* (e.g. one socket per face of a
+box, meeting at the edges), prefer **sequential** unions of closed
+solids over a single combined operand with `use_self=True`. Sequential
+closed-vs-closed unions stay manifold; one `use_self` pass over a
+self-intersecting combined mesh tends to spray non-manifold slivers.
+
+## Open shells and receptacles (cups, ports, vents, sockets)
+
+An operand that is an open shell - a cup, a recess, a vent with an
+unclosed mouth - breaks the boolean: the solver can't decide inside vs
+outside, so unions leave holes and `use_self=True` makes it worse. The
+robust pattern is **cap -> boolean as closed solids -> re-open**:
+
+1. Cap the opening so the shell is a closed manifold (fill the boundary
+   loop, e.g. `bmesh.ops.edgenet_fill`). Extruding the rim ~1 mm before
+   capping keeps the cap clear of the target's surface and avoids the
+   coplanar-face failure mode.
+2. Run the boolean as closed-vs-closed (union to add the body, or
+   difference to carve the cavity). This stays manifold.
+3. Re-open the mouth by deleting the cap faces - locate them by a
+   geometric test (centroid on the cap plane, inside the opening
+   footprint) or by tagging them with a material/vertex group before
+   the boolean.
+
+To make a recess flush instead of a protruding lump, grow the target
+body out to the rim plane and *difference* the shell - a difference of
+two closed solids is inherently watertight, and "cut the cavity into
+solid material" is what gives a snap-fit undercut something to bite.
+
+## Diagnose precisely: open vs non-manifold vs degenerate
+
+`len(e.link_faces) != 2` lumps three different problems together. Split
+them - they have different causes and fixes:
+
+- **open / boundary** (`e.is_boundary`, 1 face) - a hole or an
+  *intentional* opening (a pocket mouth). Not always a bug.
+- **non-manifold** (`not e.is_manifold and not e.is_boundary`, >2 faces
+  or wire) - a real defect from coplanar overlaps or self-intersection.
+- **degenerate faces** (`f.calc_area() < 1e-8`) - zero-area slivers,
+  usually boolean debris; clear with `dissolve_degenerate`.
+
+`get_mesh_diagnostics(name)` returns exactly this triage (plus
+`is_watertight`, volume, world bounds, scale/normal flags) in one call -
+run it after each boolean instead of re-typing a `bmesh` stats block.
+
 ## Gotchas
 
 - A boolean that "does nothing" usually means inverted normals on the

@@ -293,6 +293,9 @@ Core tools (always present):
   linked libraries, path info, usage guess.
 - `get_objects_summary`, `get_object_detail_summary` — scene hierarchy and
   per-object detail.
+- `get_mesh_diagnostics` — read-only topology / printability report for a mesh
+  (watertight check, open vs non-manifold vs degenerate triage, bounds,
+  volume); useful before a boolean, before export, or after applying modifiers.
 - `get_python_api_docs` — Blender Python API reference for an identifier (or
   `*` discovery).
 - `get_screenshot_of_area_as_image`, `get_screenshot_of_window_as_image`,

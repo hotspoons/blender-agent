@@ -232,6 +232,42 @@ EXPECTED_TOOLS = [
         }
     },
     {
+        "name": "get_mesh_diagnostics",
+        "description": "\n"
+        "        Return a topology / printability report for a mesh object.\n"
+        "\n"
+        "        Answers \"is this watertight / printable?\" in one call: vert/edge/face\n"
+        "        counts; the triage of open boundary edges (holes/openings) vs\n"
+        "        non-manifold edges (>2 faces or wire) vs degenerate faces; the number\n"
+        "        of distinct boundary loops; an ``is_watertight`` flag; bmesh volume;\n"
+        "        world-space dimensions and bounding box; and whether scale is applied\n"
+        "        and normals are consistent.\n"
+        "\n"
+        "        Useful before a boolean, before export, or after applying a modifier\n"
+        "        stack. With *evaluated* True (default) it reports the geometry you\n"
+        "        would export (modifiers applied); set it False to inspect the raw\n"
+        "        base mesh.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "name": {
+                    "title": "Name",
+                    "type": "string"
+                },
+                "evaluated": {
+                    "default": True,
+                    "title": "Evaluated",
+                    "type": "boolean"
+                }
+            },
+            "required": [
+                "name"
+            ],
+            "title": "get_mesh_diagnosticsArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "get_object_detail_summary",
         "description": "\n"
         "        Return a structured summary of the object identified by *name*.\n"
