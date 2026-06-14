@@ -28,6 +28,7 @@ from .tools import Tool, ToolContext, ToolError, ToolResult
 
 class AskUserTool(Tool):
     name = "ask_user"
+    group = "interaction"
     read_only = True  # asking is not scene work; don't burn a full round on it
     description = (
         "Ask the USER a question and wait for their answer before continuing. "
@@ -92,6 +93,7 @@ class AskUserTool(Tool):
 
 class SkillsTool(Tool):
     name = "skills"
+    group = "knowledge"
     # Introspection: list/get/search/memory dominate, and even save writes a
     # cheap skill file (not scene work) — so a pure-skills round is discounted.
     read_only = True
@@ -177,6 +179,7 @@ class SkillsTool(Tool):
 
 class MediaTool(Tool):
     name = "media"
+    group = "media"
     description = (
         "Recall media produced earlier in this conversation by short id "
         "(i1, i2, ...). Subcommands: list (all media with ids and labels), "
@@ -213,6 +216,7 @@ class MediaTool(Tool):
 
 class ContinueWorkingTool(Tool):
     name = "continue_working"
+    group = "control"
     description = (
         "Extend the current turn's tool-call budget when you are in the middle "
         "of productive multi-step work and about to run out of rounds. "
@@ -244,6 +248,7 @@ _AUTONOMY_LEVELS = ("ask", "yolo", "orchestrator", "swarm")
 
 class SetAutonomyTool(Tool):
     name = "set_autonomy"
+    group = "control"
     description = (
         "Adjust YOUR OWN autonomy level for the rest of this session, without the "
         "user touching the UI slider. Levels escalate capability: "

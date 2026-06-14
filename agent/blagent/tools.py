@@ -93,6 +93,9 @@ class Tool:
 
     name: str = ""
     description: str = ""
+    # Organizational group, for RBAC group-level rules (permissions.yaml) and
+    # a future enable/disable-by-group UI. Free-form; "general" by default.
+    group: str = "general"
     destructive: bool = False
     # Read-only queries whose results go stale as the scene changes;
     # the engine ages these out of the context harder (they are cheap

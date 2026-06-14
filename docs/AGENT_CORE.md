@@ -243,6 +243,24 @@ brand) before render. The server-pushed profile (YAML → control socket →
 
 ---
 
+## 4b. Tool RBAC (permissions matrix)
+
+`agent/blagent/permissions.py` + `data/permissions.yaml`: a role → tool
+matrix, loaded from a YAML file that ships with the app and is overridable per
+deployment (`BLENDER_AGENT_PERMISSIONS`). Each (role, tool) resolves to a
+**level**: `allow`, `elicit` (offered but the harness confirms with the user
+before running), or `disabled` (hidden from the role — not in its registry).
+Levels can be set per tool (exact or wildcard), per tool **group** (tools
+declare `Tool.group`), or as the role `default`; most specific wins. Roles are
+matched by string (not enumerated in code), so deployments add roles without
+code changes. Starting roles: `orchestrator`, `worker`, `reviewer`, `auditor`
+(+ `default` catch-all).
+
+`AgentRuntime.registry_for_role(role)` returns the matrix-filtered registry;
+workers run on `registry_for_role("worker")` (so `set_autonomy`/`ask_user` are
+hidden), with a hardcoded `WORKER_DENY` floor as defense in depth. The matrix
+is introspectable (`as_public`) for a future live RBAC editor / group toggles.
+
 ## 5. Build sequence (each step tested, main stays green)
 
 1. **Python transport + profile + YAML** — introduce `ToolBackend`,

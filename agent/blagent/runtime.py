@@ -25,6 +25,7 @@ from typing import Any, Awaitable, Callable
 from .agent_tools import AskUserTool, ContinueWorkingTool, MediaTool, SetAutonomyTool, SkillsTool
 from .backend import PythonToolBackend, ToolBackend
 from .engine import AgentEngine
+from .permissions import ToolPermissions, WORKER_DENY
 from .profile import AgentProfile, blender_profile
 from .llm import LlmClient, LlmError, LocalLlmBridgeClient, OpenAiHttpClient
 from .media import MediaLibrary
@@ -38,11 +39,10 @@ _log = logging.getLogger("blagent.runtime")
 # below it is almost certainly a failed/partial export, surfaced as suspect.
 _MIN_BLEND_BYTES = 1024
 
-# Tools that belong to the ORCHESTRATOR / interactive user only — never
-# handed to a worker sub-agent. A worker that can change autonomy or ask the
-# user a question breaks the delegation model (and is what made workers sit
-# there asking questions instead of doing their task).
-_WORKER_TOOL_DENYLIST = frozenset({"set_autonomy", "ask_user"})
+# Defense-in-depth floor for the worker surface: even if the RBAC matrix is
+# misconfigured, a worker engine must never reach these orchestrator/user-only
+# meta-tools. Mirrors the `worker` role's deny list in permissions.yaml.
+_WORKER_TOOL_DENYLIST = frozenset(WORKER_DENY)
 
 # Pinned into the worker's SYSTEM prompt (which _fit_context never trims), so
 # the mission survives even after huge welcome/scene-summary tool results
@@ -223,11 +223,14 @@ class AgentRuntime:
     """
 
     def __init__(self, store: AgentStore, backend: "ToolBackend | list[Tool]",
-                 profile: "AgentProfile | None" = None) -> None:
+                 profile: "AgentProfile | None" = None,
+                 permissions: "ToolPermissions | None" = None) -> None:
         self.store = store
         # Domain flavor (brand/copy/prompts). Defaults to the Blender build's
         # profile; a YAML build passes its own.
         self.profile = profile or blender_profile()
+        # Tool RBAC matrix (role -> allowed tools), from data/permissions.yaml.
+        self.permissions = permissions or ToolPermissions.load()
         self.local_llm = LocalLlmBridge()
         # Instance label (e.g. the .blend file name) + bound UI port,
         # surfaced as the browser tab title to tell instances apart.
@@ -279,6 +282,12 @@ class AgentRuntime:
     def public_ui_profile(self) -> dict[str, Any]:
         """The UI branding block pushed to the frontend (web applyProfile)."""
         return self.profile.as_ui_public()
+
+    def registry_for_role(self, role: str) -> ToolRegistry:
+        """The tool registry a given RBAC *role* may use (see permissions.yaml).
+        The interactive/orchestrator path uses the full ``self.registry``; a
+        worker gets the matrix-filtered surface."""
+        return ToolRegistry(self.permissions.filter_tools(role, list(self.registry)))
 
     @classmethod
     async def create(cls, store: AgentStore, backend: ToolBackend,
@@ -672,7 +681,8 @@ class AgentRuntime:
             swarm_strategy = None
             probe = self._make_probe(session_id)
             runner = ChildSessionRunner(
-                registry=self.registry,
+                # RBAC: workers get the matrix-filtered tool surface.
+                registry=self.registry_for_role("worker"),
                 make_llm=self._make_llm,
                 model=model,
                 emit=self.emit,

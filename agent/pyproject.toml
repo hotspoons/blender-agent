@@ -26,6 +26,7 @@ include = ["blagent*"]
 [tool.setuptools.package-data]
 "blagent" = [
     "data/system_prompt.md",
+    "data/permissions.yaml",
     "web/**/*",
 ]
 

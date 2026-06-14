@@ -1,0 +1,56 @@
+# Tool RBAC — role → tool permissions matrix (see blagent/permissions.py).
+#
+# Deployed with the app and overridable per deployment (point
+# BLENDER_AGENT_PERMISSIONS at another file). Each (role, tool) resolves to a
+# LEVEL:
+#   allow      call freely
+#   elicit     offered, but the harness confirms with the user before running
+#   disabled   hidden from the role (not in its registry)
+#
+# A level may be set per tool (exact name or shell wildcard), per tool GROUP
+# (tools declare a `group`), or as the role `default`. Most specific wins:
+# exact tool > wildcard tool > group > role default > allow. Unknown roles
+# inherit `default`. Roles are matched by string, so new roles can be added
+# here without code changes (start set: orchestrator, worker, reviewer,
+# auditor; `default` is the catch-all interactive agent).
+roles:
+  default:
+    default: allow
+
+  # Drives objectives by delegating to workers. Full surface, but changing
+  # autonomy is confirmed with the user.
+  orchestrator:
+    default: allow
+    tools:
+      set_autonomy: elicit
+
+  # Autonomous sub-agent executing one delegated task. No user to ask and no
+  # authority over its own autonomy, so those meta-tools are hidden.
+  worker:
+    default: allow
+    tools:
+      set_autonomy: disabled
+      ask_user: disabled
+
+  # Context-blind budget adjudicator (reviewer.py): judges text, runs no tools.
+  reviewer:
+    default: disabled
+
+  # Independent verifier (no shared context): read-only state probes only.
+  # `default: disabled` with an allow-list means everything else is hidden.
+  auditor:
+    default: disabled
+    tools:
+      "get_*": allow
+      "*summary*": allow
+      "*diagnostics*": allow
+      skills: allow
+      media_io: allow
+
+  # Example of group-level control (tools declare a `group`); uncomment and
+  # adapt once tool groups are assigned:
+  # reviewer:
+  #   default: disabled
+  #   groups:
+  #     read-only: allow
+  #     destructive: disabled
