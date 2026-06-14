@@ -251,6 +251,72 @@ class TestAutonomyLoop(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
+class TestIndependentAuditor(unittest.TestCase):
+    """Opt-in adversarial audit: re-checks goals against state, flags overclaims."""
+
+    def _llm(self, text: str) -> Any:
+        from blagent.llm import LlmChunk, LlmClient
+
+        class Once(LlmClient):
+            async def stream(self, request: dict[str, Any]) -> Any:
+                yield LlmChunk(content=text)
+        return Once()
+
+    def _objs(self, a: Any) -> Any:
+        o1 = a.Objective(id="o1", text="torso", acceptance="torso exists", status="met",
+                         evidence="orchestrator says built")
+        o2 = a.Objective(id="o2", text="arms", acceptance="two arms", status="met",
+                         evidence="orchestrator says built")
+        return [o1, o2]
+
+    def test_audit_passes_when_state_corroborates(self) -> None:
+        a = _import_autonomy()
+        llm = self._llm(
+            '{"summary":"all good","verdicts":['
+            '{"objective_id":"o1","met":true,"overclaim":false,"evidence":"torso in scene"},'
+            '{"objective_id":"o2","met":true,"overclaim":false,"evidence":"two arms in scene"}]}')
+
+        async def probe() -> str:
+            return "objects: torso, arm_L, arm_R"
+
+        report = _run(a.IndependentAuditor(llm, "m", probe=probe).audit(self._objs(a)))
+        self.assertTrue(report.passed)
+        self.assertEqual(report.overclaims, [])
+
+    def test_audit_catches_overclaim(self) -> None:
+        a = _import_autonomy()
+        # Orchestrator claimed both met; auditor finds o2 missing from the scene.
+        llm = self._llm(
+            '{"summary":"o2 missing","verdicts":['
+            '{"objective_id":"o1","met":true,"overclaim":false,"evidence":"torso present"},'
+            '{"objective_id":"o2","met":false,"overclaim":true,"evidence":"no arm objects in scene"}]}')
+
+        async def probe() -> str:
+            return "objects: torso"
+
+        report = _run(a.IndependentAuditor(llm, "m", probe=probe).audit(self._objs(a)))
+        self.assertFalse(report.passed)
+        self.assertIn("o2", report.overclaims)
+
+    def test_audit_fails_closed_and_infers_overclaim(self) -> None:
+        a = _import_autonomy()
+        # Auditor returns met=false WITHOUT setting overclaim; since the
+        # orchestrator claimed o1 met, the auditor must still flag the overclaim.
+        llm = self._llm(
+            '{"verdicts":[{"objective_id":"o1","met":false,"evidence":"empty scene"}]}')
+
+        async def probe() -> str:
+            return "objects: (none)"
+
+        report = _run(a.IndependentAuditor(llm, "m", probe=probe).audit(self._objs(a)))
+        self.assertFalse(report.passed)
+        by_id = {v.objective_id: v for v in report.verdicts}
+        self.assertTrue(by_id["o1"].overclaim)          # inferred from claim vs ruling
+        self.assertFalse(by_id["o2"].met)               # no verdict -> unverified
+        self.assertTrue(by_id["o2"].overclaim)          # was claimed met
+
+
+@unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
 class TestChildSessionRunner(unittest.TestCase):
     """
     The child-session strategy made real: a worker task runs in its own

@@ -321,6 +321,122 @@ class StateAwareEvaluator:
 
 
 # --------------------------------------------------------------------------
+# Independent auditor (opt-in) — adversarial final check for reward-hacking
+# --------------------------------------------------------------------------
+
+@dataclasses.dataclass
+class AuditVerdict:
+    """The auditor's independent ruling on one objective."""
+
+    objective_id: str
+    met: bool                 # the auditor's OWN judgement from project state
+    overclaim: bool           # orchestrator claimed met, but the auditor says not
+    evidence: str             # what the state actually shows
+
+
+@dataclasses.dataclass
+class AuditReport:
+    passed: bool                       # auditor independently agrees every objective is met
+    verdicts: list[AuditVerdict]
+    summary: str
+    overclaims: list[str]              # objective ids the orchestrator overclaimed
+
+
+_AUDIT_SYSTEM = (
+    "You are an INDEPENDENT AUDITOR, brought in AFTER a Blender autonomy "
+    "orchestrator declared its work finished. You do NOT share the "
+    "orchestrator's context, history, or assumptions. Your job is to catch "
+    "reward-hacking: agents routinely OVERCLAIM success or take shortcuts — "
+    "exporting an empty file, renaming without modelling, reporting 'done' "
+    "without doing the work. Trust ONLY the PROJECT STATE (the actual scene / "
+    "files) as ground truth. Treat the orchestrator's claims as suspect until "
+    "the state corroborates them. For each objective, rule independently on "
+    "whether its acceptance criteria are ACTUALLY met by the state, and set "
+    "overclaim=true when the orchestrator claimed it met but the state does "
+    "not substantiate that. Be specific in evidence; cite what the state shows "
+    "or fails to show. Reply with ONLY a JSON object:\n"
+    '{"summary": "<one-line overall verdict>", "verdicts": [{"objective_id": '
+    '"<id>", "met": true|false, "overclaim": true|false, "evidence": "<what '
+    'the state shows>"}]}'
+)
+
+
+class IndependentAuditor:
+    """
+    Opt-in final check that does NOT share the orchestrator's context: a fresh
+    LLM session re-probes the real project state and rules, adversarially,
+    on whether each objective was ACTUALLY met — calling out overclaims when
+    the orchestrator declared success the state does not support.
+
+    Independence is by construction: it is given a fresh ``llm`` (no shared
+    transcript), the objectives + the orchestrator's CLAIMED status (to check
+    against, not to trust), and the same read-only ground-truth ``probe``.
+    """
+
+    def __init__(
+            self,
+            llm: LlmClient,
+            model: str,
+            probe: Callable[[], Awaitable[str]] | None = None,
+    ) -> None:
+        self._llm = llm
+        self._model = model
+        self._probe = probe
+
+    async def audit(self, objectives: list[Objective]) -> AuditReport:
+        state = "(no project-state probe configured)"
+        if self._probe is not None:
+            try:
+                state = await self._probe()
+            except Exception as ex:  # pylint: disable=broad-except
+                state = "(project-state probe failed: {:s})".format(ex)
+        claims = "\n".join(
+            "- id={:s} | goal: {:s} | acceptance: {:s} | orchestrator CLAIMED: {:s}{:s}".format(
+                o.id, o.text, o.acceptance,
+                "MET" if o.status == "met" else "unmet",
+                " | its evidence: {:s}".format(o.evidence) if o.evidence else "")
+            for o in objectives
+        )
+        user = (
+            "OBJECTIVES & THE ORCHESTRATOR'S CLAIMS:\n{:s}\n\n"
+            "PROJECT STATE (ground truth — judge against THIS):\n{:s}".format(claims, state)
+        )
+        text = await _complete(self._llm, self._model, _AUDIT_SYSTEM, user)
+        data = _extract_json_object(text)
+        claimed_met = {o.id for o in objectives if o.status == "met"}
+        verdicts: list[AuditVerdict] = []
+        seen: set[str] = set()
+        for raw in data.get("verdicts", []) or []:
+            if not isinstance(raw, dict):
+                continue
+            oid = str(raw.get("objective_id", "")).strip()
+            if not oid or oid in seen:
+                continue
+            seen.add(oid)
+            met = bool(raw.get("met", False))
+            # Overclaim: trust the auditor's ruling — flag whenever the
+            # orchestrator said met but the auditor (or the model) says not.
+            overclaim = bool(raw.get("overclaim", False)) or (oid in claimed_met and not met)
+            verdicts.append(AuditVerdict(
+                objective_id=oid, met=met, overclaim=overclaim,
+                evidence=str(raw.get("evidence", "")).strip()))
+        # Fail closed: an objective the auditor skipped is treated as unverified
+        # (not met), and as an overclaim if the orchestrator had claimed it.
+        for o in objectives:
+            if o.id not in seen:
+                verdicts.append(AuditVerdict(
+                    o.id, False, o.id in claimed_met,
+                    "auditor returned no verdict — treated as unverified"))
+        overclaims = [v.objective_id for v in verdicts if v.overclaim]
+        passed = all(v.met for v in verdicts) and bool(verdicts)
+        summary = str(data.get("summary", "")).strip() or (
+            "All objectives independently verified." if passed
+            else "Independent audit found unmet/overclaimed objectives.")
+        return AuditReport(
+            passed=passed, verdicts=verdicts, summary=summary, overclaims=overclaims)
+
+
+# --------------------------------------------------------------------------
 # Schedulers — how worker tasks map onto runtimes
 # --------------------------------------------------------------------------
 

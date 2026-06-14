@@ -299,7 +299,7 @@ class Store extends EventTarget {
         // Fresh objectives run: reset the live autonomy view (keep no draft).
         this._set({
           busy: true, error: "",
-          autonomy: { objectives: [], agents: {}, agentOrder: [], rounds: [], gathered: null, done: null, draft: null },
+          autonomy: { objectives: [], agents: {}, agentOrder: [], rounds: [], gathered: null, done: null, draft: null, audit: null },
         });
         break;
       case "objectives_draft": {
@@ -350,6 +350,15 @@ class Store extends EventTarget {
       case "swarm_gathered": {
         const a = { ...this.state.autonomy, gathered: {
           master: msg.master || null, components: msg.components || [], objects: msg.objects || [] } };
+        this._set({ autonomy: a });
+        break;
+      }
+      case "autonomy_audit": {
+        // Independent auditor's verdict (opt-in): did the orchestrator really
+        // meet the goals, or overclaim? Surfaced in the autonomy panel.
+        const a = { ...this.state.autonomy, audit: {
+          passed: !!msg.passed, summary: msg.summary || "",
+          overclaims: msg.overclaims || [], verdicts: msg.verdicts || [] } };
         this._set({ autonomy: a });
         break;
       }

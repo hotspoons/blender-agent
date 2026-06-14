@@ -159,6 +159,11 @@ class AgentConfig:
     # (informed worker); when False (default), workers run blind on just
     # their task — so the two can be compared on the same problem.
     autonomy_share_context: bool = False
+    # Opt-in independent audit: after the orchestrator finishes, a FRESH LLM
+    # context (no shared history) re-checks every objective against the real
+    # project state and calls out reward-hacking / overclaims. Off by default
+    # (an extra LLM pass per run).
+    autonomy_audit: bool = False
     # Where worker sub-agents run. "in_process" (default) = ChildSessionRunner
     # in this process; "swarm" = each worker a real subprocess with its own
     # headless Blender (RemoteWorkerStrategy). Default keeps everything local.
@@ -211,6 +216,7 @@ class AgentConfig:
             "autonomy_policy": self.autonomy_policy,
             "max_autonomy_rounds": self.max_autonomy_rounds,
             "autonomy_share_context": self.autonomy_share_context,
+            "autonomy_audit": self.autonomy_audit,
             "autonomy_workers": self.autonomy_workers,
             "autonomy_level": self.autonomy_level,
         }

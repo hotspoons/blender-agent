@@ -413,6 +413,22 @@ export class BaChatStage extends LitElement {
     .worker-controls .stop:disabled { opacity: 0.5; cursor: default; }
     .gather-done { font-size: 13px; color: var(--text-muted); padding: 4px 2px; }
     .gather-done code { color: var(--accent-2); }
+    /* Independent audit panel (opt-in reward-hacking check). */
+    .audit { margin-top: 6px; border: 1px solid var(--border); border-radius: var(--radius-md);
+      background: var(--surface-elevated); padding: 8px 12px; }
+    .audit.ok { border-left: 3px solid var(--success); }
+    .audit.fail { border-left: 3px solid var(--danger); }
+    .audit-head { display: flex; align-items: center; gap: 10px; }
+    .audit-sum { font-size: 13px; color: var(--text); }
+    .audit-over { margin-top: 6px; font-size: 12.5px; color: var(--danger); font-weight: 600; }
+    .audit-row { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; font-size: 12.5px; }
+    .audit-row .dot { width: 14px; text-align: center; }
+    .audit-row.met .dot { color: var(--success); }
+    .audit-row.unmet .dot { color: var(--danger); }
+    .audit-row .aid { font-family: var(--font-mono); color: var(--text-muted); }
+    .audit-row .over-chip { font-size: 10px; font-weight: 700; text-transform: uppercase;
+      color: var(--danger); border: 1px solid var(--danger); border-radius: var(--radius-sm); padding: 0 5px; }
+    .audit-row .aev { flex: 1; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .round-div { display: flex; align-items: center; gap: 10px; margin: 4px 2px 2px;
       font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
       color: var(--text-muted); }
@@ -769,6 +785,28 @@ export class BaChatStage extends LitElement {
           <div class="gather-done">⬇ merged ${a.gathered.components?.length || 0} components →
             <code>${a.gathered.master.split("/").pop()}</code>
             ${a.gathered.objects?.length ? html`<span class="ev"> · ${a.gathered.objects.length} objects: ${a.gathered.objects.join(", ")}</span>` : nothing}</div>` : nothing}
+        ${this._renderAudit(a.audit)}
+      </div>`;
+  }
+
+  _renderAudit(audit) {
+    if (!audit) return nothing;
+    const over = audit.overclaims || [];
+    return html`
+      <div class="audit ${audit.passed ? "ok" : "fail"}">
+        <div class="audit-head">
+          <span class="badge ${audit.passed ? "ok" : "warn"}">
+            ${audit.passed ? "✓ independent audit passed" : "✗ independent audit FAILED"}</span>
+          <span class="audit-sum">${audit.summary}</span>
+        </div>
+        ${over.length ? html`<div class="audit-over">⚠ orchestrator overclaimed: ${over.join(", ")}</div>` : nothing}
+        ${(audit.verdicts || []).map((v) => html`
+          <div class="audit-row ${v.met ? "met" : "unmet"}">
+            <span class="dot">${v.met ? "✓" : "✗"}</span>
+            <span class="aid">${v.objective_id}</span>
+            ${v.overclaim ? html`<span class="over-chip">overclaimed</span>` : nothing}
+            <span class="aev" title=${v.evidence}>${v.evidence}</span>
+          </div>`)}
       </div>`;
   }
 

@@ -24,6 +24,7 @@ export class BaSettingsModal extends LitElement {
     _policy: { state: true },
     _maxAutoRounds: { state: true },
     _shareContext: { state: true },
+    _audit: { state: true },
     _workers: { state: true },
   };
 
@@ -40,6 +41,7 @@ export class BaSettingsModal extends LitElement {
     this._policy = config.autonomy_policy || "auto_until_done";
     this._maxAutoRounds = config.max_autonomy_rounds || 6;
     this._shareContext = !!config.autonomy_share_context;
+    this._audit = !!config.autonomy_audit;
     this._workers = config.autonomy_workers || "in_process";
     this._fetchTimer = null;
   }
@@ -151,6 +153,7 @@ export class BaSettingsModal extends LitElement {
       autonomy_policy: this._policy,
       max_autonomy_rounds: Math.max(1, parseInt(this._maxAutoRounds, 10) || 6),
       autonomy_share_context: this._shareContext,
+      autonomy_audit: this._audit,
       autonomy_workers: this._workers,
     };
     if (this._apiKey) updates.api_key = this._apiKey;
@@ -266,6 +269,16 @@ export class BaSettingsModal extends LitElement {
           <span>Share orchestrator context with workers
             <div class="sub">Off (default): workers run blind on just their task. On: each worker is
               seeded with the objective list - so blind vs informed can be compared.</div>
+          </span>
+        </div>
+
+        <div class="switchrow">
+          <ba-switch .on=${this._audit}
+            @input=${(e) => { this._audit = e.detail.value; }}></ba-switch>
+          <span>Independent audit (catch reward-hacking)
+            <div class="sub">Off (default): trust the orchestrator's verdict. On: after a run, a
+              separate auditor with NO shared context re-checks every objective against the real
+              scene and calls out overclaims. Costs one extra LLM pass per run.</div>
           </span>
         </div>
 

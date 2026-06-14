@@ -14,6 +14,7 @@ __all__ = (
 )
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
@@ -500,7 +501,8 @@ class AgentRuntime:
         """
         from .autonomy import (
             AutonomyOrchestrator, AutoPauseWhenBlockedPolicy, AutoUntilDonePolicy,
-            LlmPlanner, Objective, SequentialScheduler, StateAwareEvaluator,
+            IndependentAuditor, LlmPlanner, Objective, SequentialScheduler,
+            StateAwareEvaluator,
         )
 
         if not session_id:
@@ -594,6 +596,20 @@ class AgentRuntime:
                         "master": master,
                         "components": swarm_strategy.list_components(),
                         "objects": objects,
+                    })
+                # Opt-in independent audit: a FRESH LLM context (no shared
+                # orchestrator history) re-checks every objective against the
+                # real state and calls out reward-hacking / overclaims.
+                if config.autonomy_audit:
+                    auditor = IndependentAuditor(self._make_llm(), model, probe=probe)
+                    report = await auditor.audit(objs)
+                    await self.emit({
+                        "type": "autonomy_audit",
+                        "session_id": session_id,
+                        "passed": report.passed,
+                        "summary": report.summary,
+                        "overclaims": report.overclaims,
+                        "verdicts": [dataclasses.asdict(v) for v in report.verdicts],
                     })
             except asyncio.CancelledError:
                 await self.emit({"type": "turn_done", "session_id": session_id, "aborted": True})
@@ -745,6 +761,8 @@ class AgentRuntime:
             config.max_autonomy_rounds = max(1, int(updates["max_autonomy_rounds"]))
         if "autonomy_share_context" in updates:
             config.autonomy_share_context = bool(updates["autonomy_share_context"])
+        if "autonomy_audit" in updates:
+            config.autonomy_audit = bool(updates["autonomy_audit"])
         if "autonomy_workers" in updates:
             config.autonomy_workers = str(updates["autonomy_workers"])
         if "autonomy_level" in updates:

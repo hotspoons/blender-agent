@@ -250,6 +250,14 @@ the chat API), and you can inject a message straight into a running worker
 orchestrator context with workers) live in settings. Swarm worker subprocesses
 run in their own process group and are reaped with their Blender on teardown.
 
+**Independent audit (opt-in).** Agents take shortcuts and overclaim. With
+*Independent audit* on (settings; off by default — it's an extra LLM pass), a
+separate auditor runs after the orchestrator finishes, with **no shared
+context**: it re-probes the real scene/state and rules, adversarially, on
+whether each objective was *actually* met — flagging **overclaims** where the
+orchestrator declared success the state doesn't support. The verdict shows in
+the autonomy panel (and calls the orchestrator out when it disagrees).
+
 ### Swarm mode requirements (macOS / Linux / Windows)
 
 Each swarm worker spawns its **own headless Blender**, so the host needs:
