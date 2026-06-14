@@ -7,6 +7,8 @@
 // A single store instance is shared by every component; `subscribe()`
 // notifies on each state change with the mutated-keys set.
 
+import { applyProfile } from "/static/core/profile.js";
+
 class Store extends EventTarget {
   constructor() {
     super();
@@ -167,6 +169,10 @@ class Store extends EventTarget {
     if (msg.parent_session_id && this._routeWorkerEvent(msg)) return;
     switch (msg.type) {
       case "hello":
+        // Server-pushed branding (YAML-configurable) overlays the web
+        // extension's defaults. Text + favicon only; the logo mark and
+        // media viewers stay with the web extension module.
+        if (msg.profile) applyProfile(msg.profile);
         this._set({
           config: msg.config,
           sessions: msg.sessions,

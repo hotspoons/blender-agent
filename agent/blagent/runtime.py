@@ -25,6 +25,7 @@ from typing import Any, Awaitable, Callable
 from .agent_tools import AskUserTool, ContinueWorkingTool, MediaTool, SetAutonomyTool, SkillsTool
 from .backend import PythonToolBackend, ToolBackend
 from .engine import AgentEngine
+from .profile import AgentProfile, blender_profile
 from .llm import LlmClient, LlmError, LocalLlmBridgeClient, OpenAiHttpClient
 from .media import MediaLibrary
 from .store import AgentStore, SessionBusyError
@@ -181,8 +182,12 @@ class AgentRuntime:
     this object.
     """
 
-    def __init__(self, store: AgentStore, backend: "ToolBackend | list[Tool]") -> None:
+    def __init__(self, store: AgentStore, backend: "ToolBackend | list[Tool]",
+                 profile: "AgentProfile | None" = None) -> None:
         self.store = store
+        # Domain flavor (brand/copy/prompts). Defaults to the Blender build's
+        # profile; a YAML build passes its own.
+        self.profile = profile or blender_profile()
         self.local_llm = LocalLlmBridge()
         # Instance label (e.g. the .blend file name) + bound UI port,
         # surfaced as the browser tab title to tell instances apart.
@@ -231,8 +236,13 @@ class AgentRuntime:
             SetAutonomyTool(self.set_autonomy_level),
         ]
 
+    def public_ui_profile(self) -> dict[str, Any]:
+        """The UI branding block pushed to the frontend (web applyProfile)."""
+        return self.profile.as_ui_public()
+
     @classmethod
-    async def create(cls, store: AgentStore, backend: ToolBackend) -> "AgentRuntime":
+    async def create(cls, store: AgentStore, backend: ToolBackend,
+                     profile: "AgentProfile | None" = None) -> "AgentRuntime":
         """
         Async constructor for a generic ``ToolBackend`` (e.g. an HTTP backend):
         the tool list is discovered via ``backend.list_tools()`` and adapted
@@ -245,6 +255,7 @@ class AgentRuntime:
 
         self = cls.__new__(cls)
         self.store = store
+        self.profile = profile or AgentProfile()
         self.local_llm = LocalLlmBridge()
         self.instance_title = ""
         self.instance_port = 0

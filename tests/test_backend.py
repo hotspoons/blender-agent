@@ -239,6 +239,21 @@ class TestRuntimeBackendWiring(unittest.TestCase):
         with self.assertRaises(TypeError):
             self._runtime("not a backend")  # type: ignore[arg-type]
 
+    def test_public_ui_profile_defaults_to_blender(self) -> None:
+        rt = self._runtime([])
+        ui = rt.public_ui_profile()
+        self.assertEqual(ui["title"], "Blender Agent")
+        self.assertEqual(ui["brand"]["word"], "Blender")
+        self.assertIn("hint", ui["welcome"])
+
+    def test_explicit_profile_overrides(self) -> None:
+        from blagent.profile import AgentProfile
+        from blagent.runtime import AgentRuntime
+        from blagent.store import AgentStore
+        store = AgentStore(data_dir=tempfile.mkdtemp(prefix="agentdata_"))
+        rt = AgentRuntime(store, [], profile=AgentProfile(title="Foo", brand_word="Foo"))
+        self.assertEqual(rt.public_ui_profile()["title"], "Foo")
+
 
 if __name__ == "__main__":
     unittest.main()

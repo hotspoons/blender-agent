@@ -146,6 +146,7 @@ def create_app(runtime: AgentRuntime) -> Starlette:
             await ws.send_json({
                 "type": "hello",
                 "config": runtime.store.config.as_public(),
+                "profile": runtime.public_ui_profile(),
                 "sessions": runtime.list_sessions(),
                 "local_llm": runtime.local_llm.public_status(),
                 "instance": runtime.instance_info(),
