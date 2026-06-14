@@ -458,11 +458,13 @@ class AgentRuntime:
             from .swarm import RemoteWorkerStrategy
 
             exchange_dir = os.path.join(self.store.session_dir(session_id), "exchange")
-            runner: "Callable[[Any], Awaitable[Any]]" = RemoteWorkerStrategy(
+            swarm_strategy: "Any" = RemoteWorkerStrategy(
                 endpoint=config.endpoint, model=model, exchange_dir=exchange_dir,
                 api_key=config.api_key, emit=self.emit)
+            runner: "Callable[[Any], Awaitable[Any]]" = swarm_strategy
             scheduler: "Any" = ParallelScheduler(max_concurrency=4)
         else:
+            swarm_strategy = None
             runner = ChildSessionRunner(
                 registry=self.registry,
                 make_llm=self._make_llm,
@@ -494,6 +496,15 @@ class AgentRuntime:
         async def _run() -> None:
             try:
                 await orchestrator.run(objs, max_rounds=rounds)
+                # Swarm: after workers finish, the gather agent merges their
+                # component .blends into one master scene.
+                if swarm_strategy is not None:
+                    master = await swarm_strategy.gather()
+                    await self.emit({
+                        "type": "swarm_gathered", "session_id": session_id,
+                        "master": master,
+                        "components": swarm_strategy.list_components(),
+                    })
             except asyncio.CancelledError:
                 await self.emit({"type": "turn_done", "session_id": session_id, "aborted": True})
                 raise

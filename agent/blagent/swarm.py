@@ -275,6 +275,60 @@ class RemoteWorkerStrategy:
         message = (data.get("choices") or [{}])[0].get("message") or {}
         return str(message.get("content") or "")
 
+    def list_components(self) -> "list[str]":
+        """Component .blend files produced by workers, in the exchange dir."""
+        return sorted(glob.glob(os.path.join(self._exchange_dir, "component_*.blend")))
+
+    async def gather(self, components: "list[str] | None" = None,
+                     master: str = "master") -> "str | None":
+        """
+        Spawn the final GATHER worker: it appends every component .blend's
+        objects into one scene and exports ``<master>.blend`` to the exchange
+        dir. Returns the master path, or None if nothing to gather / it failed.
+        """
+        components = components if components is not None else self.list_components()
+        if not components:
+            return None
+        api_port = self._allocator.allocate()
+        bridge_port = self._allocator.allocate()
+        worker_dir = os.path.join(self._exchange_dir, "gather")
+        worker = WorkerInstance(
+            worker_id="gather", api_port=api_port, bridge_port=bridge_port,
+            data_dir=worker_dir, endpoint=self._endpoint, model=self._model,
+            host=self._host, api_key=self._api_key)
+        worker.start(allocator=self._allocator)
+        try:
+            if not await worker.wait_ready(self._ready_timeout):
+                _log.warning("gather worker failed to start:\n%s", worker.tail_log(800))
+                return None
+            files = "\n".join("- {:s}".format(c) for c in components)
+            prompt = (
+                "You are the GATHER agent for a parallel assembly. Merge these "
+                "component Blender files into ONE scene: for each file, append all "
+                "of its objects into the current scene (use bpy, e.g. "
+                "bpy.ops.wm.append from each file's Object directory), keeping every "
+                "object. Then export the merged scene as a Blender file via the "
+                "media_io tool (export, format 'blend', filename '{master}.blend'). "
+                "Component files (absolute paths on this machine):\n{files}\n\n"
+                "End with a PROOF OF WORK: the total object count in the merged scene."
+            ).format(master=master, files=files)
+            if self._emit is not None:
+                await self._emit({"type": "agent_spawned", "agent_id": worker.base_url,
+                                  "role": "gather", "task": "merge {:d} components".format(len(components))})
+            try:
+                proof = await self._chat(worker.base_url, prompt, user="gather")
+            except Exception as ex:  # pylint: disable=broad-except
+                _log.warning("gather chat failed: %s", ex)
+                return None
+            master_path = self._collect_blend(worker_dir, master)
+            if self._emit is not None:
+                await self._emit({"type": "agent_done", "agent_id": worker.base_url,
+                                  "role": "gather", "ok": master_path is not None,
+                                  "proof": proof, "master": master_path})
+            return master_path
+        finally:
+            worker.stop()
+
     async def __call__(self, task: Any) -> Any:
         from .autonomy import WorkerResult
 

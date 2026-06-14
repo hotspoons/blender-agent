@@ -113,6 +113,19 @@ class TestRemoteWorkerStrategy(unittest.TestCase):
         # no .blend -> None
         self.assertIsNone(strat._collect_blend(tempfile.mkdtemp(prefix="empty_"), "c2"))
 
+    def test_list_components_and_gather_noop(self) -> None:
+        exch = tempfile.mkdtemp(prefix="exch_")
+        strat = self._strategy(exch)
+        self.assertEqual(strat.list_components(), [])
+        # gather with nothing to merge spawns no worker and returns None.
+        self.assertIsNone(asyncio.new_event_loop().run_until_complete(strat.gather()))
+        for name in ("component_b", "component_a"):
+            with open(os.path.join(exch, name + ".blend"), "wb") as fh:
+                fh.write(b"x")
+        comps = strat.list_components()
+        self.assertEqual([os.path.basename(c) for c in comps],
+                         ["component_a.blend", "component_b.blend"])  # sorted
+
 
 @unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
 class TestAutonomyLevel(unittest.TestCase):
