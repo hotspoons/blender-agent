@@ -62,6 +62,8 @@ export class BaChatStage extends LitElement {
     _closedThinks: { state: true },
     _lightbox: { state: true },
     _approvals: { state: true },
+    _autonomy: { state: true },
+    _openAgents: { state: true },
   };
 
   constructor() {
@@ -81,6 +83,8 @@ export class BaChatStage extends LitElement {
     this._openThinks = new Set();
     this._closedThinks = new Set();
     this._lightbox = null;
+    this._autonomy = store.state.autonomy;
+    this._openAgents = new Set();   // agent ids the user expanded
   }
 
   connectedCallback() {
@@ -98,6 +102,7 @@ export class BaChatStage extends LitElement {
       if (keys.has("busy")) this._busy = store.state.busy;
       if (keys.has("drafting")) this._drafting = store.state.drafting;
       if (keys.has("quiet")) this._quiet = store.state.quiet;
+      if (keys.has("autonomy")) this._autonomy = store.state.autonomy;
       this._scrollSoon();
     });
   }
@@ -325,6 +330,58 @@ export class BaChatStage extends LitElement {
       color: var(--text-muted);
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+    /* Autonomy view: sticky objectives + bounded nested agent cards. */
+    .auto { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+    .objectives {
+      position: sticky; top: 0; z-index: 2;
+      background: var(--surface-elevated); border: 1px solid var(--border);
+      border-radius: var(--radius-md); padding: 10px 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    }
+    .obj-head { display: flex; justify-content: space-between; align-items: center;
+      font-weight: 700; font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase;
+      color: var(--text-muted); margin-bottom: 8px; }
+    .badge { font-size: 11px; font-weight: 600; text-transform: none; letter-spacing: 0;
+      padding: 2px 8px; border-radius: 999px; }
+    .badge.ok { background: rgba(34,197,94,0.18); color: var(--success); }
+    .badge.warn { background: rgba(234,179,8,0.18); color: var(--warning); }
+    .badge.paused { background: rgba(129,140,248,0.18); color: var(--accent); }
+    .obj { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; font-size: 13.5px; }
+    .obj .dot { width: 16px; text-align: center; }
+    .obj.met .dot { color: var(--success); }
+    .obj.met .obj-text { color: var(--text-muted); }
+    .obj .obj-text { flex: 1; }
+    .obj .ev { color: var(--text-muted); font-size: 12px; max-width: 40%;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .agent {
+      border: 1px solid var(--border); border-left: 3px solid var(--text-muted);
+      border-radius: var(--radius-md); background: var(--surface-elevated); overflow: hidden;
+    }
+    .agent.worker { border-left-color: var(--accent); }
+    .agent.eval { border-left-color: var(--warning); }
+    .agent.gather { border-left-color: var(--accent-2); }
+    .agent.done { opacity: 0.92; }
+    .agent-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; }
+    .agent-head:hover { background: var(--surface-muted); }
+    .agent .role { font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.05em; color: var(--text-muted); }
+    .agent .task { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .agent .state { display: inline-flex; }
+    .agent .state .spin { animation: spin 1.4s linear infinite; }
+    .agent .state.ok { color: var(--success); }
+    .agent .state.fail { color: var(--danger); }
+    .agent .proof { padding: 0 12px 10px 12px; font-size: 12.5px; color: var(--text);
+      white-space: pre-wrap; border-top: 1px solid var(--border); padding-top: 8px; }
+    .agent .inject { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border); }
+    .agent .inject input { flex: 1; background: var(--surface); color: var(--text);
+      border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 5px 8px; font: inherit; font-size: 12.5px; }
+    .agent .inject button { background: var(--surface-muted); color: var(--text-muted);
+      border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px 10px;
+      font: inherit; font-size: 12px; cursor: pointer; }
+    .agent .inject button:hover { color: var(--text); }
+    .agent .inject button.now { color: var(--brand); border-color: var(--brand); }
+    .gather-done { font-size: 13px; color: var(--text-muted); padding: 4px 2px; }
+    .gather-done code { color: var(--accent-2); }
     .empty {
       margin: auto;
       text-align: center;
@@ -523,10 +580,79 @@ export class BaChatStage extends LitElement {
     `;
   }
 
+  _toggleAgent(id) {
+    const s = new Set(this._openAgents);
+    s.has(id) ? s.delete(id) : s.add(id);
+    this._openAgents = s;
+  }
+
+  _inject(e, agentId, now) {
+    const input = e.target.closest(".inject")?.querySelector("input");
+    const v = (input?.value || "").trim();
+    if (!v) return;
+    store.injectWorker(agentId, v, now ? "now" : "after_round");
+    input.value = "";
+  }
+
+  _renderAgentCard(agent) {
+    if (!agent) return nothing;
+    const open = this._openAgents.has(agent.id) || agent.state === "running";
+    const roleClass = agent.role === "gather" ? "gather" : agent.role === "evaluator" ? "eval" : "worker";
+    const badge = agent.state === "running"
+      ? html`<span class="spin">${icon("arrow-path")}</span>`
+      : (agent.ok === false ? "✗" : "✓");
+    return html`
+      <div class="agent ${roleClass} ${agent.state}">
+        <div class="agent-head" @click=${() => this._toggleAgent(agent.id)}>
+          <span class="role">${agent.role}</span>
+          <span class="task">${agent.task || agent.id}</span>
+          <span class="state ${agent.ok === false ? "fail" : agent.state === "done" ? "ok" : ""}">${badge}</span>
+        </div>
+        ${open && agent.proof ? html`<div class="proof">${agent.proof}</div>` : nothing}
+        ${agent.state === "running" ? html`
+          <div class="inject">
+            <input type="text" placeholder="Inject guidance into this worker…"
+              @keydown=${(e) => { if (e.key === "Enter") { e.preventDefault(); this._inject(e, agent.id, false); } }}>
+            <button title="Inject at the next round" @click=${(e) => this._inject(e, agent.id, false)}>inject</button>
+            <button class="now" title="Interrupt the worker now" @click=${(e) => this._inject(e, agent.id, true)}>now</button>
+          </div>` : nothing}
+      </div>`;
+  }
+
+  _renderAutonomy() {
+    const a = this._autonomy || {};
+    const active = (a.objectives?.length || a.agentOrder?.length || a.done);
+    if (!active) return nothing;
+    const sym = (s) => (s === "met" ? "✓" : "○");
+    const done = a.done;
+    return html`
+      <div class="auto">
+        <div class="objectives">
+          <div class="obj-head">
+            <span>Objectives</span>
+            ${done ? html`<span class="badge ${done.paused ? "paused" : done.allMet ? "ok" : "warn"}">${
+              done.paused ? "paused" : done.allMet ? "all met" : "incomplete"} · ${done.rounds} round${done.rounds === 1 ? "" : "s"}</span>` : nothing}
+          </div>
+          ${(a.objectives || []).map((o) => html`
+            <div class="obj ${o.status}">
+              <span class="dot">${sym(o.status)}</span>
+              <span class="obj-text">${o.text}</span>
+              ${o.evidence ? html`<span class="ev" title=${o.evidence}>${o.evidence}</span>` : nothing}
+            </div>`)}
+        </div>
+        ${(a.agentOrder || []).map((id) => this._renderAgentCard(a.agents[id]))}
+        ${a.gathered?.master ? html`
+          <div class="gather-done">⬇ merged ${a.gathered.components?.length || 0} components →
+            <code>${a.gathered.master.split("/").pop()}</code></div>` : nothing}
+      </div>`;
+  }
+
   render() {
     const records = this._records.filter((r) => !r.synthetic && r.role !== "tool");
+    const autoActive = !!(this._autonomy && (this._autonomy.objectives?.length
+      || this._autonomy.agentOrder?.length || this._autonomy.done));
     // (compaction "summary" records render as a divider, see _renderRecord)
-    const showEmpty = records.length === 0 && !this._streaming && !this._busy;
+    const showEmpty = records.length === 0 && !this._streaming && !this._busy && !autoActive;
     return html`
       <div class="scroll">
         ${showEmpty ? html`
@@ -537,6 +663,7 @@ export class BaChatStage extends LitElement {
             Try: "what's in my scene?" or "make the selected mesh manifold".</p>
           </div>` : html`
           <div class="col">
+            ${this._renderAutonomy()}
             ${records.map((r, i) => this._renderRecord(r, i))}
             ${this._unclaimedLiveToolIds(records).map((id) => this._renderToolCard(id))}
             ${this._pending ? this._renderConfirm() : nothing}
