@@ -596,11 +596,13 @@ class AutonomyOrchestrator:
         Pursue *objectives* across up to *max_rounds* rounds. Returns a
         summary dict; emits events throughout.
         """
-        by_id = {o.id: o for o in objectives}
         decision = DONE
         rounds_run = 0
         for round_index in range(max_rounds):
             rounds_run = round_index + 1
+            # Rebuilt each round so objectives edited/added mid-run (see
+            # AgentRuntime.update_objectives) are first-class from here on.
+            by_id = {o.id: o for o in objectives}
             unmet = [o for o in objectives if o.status != "met"]
             await self._emit({
                 "type": "autonomy_round_start",

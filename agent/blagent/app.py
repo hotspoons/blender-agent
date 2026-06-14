@@ -13,6 +13,7 @@ Client -> server:
     ``{"type": "chat", "session_id": "", "content": "..."}``
     ``{"type": "objectives", "session_id": "", "objectives": [{"text", "acceptance"}], "max_rounds"?}``
     ``{"type": "draft_objectives", "session_id": "", "goal": "..."}``  -> emits objectives_draft
+    ``{"type": "update_objectives", "session_id": "", "objectives": [...]}``  -> edit a live run
     ``{"type": "inject", "agent_id": "...", "content": "...", "mode": "now"|"after_round"}``
     ``{"type": "interrupt_worker", "agent_id": "..."}``   -> promote a queued injection to land now
     ``{"type": "stop_worker", "agent_id": "..."}``        -> cancel a runaway worker
@@ -231,6 +232,22 @@ async def _handle_control(runtime: AgentRuntime, ws: WebSocket, data: dict[str, 
                     max_rounds=int(mr) if isinstance(mr, int) else None,
                 )
                 await ws.send_json({"type": "autonomy_accepted", "session_id": session_id})
+        elif msg_type == "update_objectives":
+            # Mid-run: edit/append the live objectives; the orchestrator picks
+            # them up next round and interjects them to in-process workers now.
+            sid = str(data.get("session_id", ""))
+            raw = data.get("objectives", [])
+            objectives = [
+                {"text": str(o.get("text", "")), "acceptance": str(o.get("acceptance", ""))}
+                for o in raw if isinstance(o, dict) and str(o.get("text", "")).strip()
+            ]
+            payload = runtime.update_objectives(sid, objectives)
+            if payload is None:
+                await ws.send_json({
+                    "type": "error", "message": "no live autonomy run to update for this session"})
+            else:
+                await runtime.emit({
+                    "type": "objectives_update", "session_id": sid, "objectives": payload})
         elif msg_type == "draft_objectives":
             # Guided intake: turn a one-line goal into draft objectives.
             goal = str(data.get("goal", "")).strip()

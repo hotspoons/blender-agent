@@ -332,6 +332,37 @@ class TestWorkerControls(unittest.TestCase):
         self.assertFalse(rt.interrupt_worker("nope"))
         self.assertFalse(rt.inject_into_worker("nope", "x"))
 
+    def test_update_objectives_edits_appends_and_interjects(self) -> None:
+        from blagent.autonomy import Objective
+        rt = self._runtime()
+        # No live run -> None.
+        self.assertIsNone(rt.update_objectives("s1", [{"text": "x"}]))
+
+        # Seed a live run + a running in-process worker.
+        live = [Objective(id="obj-0", text="torso", acceptance="torso exists", status="met")]
+        rt._autonomy_objs["s1"] = live
+
+        class FakeEngine:
+            def __init__(self):
+                self.injected = []
+
+            def inject(self, content, now=False):
+                self.injected.append(content)
+        eng = FakeEngine()
+        rt._register_worker("s1:w:t0", eng)
+
+        payload = rt.update_objectives("s1", [
+            {"text": "torso WITH bevel", "acceptance": "beveled torso exists"},  # edit obj-0
+            {"text": "two arms", "acceptance": "two arm objects"},               # append
+        ])
+        self.assertIsNotNone(payload)
+        self.assertEqual(len(live), 2)
+        self.assertEqual(live[0].text, "torso WITH bevel")
+        self.assertEqual(live[0].status, "unmet")   # edited -> re-verify
+        self.assertEqual(live[1].text, "two arms")
+        # The running worker was interjected with the new goals.
+        self.assertTrue(eng.injected and "two arms" in eng.injected[-1])
+
 
 @unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
 class TestAutonomyLevel(unittest.TestCase):

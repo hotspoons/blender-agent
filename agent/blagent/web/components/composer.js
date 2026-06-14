@@ -28,6 +28,9 @@ export class BaComposer extends LitElement {
     _autoOpen: { state: true },      // is the autonomy slider expanded?
     _objRows: { state: true },       // guided-intake objective editor rows
     _swarmPreflight: { state: true },// {ready, report} — swarm requirements
+    _draftPending: { state: true },  // guided-intake draft request in flight
+    _objCollapsed: { state: true },  // objectives editor collapsed into an expando
+    _queued: { state: true },        // {text, ready} queued to send when not busy
   };
 
   constructor() {
@@ -41,6 +44,9 @@ export class BaComposer extends LitElement {
     this._autoOpen = false;
     this._objRows = [];
     this._swarmPreflight = store.state.swarmPreflight;
+    this._draftPending = store.state.draftPending;
+    this._objCollapsed = false;
+    this._queued = null;
     this._lastDraftGoal = null;
     this._onLlmChange = () => this._onLocalLlmState();
   }
@@ -48,7 +54,16 @@ export class BaComposer extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     this._unsub = store.subscribe((keys) => {
-      if (keys.has("busy")) this._busy = store.state.busy;
+      if (keys.has("busy")) {
+        const wasBusy = this._busy;
+        this._busy = store.state.busy;
+        // Flush a queued message once the running turn finishes.
+        if (wasBusy && !this._busy && this._queued) {
+          const q = this._queued;
+          this._queued = null;
+          store.chat(q.text || "(see attached media)", q.ready || []);
+        }
+      }
       if (keys.has("connected")) this._connected = store.state.connected;
       // Switching sessions drops staged attachments (they belong to
       // the session they were uploaded into).
@@ -58,11 +73,13 @@ export class BaComposer extends LitElement {
       }
       if (keys.has("autonomyLevel")) this._level = store.state.autonomyLevel;
       if (keys.has("swarmPreflight")) this._swarmPreflight = store.state.swarmPreflight;
+      if (keys.has("draftPending")) this._draftPending = store.state.draftPending;
       if (keys.has("autonomy")) {
         const d = store.state.autonomy?.draft;
         if (d && d.objectives?.length && d.goal !== this._lastDraftGoal) {
           this._lastDraftGoal = d.goal;
           this._objRows = d.objectives.map((o) => ({ text: o.text || "", acceptance: o.acceptance || "" }));
+          this._objCollapsed = false; // surface the fresh draft for editing
         }
       }
     });
@@ -211,26 +228,47 @@ export class BaComposer extends LitElement {
       transition: opacity 0.15s ease;
     }
     .grip:hover::after, .grip.active::after { opacity: 1; background: var(--accent); }
-    /* Autonomy slider: a segmented pill, front-and-center above the input. */
+    /* Autonomy slider: a real detented slider (track + knob), not buttons. */
     .autonomy {
-      display: flex; gap: 2px; margin-bottom: 8px;
+      display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px;
       background: var(--surface-muted); border: 1px solid var(--border);
-      border-radius: var(--radius-md); padding: 2px;
+      border-radius: var(--radius-md); padding: 10px 14px 6px;
     }
-    .autonomy .seg {
-      flex: 1; border: none; background: transparent; color: var(--text-muted);
-      font: inherit; font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
-      padding: 5px 8px; border-radius: calc(var(--radius-md) - 2px); cursor: pointer;
-      transition: background 0.12s, color 0.12s;
+    .auto-slider { flex: 1; }
+    .auto-slider .track {
+      position: relative; height: 6px; margin: 4px 11px 0; border-radius: 999px;
+      background: var(--border); cursor: pointer; touch-action: none;
     }
-    .autonomy .seg:hover:not(.on):not(:disabled) { color: var(--text); }
-    .autonomy .seg.on {
-      background: var(--accent); color: #0d0d0d;
-      box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+    .auto-slider .track:focus-visible { outline: 2px solid var(--accent); outline-offset: 6px; }
+    .auto-slider .fill {
+      position: absolute; left: 0; top: 0; height: 100%; border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent-2), var(--accent));
     }
-    .autonomy .seg:disabled { cursor: default; opacity: 0.6; }
+    .auto-slider .detent {
+      position: absolute; top: 50%; width: 9px; height: 9px; border-radius: 50%;
+      transform: translate(-50%, -50%); background: var(--surface);
+      border: 2px solid var(--border);
+    }
+    .auto-slider .detent.on { border-color: var(--accent); background: var(--accent); }
+    .auto-slider .knob {
+      position: absolute; top: 50%; width: 18px; height: 18px; border-radius: 50%;
+      transform: translate(-50%, -50%); background: #fff; border: 2px solid var(--accent);
+      box-shadow: 0 1px 4px rgba(0,0,0,0.35); pointer-events: none;
+    }
+    .auto-slider .ticks { position: relative; height: 18px; margin: 8px 0 0; }
+    .auto-slider .tick {
+      position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap;
+      border: none; background: transparent; color: var(--text-muted);
+      font: inherit; font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+      padding: 0 2px; cursor: pointer;
+    }
+    .auto-slider .tick:first-of-type { transform: translateX(0); }
+    .auto-slider .tick:last-of-type { transform: translateX(-100%); }
+    .auto-slider .tick:hover:not(:disabled) { color: var(--text); }
+    .auto-slider .tick.on { color: var(--accent); }
+    .auto-slider .tick:disabled { cursor: default; opacity: 0.6; }
     .autonomy .auto-dismiss { border: none; background: transparent; color: var(--text-muted);
-      cursor: pointer; padding: 0 6px; display: inline-flex; align-items: center; }
+      cursor: pointer; padding: 0; display: inline-flex; align-items: center; }
     .autonomy .auto-dismiss:hover { color: var(--text); }
     .autonomy .auto-dismiss svg { width: 14px; height: 14px; }
     /* Collapsed autonomy control: a quiet chip that expands the slider. */
@@ -259,9 +297,41 @@ export class BaComposer extends LitElement {
       background: var(--surface-muted); padding: 8px; margin-bottom: 8px;
       display: flex; flex-direction: column; gap: 6px;
     }
-    .oe-head { font-size: 11px; font-weight: 700; text-transform: uppercase;
+    .oe-head { display: flex; align-items: center; gap: 5px; cursor: pointer;
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
       letter-spacing: 0.04em; color: var(--text-muted); }
+    .oe-head svg { width: 13px; height: 13px; }
     .oe-head .hint { font-weight: 500; text-transform: none; letter-spacing: 0; opacity: 0.8; }
+    .oe-cols { display: flex; gap: 6px; padding: 0 2px; font-size: 10px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); opacity: 0.7; }
+    .oe-cols span:first-child { flex: 2; }
+    .oe-cols span:last-child { flex: 3; }
+    /* Collapsed objectives expando (after a run is launched). */
+    .obj-expando { display: flex; align-items: center; gap: 6px; margin-bottom: 8px;
+      width: 100%; text-align: left; padding: 7px 10px; cursor: pointer;
+      background: var(--surface-muted); border: 1px solid var(--border); border-radius: var(--radius-md);
+      color: var(--text-muted); font: inherit; font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.04em; }
+    .obj-expando:hover { color: var(--text); border-color: var(--accent); }
+    .obj-expando svg { width: 13px; height: 13px; }
+    .obj-expando .count { background: var(--accent); color: #0d0d0d; border-radius: 999px;
+      padding: 0 7px; font-size: 11px; }
+    .obj-expando .hint { font-weight: 500; text-transform: none; letter-spacing: 0; opacity: 0.7; }
+    /* Queued-to-send indicator (shown while a turn runs). */
+    .queued-chip { display: flex; align-items: center; gap: 6px; margin-bottom: 8px;
+      padding: 5px 10px; font-size: 12px; color: var(--text-muted);
+      background: var(--surface-muted); border: 1px dashed var(--border); border-radius: var(--radius-md); }
+    .queued-chip svg { width: 13px; height: 13px; animation: spin 1.4s linear infinite; }
+    .queued-chip span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .queued-chip button { background: transparent; border: none; color: var(--text-muted);
+      cursor: pointer; display: inline-flex; padding: 0; }
+    .queued-chip button:hover { color: var(--text); }
+    .queue-btn { display: inline-flex; align-items: center; gap: 4px; padding: 5px 12px;
+      background: var(--surface-muted); color: var(--text); border: 1px solid var(--border);
+      border-radius: 999px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+    .queue-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+    .queue-btn:disabled { opacity: 0.5; cursor: default; }
+    .queue-btn svg { width: 13px; height: 13px; }
     .oe-row { display: flex; gap: 6px; align-items: center; }
     .oe-row input { background: var(--surface); color: var(--text);
       border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -284,6 +354,9 @@ export class BaComposer extends LitElement {
       font-weight: 600; cursor: pointer; }
     .draft-btn:hover:not(:disabled) { filter: brightness(1.15); }
     .draft-btn:disabled { opacity: 0.5; cursor: default; }
+    .draft-btn.pending { opacity: 1; cursor: progress; }
+    .draft-btn .spin { display: inline-flex; vertical-align: -2px; animation: spin 1.4s linear infinite; }
+    .draft-btn .spin svg { width: 13px; height: 13px; }
     .chips { display: flex; gap: 6px; flex-wrap: wrap; padding-bottom: 6px; }
     .chip {
       display: inline-flex;
@@ -416,9 +489,51 @@ export class BaComposer extends LitElement {
     return found ? found[1] : this._level;
   }
 
-  _pickLevel(val) {
-    store.setAutonomyLevel(val);
-    this._autoOpen = false; // collapse back to the chip after choosing
+  _levelIndex() {
+    const i = BaComposer._LEVELS.findIndex(([v]) => v === this._level);
+    return i < 0 ? 1 : i;
+  }
+
+  _commitLevel(val) {
+    this._level = val;                       // immediate visual
+    if (val !== store.state.autonomyLevel) store.setAutonomyLevel(val);
+  }
+
+  _idxFromClientX(clientX, track) {
+    const r = track.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+    return Math.round(frac * (BaComposer._LEVELS.length - 1));
+  }
+
+  // Drag the knob: preview live (no backend churn), commit once on release.
+  _onTrackDown(e) {
+    if (this._busy) return;
+    e.preventDefault();
+    const track = e.currentTarget;
+    try { track.setPointerCapture(e.pointerId); } catch (_e) { /* ignore */ }
+    this._dragging = true;
+    this._level = BaComposer._LEVELS[this._idxFromClientX(e.clientX, track)][0];
+  }
+
+  _onTrackMove(e) {
+    if (!this._dragging) return;
+    this._level = BaComposer._LEVELS[this._idxFromClientX(e.clientX, e.currentTarget)][0];
+  }
+
+  _onTrackUp(e) {
+    if (!this._dragging) return;
+    this._dragging = false;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_e) { /* ignore */ }
+    this._commitLevel(this._level);
+  }
+
+  _onTrackKey(e) {
+    let idx = this._levelIndex();
+    if (e.key === "ArrowRight" || e.key === "ArrowUp") idx = Math.min(BaComposer._LEVELS.length - 1, idx + 1);
+    else if (e.key === "ArrowLeft" || e.key === "ArrowDown") idx = Math.max(0, idx - 1);
+    else return;
+    e.preventDefault();
+    this._commitLevel(BaComposer._LEVELS[idx][0]);
   }
 
   /**
@@ -446,12 +561,30 @@ export class BaComposer extends LitElement {
         </button>
         ${this._renderSwarmPreflight()}`;
     }
+    const idx = this._levelIndex();
+    const last = BaComposer._LEVELS.length - 1;
+    const pct = (i) => (i / last) * 100;
     return html`
-      <div class="autonomy" role="tablist" aria-label="Autonomy level">
-        ${BaComposer._LEVELS.map(([val, label, desc]) => html`
-          <button class="seg ${this._level === val ? "on" : ""}" title=${desc}
-            ?disabled=${this._busy}
-            @click=${() => this._pickLevel(val)}>${label}</button>`)}
+      <div class="autonomy">
+        <div class="auto-slider">
+          <div class="track" role="slider" tabindex="0"
+            aria-label="Autonomy level" aria-valuemin="0" aria-valuemax=${last}
+            aria-valuenow=${idx} aria-valuetext=${this._levelLabel()}
+            @pointerdown=${this._onTrackDown} @pointermove=${this._onTrackMove}
+            @pointerup=${this._onTrackUp} @pointercancel=${this._onTrackUp}
+            @keydown=${this._onTrackKey}>
+            <div class="fill" style="width:${pct(idx)}%"></div>
+            ${BaComposer._LEVELS.map((_l, i) => html`
+              <span class="detent ${i <= idx ? "on" : ""}" style="left:${pct(i)}%"></span>`)}
+            <span class="knob" style="left:${pct(idx)}%"></span>
+          </div>
+          <div class="ticks">
+            ${BaComposer._LEVELS.map(([val, label, desc], i) => html`
+              <button class="tick ${this._level === val ? "on" : ""}"
+                style="left:${pct(i)}%" title=${desc} ?disabled=${this._busy}
+                @click=${() => this._commitLevel(val)}>${label}</button>`)}
+          </div>
+        </div>
         <button class="auto-dismiss" title="Dismiss"
           @click=${() => { this._autoOpen = false; }}>${icon("x-mark")}</button>
       </div>
@@ -475,8 +608,33 @@ export class BaComposer extends LitElement {
       .filter((r) => r.text);
     if (!rows.length) return;
     store.objectives(rows);
-    this._objRows = [];
-    this._lastDraftGoal = null;
+    // Keep the objectives, collapsed into an expando, so they can be tweaked
+    // and re-run without re-drafting.
+    this._objCollapsed = true;
+  }
+
+  /**
+   * Mid-run: push edited objectives to the running orchestrator, which
+   * updates its goals and interjects the new instructions to its workers.
+   */
+  _updateObjectives() {
+    const rows = this._objRows
+      .map((r) => ({ text: (r.text || "").trim(), acceptance: (r.acceptance || "").trim() }))
+      .filter((r) => r.text);
+    if (!rows.length) return;
+    store.updateObjectives(rows);
+    this._objCollapsed = true;
+  }
+
+  /** Queue the current input to auto-send when the running turn finishes. */
+  _queueSend() {
+    const ta = this.renderRoot.querySelector("textarea");
+    const text = (ta?.value || "").trim();
+    const ready = this._attachments.filter((a) => !a.uploading).map((a) => a.id);
+    if (!text && !ready.length) return;
+    this._queued = { text, ready };
+    if (ta) { ta.value = ""; ta.style.height = "auto"; }
+    this._attachments = [];
   }
 
   render() {
@@ -487,28 +645,49 @@ export class BaComposer extends LitElement {
         @drop=${this._onDrop}>
         <div class="grip" title="Drag to resize" @pointerdown=${this._onGripDown}></div>
         ${this._renderAutonomyControl()}
-        ${this._autonomyMode() && this._objRows.length ? html`
-          <div class="obj-editor">
-            <div class="oe-head">Objectives <span class="hint">edit, then begin the run</span></div>
-            ${this._objRows.map((r, i) => html`
-              <div class="oe-row">
-                <input class="oe-text" .value=${r.text} placeholder="objective"
-                  @input=${(e) => this._setRow(i, "text", e.target.value)}>
-                <input class="oe-acc" .value=${r.acceptance} placeholder="done-when…"
-                  @input=${(e) => this._setRow(i, "acceptance", e.target.value)}>
-                <button class="oe-x" title="Remove"
-                  @click=${() => { this._objRows = this._objRows.filter((_, j) => j !== i); }}>
-                  ${icon("x-mark")}</button>
-              </div>`)}
-            <div class="oe-actions">
-              <button class="oe-add"
-                @click=${() => { this._objRows = [...this._objRows, { text: "", acceptance: "" }]; }}>+ objective</button>
-              <span class="spacer"></span>
-              <button class="oe-discard"
-                @click=${() => { this._objRows = []; this._lastDraftGoal = null; }}>discard</button>
-              <button class="oe-begin" ?disabled=${this._busy || !this._connected}
-                @click=${() => this._beginRun()}>Begin run</button>
-            </div>
+        ${this._autonomyMode() && this._objRows.length ? (
+          this._objCollapsed
+            ? html`
+              <button class="obj-expando" @click=${() => { this._objCollapsed = false; }}
+                title="Show / edit objectives">
+                ${icon("chevron-right")} Objectives <span class="count">${this._objRows.length}</span>
+                <span class="hint">tap to edit / re-run</span>
+              </button>`
+            : html`
+              <div class="obj-editor">
+                <div class="oe-head" @click=${() => { this._objCollapsed = true; }} title="Collapse">
+                  ${icon("chevron-down")} Objectives
+                  <span class="hint">${this._busy ? "edit, then update the running orchestrator" : "edit, then begin the run"}</span></div>
+                <div class="oe-cols"><span>Goal</span><span>Acceptance criteria</span></div>
+                ${this._objRows.map((r, i) => html`
+                  <div class="oe-row">
+                    <input class="oe-text" .value=${r.text} placeholder="what to build"
+                      @input=${(e) => this._setRow(i, "text", e.target.value)}>
+                    <input class="oe-acc" .value=${r.acceptance} placeholder="done when…"
+                      @input=${(e) => this._setRow(i, "acceptance", e.target.value)}>
+                    <button class="oe-x" title="Remove"
+                      @click=${() => { this._objRows = this._objRows.filter((_, j) => j !== i); }}>
+                      ${icon("x-mark")}</button>
+                  </div>`)}
+                <div class="oe-actions">
+                  <button class="oe-add"
+                    @click=${() => { this._objRows = [...this._objRows, { text: "", acceptance: "" }]; }}>+ objective</button>
+                  <span class="spacer"></span>
+                  <button class="oe-discard"
+                    @click=${() => { this._objRows = []; this._lastDraftGoal = null; this._objCollapsed = false; }}>discard</button>
+                  ${this._busy
+                    ? html`<button class="oe-begin" ?disabled=${!this._connected}
+                        title="Send the edited objectives to the running orchestrator, which interjects updated instructions to its workers"
+                        @click=${() => this._updateObjectives()}>Update objectives</button>`
+                    : html`<button class="oe-begin" ?disabled=${!this._connected}
+                        @click=${() => this._beginRun()}>Begin run</button>`}
+                </div>
+              </div>`
+        ) : nothing}
+        ${this._queued ? html`
+          <div class="queued-chip">
+            ${icon("arrow-path")} <span title=${this._queued.text}>queued: ${this._queued.text || "(attachment)"}</span>
+            <button title="Cancel queued message" @click=${() => { this._queued = null; }}>${icon("x-mark")}</button>
           </div>` : nothing}
         ${this._attachments.length ? html`
           <div class="chips">
@@ -543,13 +722,22 @@ export class BaComposer extends LitElement {
           <input type="file" multiple
             @change=${(e) => { this._addFiles([...e.target.files]); e.target.value = ""; }}>
           ${this._autonomyMode() ? html`
-            <button class="draft-btn" title="Draft objectives from your goal (guided intake)"
-              ?disabled=${this._busy || !this._connected} @click=${() => this._draftObjectives()}>✦ Draft</button>`
+            <button class="draft-btn ${this._draftPending ? "pending" : ""}"
+              title="Draft objectives from your goal (guided intake)"
+              ?disabled=${this._busy || !this._connected || this._draftPending}
+              @click=${() => this._draftObjectives()}>
+              ${this._draftPending
+                ? html`<span class="spin">${icon("arrow-path")}</span> Drafting…`
+                : html`✦ Draft`}</button>`
             : nothing}
           <span class="spacer"></span>
           ${this._busy
-            ? html`<button class="circle act abort" title="Stop"
-                @click=${() => store.abort()}>${icon("stop")}</button>`
+            ? html`
+                <button class="queue-btn" title="Queue this message to send when the current turn finishes"
+                  ?disabled=${!!this._queued} @click=${() => this._queueSend()}>
+                  ${icon("arrow-up")} Queue</button>
+                <button class="circle act abort" title="Stop"
+                  @click=${() => store.abort()}>${icon("stop")}</button>`
             : this._autoload
               ? html`<button class="circle act" disabled title=${localLlm.progress?.text || "Loading model..."}>
                   <span class="spin">${icon("arrow-path")}</span></button>`

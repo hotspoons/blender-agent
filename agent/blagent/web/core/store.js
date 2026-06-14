@@ -31,6 +31,7 @@ class Store extends EventTarget {
       // Autonomy mode (slider): minimal | yolo | orchestrator | swarm.
       autonomyLevel: "yolo",
       swarmPreflight: null,    // {ready, report} — swarm requirements (set on switch)
+      draftPending: false,     // guided-intake draft request in flight
       // Live autonomy/swarm run state for the bounded nested UI.
       autonomy: {
         objectives: [],         // [{id, text, acceptance, status, evidence}]
@@ -304,7 +305,10 @@ class Store extends EventTarget {
         break;
       case "objectives_draft": {
         const a = { ...this.state.autonomy, draft: { goal: msg.goal || "", objectives: msg.objectives || [] } };
-        this._set({ autonomy: a });
+        this._set({ autonomy: a, draftPending: false });
+        if (!(msg.objectives || []).length) {
+          this._set({ error: "Draft came back empty — try a more concrete goal, or add objectives manually." });
+        }
         break;
       }
       case "autonomy_round_start": {
@@ -474,6 +478,7 @@ class Store extends EventTarget {
   /** Guided intake: ask the agent to draft objectives from a one-line goal. */
   draftObjectives(goal) {
     if (!goal) return;
+    this._set({ draftPending: true });
     this.send({ type: "draft_objectives", session_id: this.state.sessionId, goal });
   }
 
@@ -481,6 +486,11 @@ class Store extends EventTarget {
   objectives(list) {
     this._set({ streaming: "", drafting: null, quiet: 0, toolCalls: {}, toolOrder: [], error: "" });
     this.send({ type: "objectives", session_id: this.state.sessionId, objectives: list });
+  }
+
+  /** Mid-run: hand edited objectives to the running orchestrator (it interjects to workers). */
+  updateObjectives(list) {
+    this.send({ type: "update_objectives", session_id: this.state.sessionId, objectives: list });
   }
 
   /** Mutate one live worker card in place (helper for the controls below). */

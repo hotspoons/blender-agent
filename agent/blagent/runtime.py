@@ -201,6 +201,8 @@ class AgentRuntime:
         # Swarm (subprocess) workers by agent id -> stop hook. No live engine
         # here, so these support stop/cancel but not injection.
         self._swarm_stoppers: dict[str, "Callable[[], None]"] = {}
+        # Live autonomy objective lists by session id, for mid-run updates.
+        self._autonomy_objs: dict[str, list[Any]] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._system_prompt = self._load_system_prompt()
 
@@ -523,6 +525,9 @@ class AgentRuntime:
             )
             for i, o in enumerate(objectives)
         ]
+        # Expose the live objective list so update_objectives can edit/append
+        # mid-run; the orchestrator re-reads it each round.
+        self._autonomy_objs[session_id] = objs
 
         policy = (
             AutoPauseWhenBlockedPolicy()
@@ -623,10 +628,52 @@ class AgentRuntime:
                     "message": "autonomy error: {:s}: {:s}".format(type(ex).__name__, str(ex)),
                 })
             finally:
+                self._autonomy_objs.pop(session_id, None)
                 await self.emit({"type": "turn_done", "session_id": session_id})
 
         session.task = asyncio.create_task(_run())
         return session_id
+
+    def update_objectives(
+            self, session_id: str,
+            objectives: list[dict[str, Any]]) -> "list[dict[str, Any]] | None":
+        """
+        Mid-run objective update: edit/append the live objectives of a running
+        autonomy turn (the orchestrator re-reads them each round) and interject
+        the new instructions into any in-process workers that are running right
+        now (voice of god). Swarm workers run out of process — they can't be
+        interjected mid-task, but the updated objectives still steer the next
+        round. Returns the updated objectives payload, or None if no autonomy
+        run is live for this session.
+        """
+        from .autonomy import Objective
+
+        live = self._autonomy_objs.get(session_id)
+        if not live:
+            return None
+        changed: list[str] = []
+        for i, spec in enumerate(objectives):
+            text = str(spec.get("text", "")).strip()
+            if not text:
+                continue
+            acceptance = str(spec.get("acceptance", "")).strip()
+            if i < len(live):
+                obj = live[i]
+                if obj.text != text or obj.acceptance != acceptance:
+                    obj.text, obj.acceptance = text, acceptance
+                    obj.status = "unmet"  # re-verify against the new criteria
+                    changed.append(obj.text)
+            else:
+                live.append(Objective(
+                    id="obj-upd-{:d}".format(i), text=text, acceptance=acceptance))
+                changed.append(text)
+        # Interject into in-process workers running under this session.
+        note = "[Objectives updated by the user mid-run] Current goals:\n" + "\n".join(
+            "- {:s} (done when: {:s})".format(o.text, o.acceptance or "n/a") for o in live)
+        for agent_id, engine in list(self._workers.items()):
+            if agent_id.startswith(session_id + ":w:"):
+                engine.inject(note, now=False)
+        return [dataclasses.asdict(o) for o in live]
 
     def worker_media_library(self, agent_id: str) -> MediaLibrary:
         """
