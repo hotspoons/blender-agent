@@ -155,6 +155,16 @@ class MediaLibrary:
         """
         return self.register_bytes(base64.b64decode(data_b64), mime=mime, label=label)
 
+    def register_data_url(self, data_url: str, label: str = "") -> str:
+        """
+        Store a ``data:<mime>;base64,<payload>`` URL (how an HTTP tool backend
+        returns inline media) and return its short id.
+        """
+        match = re.match(r"^data:([\w.+-]+/[\w.+-]+);base64,(.*)$", data_url, re.DOTALL)
+        if match is None:
+            raise ValueError("not a base64 data URL")
+        return self.register_base64(match.group(2), mime=match.group(1), label=label or "media")
+
     def register_bytes(self, data: bytes, mime: str, label: str) -> str:
         self._counter += 1
         media_id = "i{:d}".format(self._counter)

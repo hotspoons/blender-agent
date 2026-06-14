@@ -96,9 +96,33 @@ GET  /openapi.json                  -> the schema itself
 - Auth: optional `Authorization: Bearer <key>` (configured in YAML).
 - Streaming: v1 is request/response per tool call (the agent loop already
   streams *its own* tokens to the UI; per-tool streaming is a later add).
-- **Swarm over HTTP is out of scope for v1** — swarm spawns domain worker
-  processes, which is inherently backend-specific. HTTP backends report
-  `swarm` absent from `/capabilities`; swarm stays Python-backend-only for now.
+### Swarm over HTTP
+
+Swarm spawns parallel domain workers (each its own compute instance) and merges
+their artifacts. A backend opts in by advertising `swarm` in `/capabilities`
+and implementing:
+
+```
+POST /swarm/workers          body { "task": {...}, "session_id": "..." }
+                             -> { "worker_id": "...", "endpoint": "<openai base_url>" }
+                                spawn a worker instance; the agent drives it over
+                                the returned OpenAI-compatible endpoint (today's
+                                RemoteWorkerStrategy._chat, transport-identical).
+GET  /swarm/workers/{id}     -> { "status": "starting|ready|done|error", "log": "..." }
+POST /swarm/workers/{id}/stop -> { "ok": true }                  # cancel a runaway worker
+GET  /swarm/workers/{id}/artifact -> bytes (the component the worker produced)
+POST /swarm/gather           body { "components": ["id", ...] }
+                             -> { "master": "<artifact id>", "objects": [...] }
+                                merge components into one master; returns a summary
+                                + a probe-able object list for the auditor.
+```
+
+The core swarm framework (PortAllocator-equivalent, ParallelScheduler,
+streaming each worker's activity into its card, per-worker stop, the gather
+step) stays in `agentcore`; it calls these endpoints instead of hardcoding
+`.blend` collection. The Python backend implements the same Python-level hooks
+(`spawn_worker`, `collect_artifact`, `gather`) so both transports share the
+orchestration. Backends without `swarm` simply run in-process (orchestrator).
 
 ---
 
