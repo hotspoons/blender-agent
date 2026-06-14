@@ -7,6 +7,7 @@
 
 import { LitElement, html, css, nothing } from "lit";
 import { icon } from "/static/core/icons.js";
+import { renderMediaFull } from "/static/core/media-viewers.js";
 
 const fieldStyles = css`
   :host { display: block; font-family: var(--font-sans); }
@@ -397,9 +398,7 @@ export class BaLightbox extends LitElement {
   render() {
     return html`
       <figure @click=${(e) => e.stopPropagation()}>
-        ${this.kind === "stl"
-            ? html`<div class="stage3d"><ba-stl-viewer .src=${this.src} .label=${this.alt}></ba-stl-viewer></div>`
-            : html`<img src=${this.src} alt=${this.alt}>`}
+        ${renderMediaFull({ kind: this.kind, name: this.alt, src: this.src })}
         <figcaption>
           <span>${this.alt}</span>
           <span class="spacer"></span>

@@ -244,7 +244,7 @@ export class BaSettingsModal extends LitElement {
           @input=${(e) => { this._workers = e.detail.value; }}></ba-segmented>
         <div class="hint">In-process: workers are child sessions in this process (the composer's
           <strong>Orchestrator</strong> level). Swarm: each worker is a subprocess with its own headless
-          Blender, merged at the end (the composer's <strong>Swarm</strong> level). Picking a composer
+          instance, merged at the end (the composer's <strong>Swarm</strong> level). Picking a composer
           level sets this for you; change it here to mix (e.g. swarm workers without switching the slider).</div>
 
         <label>Policy</label>

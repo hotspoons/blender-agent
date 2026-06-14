@@ -6,8 +6,8 @@
 import { LitElement, html, css, nothing } from "lit";
 import { store } from "/static/core/store.js";
 import { icon } from "/static/core/icons.js";
+import { renderMediaThumb } from "/static/core/media-viewers.js";
 import "/static/core/widgets.js";
-import "/static/components/stl-viewer.js";
 
 export class BaArtifactPanel extends LitElement {
   static properties = {
@@ -66,14 +66,18 @@ export class BaArtifactPanel extends LitElement {
     .card:hover { border-color: var(--accent); }
     .card img { width: 100%; display: block; }
     .card ba-stl-viewer { width: 100%; height: 110px; display: block; }
-    .card .filelink {
-      display: block;
+    .card .file-chip {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
       padding: 14px 10px;
       text-align: center;
       font-size: 12px;
       color: var(--accent);
       text-decoration: none;
     }
+    .card .file-chip svg { width: 14px; height: 14px; }
     .card .cap {
       font-size: 11px;
       color: var(--text-muted);
@@ -93,16 +97,12 @@ export class BaArtifactPanel extends LitElement {
         : html`
           <div class="grid">
             ${this._media.map((m) => html`
-              <div class="card" @click=${() => {
-                if (!(m.mime || "").startsWith("image/")) return;
-                this._lightbox = { src: `/media/${this._sessionId}/${m.id}`, alt: `${m.id} · ${m.label || m.mime}` };
-              }}>
-                ${(m.mime || "").startsWith("image/")
-                  ? html`<img src="/media/${this._sessionId}/${m.id}" alt=${m.id} loading="lazy">`
-                  : m.mime === "model/stl"
-                    ? html`<ba-stl-viewer thumb .src=${`/media/${this._sessionId}/${m.id}`} .label=${m.id}
-                        @zoom=${(e) => { this._lightbox = e.detail; }}></ba-stl-viewer>`
-                    : html`<a class="filelink" href="/media/${this._sessionId}/${m.id}" download=${m.id}>download</a>`}
+              <div class="card">
+                ${renderMediaThumb({
+                  mime: m.mime, name: m.id,
+                  src: `/media/${this._sessionId}/${m.id}`,
+                  onZoom: (d) => { this._lightbox = { ...d, alt: `${m.id} · ${m.label || m.mime}` }; },
+                })}
                 <div class="cap">${m.id} · ${m.label || m.mime}</div>
               </div>`)}
           </div>`}

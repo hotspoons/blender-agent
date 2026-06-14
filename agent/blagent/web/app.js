@@ -8,7 +8,7 @@
 import { LitElement, html, css, nothing } from "lit";
 import { store } from "/static/core/store.js";
 import { icon } from "/static/core/icons.js";
-import { brandMark } from "/static/core/brand.js";
+import { getProfile } from "/static/core/profile.js";
 import { localLlm } from "/static/core/local-llm-controller.js";
 import {
   getTheme, cycleTheme, THEME_META, onThemeChange,
@@ -76,9 +76,10 @@ export class BaApp extends LitElement {
         // side-by-side agent tabs can be told apart; the bare port
         // disambiguates untitled instances.
         const { title, port } = store.state.instance;
+        const brand = getProfile().title;
         document.title = title
-          ? `${title} - Blender Agent`
-          : (port ? `Blender Agent :${port}` : "Blender Agent");
+          ? `${title} - ${brand}`
+          : (port ? `${brand} :${port}` : brand);
       }
     }));
     this._unsubs.push(onThemeChange(() => { this._theme = getTheme(); }));
@@ -349,7 +350,7 @@ export class BaApp extends LitElement {
       <div class="rail-inner">
         <div class="rail-top">
           <button class="railbtn" title="Expand sidebar" @click=${() => this._setRailCollapsed(false)}>
-            <span class="mark">${brandMark}</span></button>
+            <span class="mark">${getProfile().mark}</span></button>
           <button class="railbtn" title="New session" @click=${() => store.newSession()}>
             ${icon("plus")}</button>
         </div>
@@ -371,8 +372,8 @@ export class BaApp extends LitElement {
     return html`
       <div class="left-inner">
         <div class="brand">
-          <span class="mark">${brandMark}</span>
-          <span><span class="word">Blender</span> Agent</span>
+          <span class="mark">${getProfile().mark}</span>
+          <span><span class="word">${getProfile().brand.word}</span>${getProfile().brand.rest}</span>
         </div>
         <div class="rail-scroll"><ba-session-list></ba-session-list></div>
         <div class="rail-foot">

@@ -8,11 +8,11 @@
 import { LitElement, html, css, nothing } from "lit";
 import { store } from "/static/core/store.js";
 import { icon } from "/static/core/icons.js";
-import { brandMark } from "/static/core/brand.js";
+import { getProfile } from "/static/core/profile.js";
+import { renderMediaThumb } from "/static/core/media-viewers.js";
 import { adoptHighlightStyles, ensureMarkdownReady, renderMarkdown } from "/static/core/markdown.js";
 import "/static/components/json-view.js";
 import "/static/core/widgets.js";
-import "/static/components/stl-viewer.js";
 
 function unsafeHtml(htmlText) {
   const template = document.createElement("template");
@@ -619,16 +619,7 @@ export class BaChatStage extends LitElement {
    */
   _renderMediaThumb(m) {
     const src = `/media/${store.state.sessionId}/${m}`;
-    if (/\.stl$/i.test(m)) {
-      return html`<ba-stl-viewer thumb .src=${src} .label=${m}
-        @zoom=${(e) => { this._lightbox = e.detail; }}></ba-stl-viewer>`;
-    }
-    if (/^i\d+$/.test(m) || /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(m)) {
-      return html`<img src=${src} alt=${m} title=${m}
-        @click=${() => { this._lightbox = { src, alt: m }; }}>`;
-    }
-    return html`<a class="file-chip" href=${src} download=${m} title=${m}>
-      ${icon("arrow-down-tray")} ${m}</a>`;
+    return renderMediaThumb({ name: m, src, onZoom: (d) => { this._lightbox = d; } });
   }
 
   _renderToolCard(id) {
@@ -686,16 +677,7 @@ export class BaChatStage extends LitElement {
 
   _renderWorkerMediaThumb(agentId, m) {
     const src = `/worker-media/${agentId}/${m}`;
-    if (/\.stl$/i.test(m)) {
-      return html`<ba-stl-viewer thumb .src=${src} .label=${m}
-        @zoom=${(ev) => { this._lightbox = ev.detail; }}></ba-stl-viewer>`;
-    }
-    if (/^i\d+$/.test(m) || /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(m)) {
-      return html`<img src=${src} alt=${m} title=${m}
-        @click=${() => { this._lightbox = { src, alt: m }; }}>`;
-    }
-    return html`<a class="file-chip" href=${src} download=${m} title=${m}>
-      ${icon("arrow-down-tray")} ${m}</a>`;
+    return renderMediaThumb({ name: m, src, onZoom: (d) => { this._lightbox = d; } });
   }
 
   /** A worker's tool call, compact: name · state · summary + media thumbs. */
@@ -853,10 +835,10 @@ export class BaChatStage extends LitElement {
       <div class="scroll">
         ${showEmpty ? html`
           <div class="empty">
-            <div class="mark">${brandMark}</div>
-            <h2><span class="word">Blender</span> Agent</h2>
-            <p>Connected to your Blender session through the MCP tool surface.<br>
-            Try: "what's in my scene?" or "make the selected mesh manifold".</p>
+            <div class="mark">${getProfile().mark}</div>
+            <h2><span class="word">${getProfile().welcome.word}</span>${getProfile().welcome.rest}</h2>
+            <p>${getProfile().welcome.body}${getProfile().welcome.hint
+              ? html`<br>${getProfile().welcome.hint}` : nothing}</p>
           </div>` : html`
           <div class="col">
             ${this._renderAutonomy()}

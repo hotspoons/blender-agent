@@ -11,6 +11,21 @@ concentrated in a few seams (see the module table at the bottom). This design
 unifies those seams under a single `ToolBackend` interface + an `AgentProfile`
 + a YAML loader.
 
+## Licensing (planned at the split)
+
+The overall project is **GPL-3.0-or-later**. When the core harness + UI is
+spun out as `agentcore`, it will be **dual-licensed MIT OR Apache-2.0** (the
+permissive Rust-ecosystem convention — a consumer may pick either). The
+Blender build (`blagent`), the add-on, the MCP server, and all
+domain/skill/tool content stay **GPL-3.0-or-later**.
+
+Practical consequence as code moves to the `agentcore` side of the seams:
+re-header those files `SPDX-License-Identifier: MIT OR Apache-2.0` and add the
+LICENSE-MIT + LICENSE-APACHE pair to the `agentcore` package; everything that
+remains in this repo keeps its GPL-3.0 headers. **Not done yet** — the user
+will perform the physical split later; until then files keep their current
+GPL-3.0 headers and this note records the intent so the split is mechanical.
+
 ---
 
 ## 1. The boundary: `ToolBackend`
@@ -182,6 +197,34 @@ extension field names, brand/copy). Core ships neutral defaults; the profile
 field prefix (`tool_calls`/`media` neutral; Blender can keep `blender_*` for
 back-compat), and the UI block (brand, welcome, registered media viewers).
 
+### Web UI extension boundary (implemented)
+
+The generic shell (`web/core/`, `web/components/`, `web/app.js`) carries **no
+domain artwork or copy**. Two seams replace what used to be hardcoded:
+
+- **`web/core/profile.js`** — the active UI profile (brand word + mark, title,
+  favicon, welcome copy + hint, composer placeholder, swarm blurb). Core ships
+  neutral defaults; `applyProfile(partial)` overrides per section and also
+  swaps `document.title` + the `<link rel=icon>`. Components read
+  `getProfile()` at render time.
+- **`web/core/media-viewers.js`** — a registry. Core registers an image viewer
+  and a download-chip fallback; `registerMediaViewer({id, match, thumb, full})`
+  lets a domain add richer viewers. `renderMediaThumb`/`renderMediaFull` pick
+  the most-specific match by `(mime, name)` (or by `kind` in the lightbox), so
+  the strip / artifact panel / lightbox never name a domain mime.
+- **`web/extensions/<domain>.js`** — the domain UI bundle. `index.html`
+  `await`s it *before* `app.js`, so branding + viewers are in place before the
+  first render. `extensions/blender.js` is the only file with the Blender cube
+  mark/favicon, the "Blender Agent" copy, and the `model/stl` `ba-stl-viewer`
+  registration. Swapping this one import (or having the server name a different
+  extension) rebrands the whole app. `web/core/brand.js` now holds only a
+  neutral core mark.
+
+Smoke-tested headlessly in Chromium (`tests/smoke_web_profile.py`): the full ES
+module graph loads clean and the Blender extension applies its profile (title +
+brand) before render. The server-pushed profile (YAML → control socket →
+`applyProfile`) is the remaining tie-in, landing with the Python `AgentProfile`.
+
 ---
 
 ## 5. Build sequence (each step tested, main stays green)
@@ -213,4 +256,4 @@ or **subprocess argv** — all of which the seams above replace:
 | autonomy (neutral prompts), swarm framework | blender_surface.py (`open/close` + Xvfb) |
 | agent_tools (skills/media/continue/ask_user/set_autonomy) | scene + `.blend` probes; swarm `.blend` collect/gather |
 | runtime (BackendTool adapter, sessions, orchestration) | `make_backend()` + `agent.yaml` + UI branding |
-| web UI (generic, themeable) | skills/tools content (in `mcp/`) |
+| web UI shell (core/, components/, app.js) — profile + media-viewer registry | `web/extensions/blender.js` (mark, favicon, copy, STL viewer) + skills/tools content (in `mcp/`) |

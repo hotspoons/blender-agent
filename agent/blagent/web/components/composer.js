@@ -9,6 +9,7 @@ import { LitElement, html, css, nothing } from "lit";
 import { store } from "/static/core/store.js";
 import { icon } from "/static/core/icons.js";
 import { localLlm } from "/static/core/local-llm-controller.js";
+import { getProfile } from "/static/core/profile.js";
 
 const HEIGHT_KEY = "blender-agent.composer-height";
 
@@ -481,7 +482,7 @@ export class BaComposer extends LitElement {
     ["ask", "Ask", "Act directly; confirm every mutating tool call"],
     ["yolo", "YOLO", "Act directly; run tool calls without confirmation"],
     ["orchestrator", "Orchestrator", "Pursue objectives via in-process worker agents"],
-    ["swarm", "Swarm", "Parallel workers, each its own headless Blender, merged at the end"],
+    ["swarm", "Swarm", getProfile().swarmBlurb],
   ];
 
   _levelLabel() {
@@ -704,7 +705,7 @@ export class BaComposer extends LitElement {
         <textarea rows="1" placeholder=${
           this._level === "orchestrator" || this._level === "swarm"
             ? "Describe an objective for the orchestrator to pursue..."
-            : "Ask the Blender agent..."}
+            : getProfile().composerPlaceholder}
           @paste=${this._onPaste}
           @input=${(e) => {
             if (!this._manualHeight) {
