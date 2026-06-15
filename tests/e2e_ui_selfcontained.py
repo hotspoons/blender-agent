@@ -77,8 +77,24 @@ def main():
             lvl = _drive(page, "return store.state.autonomyLevel;")
             _check("autonomy level adopted from hello (not yolo)", lvl == "orchestrator", "level=%s" % lvl)
 
+            # The frontend renders the backend-owned `autonomy_view` SNAPSHOT and
+            # reduces no autonomy events itself. Build snapshots like the backend's
+            # OrchestratorView.snapshot() and feed them via the autonomy_view event.
+            def push_view(view):
+                page.evaluate(
+                    "async (v) => { const { store } = await import('/static/core/store.js'); "
+                    "store._handle({type:'autonomy_view', session_id:'orch-1', view: v}); }",
+                    view)
+
+            def view(agents, order, objectives=None, done=None):
+                return {"objectives": objectives or [], "agents": agents, "agentOrder": order,
+                        "rounds": [], "gathered": None, "done": done, "audit": None,
+                        "currentRound": 0, "draft": None}
+
             # --- autonomy_accepted adopts session id + sets busy + resets view ---
-            _drive(page, "store._handle({type:'agent_spawned', session_id:'s0', agent_id:'s0:w:t0', role:'worker', task:'stale'});")
+            push_view(view({"orch-1:w:t0": {"id": "orch-1:w:t0", "role": "worker", "task": "stale",
+                                            "state": "running", "timeline": [], "calls": {}, "media": []}},
+                           ["orch-1:w:t0"]))
             _drive(page, "store._handle({type:'autonomy_accepted', session_id:'orch-1'});")
             page.wait_for_timeout(120)
             st = _drive(page, "return {sid: store.state.sessionId, busy: store.state.busy, agents: store.state.autonomy.agentOrder.length};")
@@ -86,24 +102,26 @@ def main():
             _check("autonomy_accepted sets busy", st["busy"] is True)
             _check("autonomy_accepted resets prior agents", st["agents"] == 0)
 
-            # --- worker card collapses <think>, shows answer, no raw tags ---
-            _drive(page, "store._handle({type:'agent_spawned', session_id:'orch-1', agent_id:'orch-1:w:t1', role:'worker', task:'do x'});")
-            _drive(page, "store._handle({type:'assistant_done', session_id:'orch-1:w:t1', parent_session_id:'orch-1', role:'worker', tool_calls:[], content:'<think>SECRET_PLAN_42</think>VISIBLE_ANSWER_42'});")
-            page.wait_for_timeout(400)
+            # --- worker card (from snapshot) collapses <think>, renders tool, no raw tags ---
+            running_worker = {"orch-1:w:t1": {
+                "id": "orch-1:w:t1", "role": "worker", "task": "do x", "state": "running",
+                "timeline": [{"kind": "text", "content": "<think>SECRET_PLAN_42</think>VISIBLE_ANSWER_42"},
+                             {"kind": "call", "call_id": "c1"}],
+                "calls": {"c1": {"name": "execute_blender_code", "arguments": "{}", "state": "done"}},
+                "media": [], "stream": "", "proof": "", "ok": None}}
+            push_view(view(running_worker, ["orch-1:w:t1"]))
+            page.wait_for_timeout(300)
             text = page.evaluate(_DOM_TEXT)
             _check("worker: visible answer shown", "VISIBLE_ANSWER_42" in text)
             _check("worker: no raw <think> tag", "<think>" not in text)
             _check("worker: reasoning collapsed (hidden)", "SECRET_PLAN_42" not in text)
             _check("worker: Thought disclosure present", "Thought for a moment" in text)
-
-            # --- worker tool call renders ---
-            _drive(page, "store._handle({type:'tool_status', session_id:'orch-1:w:t1', parent_session_id:'orch-1', call_id:'c1', name:'execute_blender_code', arguments:'{}', state:'running'});")
-            page.wait_for_timeout(300)
-            text = page.evaluate(_DOM_TEXT)
             _check("worker: tool call rendered", "execute_blender_code" in text)
 
-            # --- agent_done shows proof ---
-            _drive(page, "store._handle({type:'agent_done', session_id:'orch-1', agent_id:'orch-1:w:t1', role:'worker', ok:true, proof:'PROOF_DONE_42', objective_id:'o1'});")
+            # --- done worker shows its proof (snapshot) ---
+            done_worker = {"orch-1:w:t1": {**running_worker["orch-1:w:t1"], "state": "done",
+                                           "ok": True, "proof": "PROOF_DONE_42"}}
+            push_view(view(done_worker, ["orch-1:w:t1"]))
             page.wait_for_timeout(300)
             text = page.evaluate(_DOM_TEXT)
             _check("worker: proof shown on done", "PROOF_DONE_42" in text)
@@ -135,25 +153,23 @@ def main():
             _check("objectives: full goal text (not truncated)", "Goal one full text here" in text)
 
             # --- backend-authoritative: a reload PROJECTS the orchestrator view
-            #     from the persisted event log (frontend holds no autonomy state) ---
-            log = [
-                {"type": "autonomy_round_start", "session_id": "reload-1", "round": 0,
-                 "unmet": ["obj-0"], "objectives": [
-                     {"id": "obj-0", "text": "RECON_OBJECTIVE_ABC", "acceptance": "done when X", "status": "unmet"}]},
-                {"type": "agent_spawned", "session_id": "reload-1", "agent_id": "reload-1:w:t1",
-                 "role": "worker", "task": "RECON_WORKER_TASK_XYZ", "objective_id": "obj-0"},
-                {"type": "assistant_done", "session_id": "reload-1:w:t1", "parent_session_id": "reload-1",
-                 "role": "worker", "tool_calls": [], "content": "<think>reasoning</think>worker did it"},
-                {"type": "agent_done", "session_id": "reload-1", "agent_id": "reload-1:w:t1",
-                 "role": "worker", "ok": True, "proof": "RECON_PROOF_123", "objective_id": "obj-0"},
-                {"type": "autonomy_done", "session_id": "reload-1", "all_met": True, "rounds": 1},
-            ]
-            page.evaluate("async (log) => { const { store } = await import('/static/core/store.js'); "
-                          "store._handle({type:'session_loaded', session_id:'reload-1', records:[], media:[], autonomy_events: log}); }",
-                          log)
+            #     from the backend snapshot (frontend holds no autonomy state) ---
+            snap = {
+                "objectives": [{"id": "obj-0", "text": "RECON_OBJECTIVE_ABC", "acceptance": "done when X", "status": "met"}],
+                "agents": {"reload-1:w:t1": {
+                    "id": "reload-1:w:t1", "role": "worker", "task": "RECON_WORKER_TASK_XYZ",
+                    "state": "done", "ok": True, "proof": "RECON_PROOF_123",
+                    "timeline": [{"kind": "text", "content": "<think>reasoning</think>worker did it"}],
+                    "calls": {}, "media": []}},
+                "agentOrder": ["reload-1:w:t1"], "rounds": [], "gathered": None,
+                "done": {"paused": False, "allMet": True, "rounds": 1}, "audit": None, "currentRound": 0,
+            }
+            page.evaluate("async (snap) => { const { store } = await import('/static/core/store.js'); "
+                          "store._handle({type:'session_loaded', session_id:'reload-1', records:[], media:[], autonomy_view: snap}); }",
+                          snap)
             page.wait_for_timeout(400)
             st = _drive(page, "return {agents: store.state.autonomy.agentOrder.length, objs: store.state.autonomy.objectives.length};")
-            _check("reload projects autonomy state from log", st["agents"] == 1 and st["objs"] == 1, str(st))
+            _check("reload projects autonomy snapshot", st["agents"] == 1 and st["objs"] == 1, str(st))
             text = page.evaluate(_DOM_TEXT)
             _check("reload projects objective text", "RECON_OBJECTIVE_ABC" in text)
             _check("reload projects worker proof", "RECON_PROOF_123" in text)

@@ -301,9 +301,9 @@ async def _handle_control(runtime: AgentRuntime, ws: WebSocket, data: dict[str, 
                 "session_id": session_id,
                 "records": runtime.session_records(session_id),
                 "media": runtime.session_media(session_id),
-                # Backend-owned orchestrator view: the frontend replays this log
-                # to project the live view (no authoritative state in the UI).
-                "autonomy_events": runtime.session_autonomy_events(session_id),
+                # Backend-owned orchestrator view snapshot: the frontend renders
+                # it directly (it holds no autonomy state of its own).
+                "autonomy_view": runtime.session_autonomy_view(session_id),
             })
         elif msg_type == "delete_session":
             runtime.delete_session(str(data.get("id", "")))

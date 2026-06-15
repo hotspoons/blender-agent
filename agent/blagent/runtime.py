@@ -18,6 +18,7 @@ import dataclasses
 import json
 import logging
 import os
+import time
 
 
 from typing import Any, Awaitable, Callable
@@ -25,6 +26,7 @@ from typing import Any, Awaitable, Callable
 from .agent_tools import AskUserTool, ContinueWorkingTool, MediaTool, SetAutonomyTool, SkillsTool
 from .backend import PythonToolBackend, ToolBackend
 from .engine import AgentEngine, _strip_thinking
+from .orchestrator_view import OrchestratorView
 from .permissions import ToolPermissions, WORKER_DENY
 from .profile import AgentProfile, blender_profile
 from .llm import LlmClient, LlmError, LocalLlmBridgeClient, OpenAiHttpClient
@@ -201,16 +203,12 @@ class ChildSessionRunner:
 
 _SYSTEM_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "system_prompt.md")
 
-# The orchestrator/swarm run state is owned by the BACKEND: the view-relevant
-# events are appended to a per-session log and replayed to rebuild the live
-# view on reload, so the frontend is a pure projection (no authoritative state
-# beyond in-flight input). High-volume/transient events (token, drafting, quiet)
-# are NOT logged — the milestone events below fully reconstruct the view.
-_AUTONOMY_VIEW_EVENTS = frozenset({
-    "agent_spawned", "assistant_done", "tool_status", "worker_media", "injected",
-    "agent_done", "autonomy_round_start", "autonomy_round_done", "objectives_update",
-    "autonomy_done", "autonomy_paused", "swarm_gathered", "autonomy_audit",
-})
+# The orchestrator/swarm run state is owned by the BACKEND: events are reduced
+# into an OrchestratorView (blagent.orchestrator_view) and the snapshot is
+# emitted as `autonomy_view` + persisted, so the frontend is a pure projection
+# (it renders the snapshot; it does NOT reduce events). Token-driven snapshots
+# are throttled to this interval to avoid flooding the socket on live streaming.
+_VIEW_THROTTLE_SECONDS = 0.12
 
 
 class _Session:
@@ -276,6 +274,9 @@ class AgentRuntime:
         self._swarm_stoppers: dict[str, "Callable[[], None]"] = {}
         # Live autonomy objective lists by session id, for mid-run updates.
         self._autonomy_objs: dict[str, list[Any]] = {}
+        # Backend-owned orchestrator view (the frontend projects its snapshot).
+        self._views: dict[str, OrchestratorView] = {}
+        self._view_emit_at: dict[str, float] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._system_prompt = self._load_system_prompt()
 
@@ -330,6 +331,8 @@ class AgentRuntime:
         self._workers = {}
         self._swarm_stoppers = {}
         self._autonomy_objs = {}
+        self._views = {}
+        self._view_emit_at = {}
         self._subscribers = set()
         self._system_prompt = self._load_system_prompt()
         return self
@@ -417,47 +420,45 @@ class AgentRuntime:
             return session_id + ":gather" + safe[len(g):]
         return None
 
-    def _autonomy_log_path(self, session_id: str) -> str:
-        return os.path.join(self.store.session_dir(session_id), "autonomy_events.jsonl")
+    def _view_path(self, session_id: str) -> str:
+        return os.path.join(self.store.session_dir(session_id), "autonomy_view.json")
 
-    def _reset_autonomy_log(self, session_id: str) -> None:
-        """Start a fresh log for a new run (reload shows the latest run's view)."""
+    def _reset_view(self, session_id: str) -> "OrchestratorView":
+        """Start a fresh view for a new run (reload shows the latest run)."""
+        view = OrchestratorView()
+        self._views[session_id] = view
         try:
-            path = self._autonomy_log_path(session_id)
+            path = self._view_path(session_id)
             if os.path.isfile(path):
                 os.remove(path)
         except Exception:  # pylint: disable=broad-except
             pass
+        return view
 
-    def _append_autonomy_event(self, session_id: str, event: dict[str, Any]) -> None:
-        """Append a view-relevant autonomy event to the session's log so the
-        live orchestrator view can be rebuilt on reload (backend-authoritative)."""
-        if event.get("type") not in _AUTONOMY_VIEW_EVENTS:
-            return
+    def _persist_view(self, session_id: str, view: "OrchestratorView") -> None:
         try:
-            path = self._autonomy_log_path(session_id)
+            path = self._view_path(session_id)
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(event, default=str) + "\n")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(view.snapshot(), fh, default=str)
         except Exception as ex:  # pylint: disable=broad-except
-            _log.warning("append autonomy event failed session=%s: %s", session_id, ex)
+            _log.warning("persist autonomy view failed session=%s: %s", session_id, ex)
 
-    def session_autonomy_events(self, session_id: str) -> list[dict[str, Any]]:
-        """The persisted autonomy event log — replayed by the frontend reducer
-        to project the orchestrator view on load."""
-        path = self._autonomy_log_path(session_id)
-        events: list[dict[str, Any]] = []
+    def session_autonomy_view(self, session_id: str) -> "dict[str, Any] | None":
+        """The backend-owned orchestrator view snapshot — the frontend renders
+        it directly (it holds no autonomy state of its own)."""
+        view = self._views.get(session_id)
+        if view is not None:
+            return view.snapshot()
+        path = self._view_path(session_id)
         if not os.path.isfile(path):
-            return events
+            return None
         try:
             with open(path, encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if line:
-                        events.append(json.loads(line))
+                return json.load(fh)
         except Exception as ex:  # pylint: disable=broad-except
-            _log.warning("read autonomy log failed session=%s: %s", session_id, ex)
-        return events
+            _log.warning("read autonomy view failed session=%s: %s", session_id, ex)
+            return None
 
     def session_media(self, session_id: str) -> list[dict[str, object]]:
         session = self._get_or_load_session(session_id)
@@ -743,7 +744,6 @@ class AgentRuntime:
         # Expose the live objective list so update_objectives can edit/append
         # mid-run; the orchestrator re-reads it each round.
         self._autonomy_objs[session_id] = objs
-        self._reset_autonomy_log(session_id)   # fresh view log for this run
         rounds_cap = max_rounds or config.max_autonomy_rounds
 
         # Persist the run to the session transcript so it isn't empty on reload
@@ -761,38 +761,29 @@ class AgentRuntime:
             "autonomy_objectives": [dataclasses.asdict(o) for o in objs],
         })
 
+        view = self._reset_view(session_id)   # fresh backend-owned view for this run
+
         async def persist_emit(event: dict[str, Any]) -> None:
-            # Persist the run's substance to the transcript so an orchestrator
-            # session reloads with what actually happened (the live worker
-            # cards are event-only/ephemeral). A finished worker's proof + each
-            # round's verdicts become records; everything else just streams.
-            etype = event.get("type")
+            # Reduce the event into the backend-owned view, then emit the
+            # SNAPSHOT (the frontend renders it; it holds no autonomy state).
+            # The raw event still flows for non-autonomy consumers; the UI
+            # ignores autonomy events now (no JS reducer). Token-driven
+            # snapshots are throttled; milestones persist the snapshot to disk.
+            changed = False
             try:
-                if etype == "agent_done":
-                    proof = str(event.get("proof", "")).strip()
-                    if proof:
-                        role = str(event.get("role", "worker"))
-                        session.engine.push_record({
-                            "role": "assistant",
-                            "content": "**{:s}** · objective {:s}\n\n{:s}".format(
-                                role.title(), str(event.get("objective_id", "")), proof),
-                            "agent_id": event.get("agent_id", ""),
-                            "worker_result": True,
-                        })
-                elif etype == "autonomy_round_done":
-                    verdicts = event.get("verdicts") or []
-                    if verdicts:
-                        lines = ["**Round {:d} review**".format(int(event.get("round", 0)) + 1)]
-                        for v in verdicts:
-                            lines.append("- [{:s}] obj {:s}: {:s}".format(
-                                "met" if v.get("met") else "unmet",
-                                str(v.get("objective_id", "")), str(v.get("evidence", ""))))
-                        session.engine.push_record({"role": "review", "content": "\n".join(lines)})
+                changed = view.apply(event)
             except Exception as ex:  # pylint: disable=broad-except
-                _log.warning("persist autonomy event failed session=%s: %s", session_id, ex)
-            # Backend-authoritative view state: log view events for replay on reload.
-            self._append_autonomy_event(session_id, event)
+                _log.warning("orchestrator view.apply failed session=%s: %s", session_id, ex)
             await self.emit(event)
+            if changed:
+                is_token = event.get("type") == "token"
+                now = time.monotonic()
+                if (not is_token) or (now - self._view_emit_at.get(session_id, 0.0) >= _VIEW_THROTTLE_SECONDS):
+                    self._view_emit_at[session_id] = now
+                    await self.emit({"type": "autonomy_view", "session_id": session_id,
+                                     "view": view.snapshot()})
+                    if not is_token:        # persist on milestones (not every token)
+                        self._persist_view(session_id, view)
 
         policy = (
             AutoPauseWhenBlockedPolicy()

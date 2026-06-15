@@ -94,79 +94,12 @@ class Store extends EventTarget {
   // ----------------------------------------------------------------
   // Server event handling.
 
-  /**
-   * Fold a worker sub-agent's own event stream into its bounded card.
-   * Returns true once handled (the event never belongs to the main view).
-   */
-  _routeWorkerEvent(msg) {
-    const id = msg.session_id;
-    const agents = this.state.autonomy.agents;
-    const ag = agents[id];
-    if (!ag) return true; // unknown/younger worker — swallow, never main view
-    const patch = {};
-    const pushCall = (callId) => {
-      if (!ag.timeline.some((e) => e.kind === "call" && e.call_id === callId)) {
-        patch.timeline = [...(patch.timeline || ag.timeline), { kind: "call", call_id: callId }];
-      }
-    };
-    switch (msg.type) {
-      case "token":
-        patch.stream = (ag.stream || "") + (msg.text || "");
-        patch.drafting = null;
-        break;
-      case "tool_drafting":
-        patch.drafting = { name: msg.name, chars: msg.chars };
-        break;
-      case "assistant_done": {
-        const tl = [...ag.timeline];
-        if ((msg.content || "").trim()) tl.push({ kind: "text", content: msg.content });
-        for (const tc of (msg.tool_calls || [])) {
-          if (!tl.some((e) => e.kind === "call" && e.call_id === tc.id))
-            tl.push({ kind: "call", call_id: tc.id });
-        }
-        patch.timeline = tl;
-        patch.stream = "";
-        patch.drafting = null;
-        break;
-      }
-      case "tool_status": {
-        const calls = { ...ag.calls };
-        const ex = calls[msg.call_id] || {};
-        calls[msg.call_id] = {
-          ...ex, name: msg.name, arguments: msg.arguments, state: msg.state,
-          summary: msg.summary || ex.summary || "",
-          media_ids: msg.media_ids || ex.media_ids || [],
-        };
-        patch.calls = calls;
-        pushCall(msg.call_id);
-        break;
-      }
-      case "worker_media":
-        // Swarm: media arrives inline (data_url) — the parent has no copy.
-        patch.media = [...(ag.media || []), { id: msg.media_id, data_url: msg.data_url }];
-        break;
-      case "injected":
-        patch.timeline = [...ag.timeline, { kind: "injected", content: msg.content }];
-        patch.queued = null; // the queued message has now landed
-        break;
-      case "turn_done":
-        patch.stream = "";
-        patch.drafting = null;
-        break;
-      default:
-        return true; // swallow other worker-tagged events (error, user_record…)
-    }
-    this._set({ autonomy: { ...this.state.autonomy, agents: { ...agents, [id]: { ...ag, ...patch } } } });
-    return true;
-  }
-
   _handle(msg) {
     const forThisSession = !msg.session_id || msg.session_id === this.state.sessionId;
-    // Worker sub-agents stream their own events (token / tool_status /
-    // assistant_done / media) tagged with parent_session_id. Their
-    // session_id is the worker id, so they never match forThisSession —
-    // route them into the worker's bounded card instead of dropping them.
-    if (msg.parent_session_id && this._routeWorkerEvent(msg)) return;
+    // Worker sub-agent events (parent_session_id-tagged) are reduced into the
+    // orchestrator view on the BACKEND; the UI only renders the `autonomy_view`
+    // snapshot, so swallow them here (no frontend reduction).
+    if (msg.parent_session_id) return;
     switch (msg.type) {
       case "hello":
         // Server-pushed branding (YAML-configurable) overlays the web
@@ -214,19 +147,12 @@ class Store extends EventTarget {
             busy: false,
           });
         }
-        this._set(patch);
-        // Project the backend-owned orchestrator view: replay the persisted
-        // event log through the same reducer the live stream uses. The UI holds
-        // no authoritative autonomy state — it is a projection of this log.
-        if (!sameSessionBusy && Array.isArray(msg.autonomy_events) && msg.autonomy_events.length) {
-          this._set({ autonomy: this._freshAutonomy() });
-          for (const ev of msg.autonomy_events) {
-            try { this._handle(ev); } catch (e) { /* skip a malformed logged event */ }
-          }
-          // Replayed terminal events may have set busy/streaming; a reload is
-          // never mid-turn for a finished run.
-          this._set({ busy: false, streaming: "", drafting: null });
+        // Project the backend-owned orchestrator view snapshot (the UI holds
+        // no autonomy state of its own — it just renders this).
+        if (!sameSessionBusy && msg.autonomy_view) {
+          patch.autonomy = msg.autonomy_view;
         }
+        this._set(patch);
         break;
       }
       case "chat_accepted":
@@ -352,69 +278,13 @@ class Store extends EventTarget {
         }
         break;
       }
-      case "autonomy_round_start": {
-        const a = { ...this.state.autonomy,
-          objectives: msg.objectives || this.state.autonomy.objectives,
-          currentRound: msg.round ?? this.state.autonomy.currentRound };
-        this._set({ autonomy: a });
+      case "autonomy_view":
+        // Backend-owned orchestrator view: render the snapshot as-is. The UI
+        // does NOT reduce autonomy events — that complexity lives entirely in
+        // the backend (blagent.orchestrator_view). This is the ONLY autonomy
+        // state the frontend holds, and it is a pure projection.
+        this._set({ autonomy: msg.view || this._freshAutonomy() });
         break;
-      }
-      case "objectives_update": {
-        const a = { ...this.state.autonomy, objectives: msg.objectives || this.state.autonomy.objectives };
-        this._set({ autonomy: a });
-        break;
-      }
-      case "autonomy_round_done": {
-        const a = { ...this.state.autonomy };
-        a.rounds = [...a.rounds, { round: msg.round, verdicts: msg.verdicts || [], allMet: !!msg.all_met }];
-        this._set({ autonomy: a });
-        break;
-      }
-      case "agent_spawned": {
-        const a = { ...this.state.autonomy, agents: { ...this.state.autonomy.agents } };
-        const id = msg.agent_id;
-        a.agents[id] = { id, role: msg.role || "worker", task: msg.task || "",
-          objectiveId: msg.objective_id || "", state: "running", proof: "", ok: null,
-          // Live activity, mirrored from the worker's own event stream:
-          timeline: [], calls: {}, stream: "", media: [],
-          // Voice-of-god two-step: queued = text awaiting next round.
-          queued: null, stopping: false,
-          round: (msg.role === "gather") ? null : a.currentRound };
-        if (!a.agentOrder.includes(id)) a.agentOrder = [...a.agentOrder, id];
-        this._set({ autonomy: a });
-        break;
-      }
-      case "agent_done": {
-        const a = { ...this.state.autonomy, agents: { ...this.state.autonomy.agents } };
-        const cur = a.agents[msg.agent_id] || { id: msg.agent_id, role: msg.role || "worker", events: [] };
-        a.agents[msg.agent_id] = { ...cur, state: "done", ok: msg.ok !== false, proof: msg.proof || "",
-          artifacts: msg.artifacts || cur.artifacts || [], ref: msg.ref || cur.ref };
-        this._set({ autonomy: a });
-        break;
-      }
-      case "swarm_gathered": {
-        const a = { ...this.state.autonomy, gathered: {
-          master: msg.master || null, components: msg.components || [], objects: msg.objects || [] } };
-        this._set({ autonomy: a });
-        break;
-      }
-      case "autonomy_audit": {
-        // Independent auditor's verdict (opt-in): did the orchestrator really
-        // meet the goals, or overclaim? Surfaced in the autonomy panel.
-        const a = { ...this.state.autonomy, audit: {
-          passed: !!msg.passed, summary: msg.summary || "",
-          overclaims: msg.overclaims || [], verdicts: msg.verdicts || [] } };
-        this._set({ autonomy: a });
-        break;
-      }
-      case "autonomy_done":
-      case "autonomy_paused": {
-        const a = { ...this.state.autonomy,
-          objectives: msg.objectives || this.state.autonomy.objectives,
-          done: { paused: msg.type === "autonomy_paused", allMet: !!msg.all_met, rounds: msg.rounds || 0 } };
-        this._set({ autonomy: a });
-        break;
-      }
       case "injected": {
         // Surface a voice-of-god injection in the transcript.
         if (forThisSession) {
