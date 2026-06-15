@@ -201,6 +201,17 @@ class ChildSessionRunner:
 
 _SYSTEM_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "system_prompt.md")
 
+# The orchestrator/swarm run state is owned by the BACKEND: the view-relevant
+# events are appended to a per-session log and replayed to rebuild the live
+# view on reload, so the frontend is a pure projection (no authoritative state
+# beyond in-flight input). High-volume/transient events (token, drafting, quiet)
+# are NOT logged — the milestone events below fully reconstruct the view.
+_AUTONOMY_VIEW_EVENTS = frozenset({
+    "agent_spawned", "assistant_done", "tool_status", "worker_media", "injected",
+    "agent_done", "autonomy_round_start", "autonomy_round_done", "objectives_update",
+    "autonomy_done", "autonomy_paused", "swarm_gathered", "autonomy_audit",
+})
+
 
 class _Session:
     """
@@ -405,6 +416,48 @@ class AgentRuntime:
         if safe.startswith(g):
             return session_id + ":gather" + safe[len(g):]
         return None
+
+    def _autonomy_log_path(self, session_id: str) -> str:
+        return os.path.join(self.store.session_dir(session_id), "autonomy_events.jsonl")
+
+    def _reset_autonomy_log(self, session_id: str) -> None:
+        """Start a fresh log for a new run (reload shows the latest run's view)."""
+        try:
+            path = self._autonomy_log_path(session_id)
+            if os.path.isfile(path):
+                os.remove(path)
+        except Exception:  # pylint: disable=broad-except
+            pass
+
+    def _append_autonomy_event(self, session_id: str, event: dict[str, Any]) -> None:
+        """Append a view-relevant autonomy event to the session's log so the
+        live orchestrator view can be rebuilt on reload (backend-authoritative)."""
+        if event.get("type") not in _AUTONOMY_VIEW_EVENTS:
+            return
+        try:
+            path = self._autonomy_log_path(session_id)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(event, default=str) + "\n")
+        except Exception as ex:  # pylint: disable=broad-except
+            _log.warning("append autonomy event failed session=%s: %s", session_id, ex)
+
+    def session_autonomy_events(self, session_id: str) -> list[dict[str, Any]]:
+        """The persisted autonomy event log — replayed by the frontend reducer
+        to project the orchestrator view on load."""
+        path = self._autonomy_log_path(session_id)
+        events: list[dict[str, Any]] = []
+        if not os.path.isfile(path):
+            return events
+        try:
+            with open(path, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        events.append(json.loads(line))
+        except Exception as ex:  # pylint: disable=broad-except
+            _log.warning("read autonomy log failed session=%s: %s", session_id, ex)
+        return events
 
     def session_media(self, session_id: str) -> list[dict[str, object]]:
         session = self._get_or_load_session(session_id)
@@ -690,6 +743,7 @@ class AgentRuntime:
         # Expose the live objective list so update_objectives can edit/append
         # mid-run; the orchestrator re-reads it each round.
         self._autonomy_objs[session_id] = objs
+        self._reset_autonomy_log(session_id)   # fresh view log for this run
         rounds_cap = max_rounds or config.max_autonomy_rounds
 
         # Persist the run to the session transcript so it isn't empty on reload
@@ -736,6 +790,8 @@ class AgentRuntime:
                         session.engine.push_record({"role": "review", "content": "\n".join(lines)})
             except Exception as ex:  # pylint: disable=broad-except
                 _log.warning("persist autonomy event failed session=%s: %s", session_id, ex)
+            # Backend-authoritative view state: log view events for replay on reload.
+            self._append_autonomy_event(session_id, event)
             await self.emit(event)
 
         policy = (

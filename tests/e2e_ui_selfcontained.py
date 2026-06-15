@@ -12,6 +12,7 @@ Runs in a couple of seconds. Needs Playwright + Chromium:
     python tests/e2e_ui_selfcontained.py
 """
 
+import json
 import os
 import threading
 
@@ -132,6 +133,31 @@ def main():
             _check("objectives: no editable cells", editable == 0, "editable=%d" % editable)
             text = page.evaluate(_DOM_TEXT)
             _check("objectives: full goal text (not truncated)", "Goal one full text here" in text)
+
+            # --- backend-authoritative: a reload PROJECTS the orchestrator view
+            #     from the persisted event log (frontend holds no autonomy state) ---
+            log = [
+                {"type": "autonomy_round_start", "session_id": "reload-1", "round": 0,
+                 "unmet": ["obj-0"], "objectives": [
+                     {"id": "obj-0", "text": "RECON_OBJECTIVE_ABC", "acceptance": "done when X", "status": "unmet"}]},
+                {"type": "agent_spawned", "session_id": "reload-1", "agent_id": "reload-1:w:t1",
+                 "role": "worker", "task": "RECON_WORKER_TASK_XYZ", "objective_id": "obj-0"},
+                {"type": "assistant_done", "session_id": "reload-1:w:t1", "parent_session_id": "reload-1",
+                 "role": "worker", "tool_calls": [], "content": "<think>reasoning</think>worker did it"},
+                {"type": "agent_done", "session_id": "reload-1", "agent_id": "reload-1:w:t1",
+                 "role": "worker", "ok": True, "proof": "RECON_PROOF_123", "objective_id": "obj-0"},
+                {"type": "autonomy_done", "session_id": "reload-1", "all_met": True, "rounds": 1},
+            ]
+            page.evaluate("async (log) => { const { store } = await import('/static/core/store.js'); "
+                          "store._handle({type:'session_loaded', session_id:'reload-1', records:[], media:[], autonomy_events: log}); }",
+                          log)
+            page.wait_for_timeout(400)
+            st = _drive(page, "return {agents: store.state.autonomy.agentOrder.length, objs: store.state.autonomy.objectives.length};")
+            _check("reload projects autonomy state from log", st["agents"] == 1 and st["objs"] == 1, str(st))
+            text = page.evaluate(_DOM_TEXT)
+            _check("reload projects objective text", "RECON_OBJECTIVE_ABC" in text)
+            _check("reload projects worker proof", "RECON_PROOF_123" in text)
+            _check("reload projection: no raw <think>", "<think>" not in text)
 
             _check("no fatal console errors", not [e for e in errs if "websocket" not in e.lower() and "/ws" not in e.lower()],
                    "; ".join(errs[:3]))

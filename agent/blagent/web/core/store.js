@@ -215,6 +215,18 @@ class Store extends EventTarget {
           });
         }
         this._set(patch);
+        // Project the backend-owned orchestrator view: replay the persisted
+        // event log through the same reducer the live stream uses. The UI holds
+        // no authoritative autonomy state — it is a projection of this log.
+        if (!sameSessionBusy && Array.isArray(msg.autonomy_events) && msg.autonomy_events.length) {
+          this._set({ autonomy: this._freshAutonomy() });
+          for (const ev of msg.autonomy_events) {
+            try { this._handle(ev); } catch (e) { /* skip a malformed logged event */ }
+          }
+          // Replayed terminal events may have set busy/streaming; a reload is
+          // never mid-turn for a finished run.
+          this._set({ busy: false, streaming: "", drafting: null });
+        }
         break;
       }
       case "chat_accepted":
