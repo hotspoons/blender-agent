@@ -338,6 +338,10 @@ class AgentRuntime:
         # None on a generic build -> swarm mode falls back to in-process workers.
         # The Blender build sets this to a BlenderSwarmProvider.
         self.swarm_provider: "Any" = None
+        # Registry backing agent-authored tools (get/set_approval). None on a
+        # build without a tool-authoring surface -> approval is a no-op. The
+        # Blender build sets this to blmcp.agent_registry.store.
+        self.agent_tool_registry: "Any" = None
         # Live autonomy objective lists by session id, for mid-run updates.
         self._autonomy_objs: dict[str, list[Any]] = {}
         self._stopped_workers: set[str] = set()
@@ -1336,14 +1340,13 @@ class AgentRuntime:
         flips the registry store so an approved tool becomes runnable, or a
         rejected one is removed. Returns True when a pending tool matched.
         """
-        try:
-            from blmcp.agent_registry import store
-        except ImportError:
+        registry = self.agent_tool_registry
+        if registry is None:
             return False
-        tool = store.get(name)
+        tool = registry.get(name)
         if tool is None or not tool.pending_imports:
             return False
-        store.set_approval(name, approve)
+        registry.set_approval(name, approve)
         return True
 
     def abort(self, session_id: str) -> bool:

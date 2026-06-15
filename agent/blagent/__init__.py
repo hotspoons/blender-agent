@@ -134,7 +134,10 @@ async def run_server(
     )
 
     mcp, blender_tools = await build_blender_registry()
-    store = AgentStore(data_dir=data_dir)
+    # Give the agent the full blmcp skills index (builtins + extensions + git
+    # sources), not just the store's own local scanner.
+    from .skills import BlmcpSkillIndex
+    store = AgentStore(data_dir=data_dir, skills_index=BlmcpSkillIndex())
 
     # Harness log: turns, tool calls, LLM failures. The first place to
     # look when a model "stops responding".
@@ -151,6 +154,9 @@ async def run_server(
     # via .blend in a shared exchange dir (the generic runtime is surface-agnostic).
     from .swarm import BlenderSwarmProvider
     runtime.swarm_provider = BlenderSwarmProvider()
+    # Agent-authored tool registry (the human-approval flip for inert tools).
+    from blmcp.agent_registry import store as agent_tool_registry
+    runtime.agent_tool_registry = agent_tool_registry
     runtime.instance_title = title if title is not None else os.environ.get("BLENDER_AGENT_TITLE", "")
     runtime.instance_port = port or 0
     app = create_app(runtime)

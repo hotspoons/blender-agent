@@ -86,9 +86,12 @@ class TestSkillsStore(unittest.TestCase):
     def setUp(self) -> None:
         _import_blagent()
         from agentcore.store import AgentStore
+        from blagent.skills import BlmcpSkillIndex
 
         self._tmp = tempfile.TemporaryDirectory()
-        self.store = AgentStore(data_dir=self._tmp.name)
+        # The Blender build wires blmcp's index (builtins + extensions); these
+        # tests assert those builtin skills are visible through the store.
+        self.store = AgentStore(data_dir=self._tmp.name, skills_index=BlmcpSkillIndex())
 
     def tearDown(self) -> None:
         self._tmp.cleanup()

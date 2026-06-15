@@ -15,15 +15,19 @@ Layout under the data dir (default ``$XDG_DATA_HOME/blender-agent``)::
     sessions/<id>/transcript.jsonl
     sessions/<id>/media/<short-id>.<ext>
 
-Skills are backed by the core blmcp skill index (Anthropic SKILL.md
-layout): this store's ``skills/`` folder is registered as one source among
-builtin/drop-folder/git-repo/extension collections, and legacy flat
+Skills use the Anthropic SKILL.md layout, served through an injectable
+skill index (``AgentStore(skills_index=...)``): the default
+``LocalSkillIndex`` scans this store's own ``skills/`` folder, while a
+domain build can inject a richer index (the Blender build injects
+``blmcp``'s — builtin/drop-folder/git-repo/extension collections). This
+store's ``skills/`` folder is registered as one source; legacy flat
 ``skills/<name>.md`` files migrate to folders on startup.
 """
 
 __all__ = (
     "AgentConfig",
     "AgentStore",
+    "LocalSkillIndex",
     "SessionBusyError",
     "Skill",
     "search_skills",
@@ -283,17 +287,93 @@ def search_skills(skills: list[Skill], query: str, max_results: int = 5) -> list
     return scored[:max_results]
 
 
+class _IndexedSkill:
+    """One skill in a ``LocalSkillIndex`` snapshot (the shape the store reads
+    off the injected index: ``.name`` / ``.description`` / ``.body()``)."""
+
+    def __init__(self, name: str, description: str, path: str) -> None:
+        self.name = name
+        self.description = description
+        self._path = path
+
+    def body(self) -> str:
+        with open(self._path, encoding="utf-8") as fh:
+            return fh.read()
+
+
+class _SkillSnapshot:
+    def __init__(self, skills: "dict[str, _IndexedSkill]") -> None:
+        self.skills = skills
+
+
+def _parse_skill_frontmatter(path: str) -> "tuple[str, str]":
+    """``name`` / ``description`` from a SKILL.md YAML frontmatter block
+    (minimal parse — no yaml dependency in the generic core)."""
+    name = description = ""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return "", ""
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        block = text[3:end] if end != -1 else ""
+        for line in block.splitlines():
+            key, sep, value = line.partition(":")
+            if not sep:
+                continue
+            key, value = key.strip(), value.strip()
+            if key == "name":
+                name = value
+            elif key == "description":
+                description = value
+    return name, description
+
+
+class LocalSkillIndex:
+    """
+    The standalone agentcore skills index: scans registered source dirs for
+    ``<name>/SKILL.md`` (Anthropic layout). A richer index (builtins, git
+    repos, tools-extension collections) can be injected instead — see
+    ``AgentStore(skills_index=...)``; the Blender build injects ``blmcp``'s.
+    """
+
+    def __init__(self) -> None:
+        self._sources: dict[str, str] = {}
+
+    def register_source(self, name: str, path: str) -> None:
+        self._sources[name] = path
+
+    def ensure(self, refresh: bool = False) -> _SkillSnapshot:
+        skills: dict[str, _IndexedSkill] = {}
+        for root in self._sources.values():
+            if not os.path.isdir(root):
+                continue
+            for entry in sorted(os.listdir(root)):
+                md = os.path.join(root, entry, "SKILL.md")
+                if not os.path.isfile(md):
+                    continue
+                name, description = _parse_skill_frontmatter(md)
+                name = name or entry
+                skills[name] = _IndexedSkill(name, description, md)
+        return _SkillSnapshot(skills)
+
+
 class AgentStore:
     """
     Owns the on-disk agent state. Synchronous I/O on small files; call
     sites run inside request handlers where this is acceptable.
     """
 
-    def __init__(self, data_dir: str | None = None) -> None:
+    def __init__(self, data_dir: str | None = None, *, skills_index: "Any | None" = None) -> None:
         self.data_dir = data_dir or os.environ.get("BLENDER_AGENT_DATA_DIR") or _default_data_dir()
         os.makedirs(self.data_dir, exist_ok=True)
         self._config_path = os.path.join(self.data_dir, "config.yaml")
         self.config = AgentConfig.load(self._config_path)
+        # Skills index: the standalone local scanner by default; a domain
+        # build (Blender) injects a richer one. Set before registering this
+        # store's own skills folder against it.
+        self.skills_index = skills_index or LocalSkillIndex()
         # Held session locks, for same-process re-entrancy (one store
         # per process; everything runs on the asyncio loop thread).
         self._session_locks: dict[str, _SessionLock] = {}
@@ -339,17 +419,14 @@ class AgentStore:
 
     def _register_skills_source(self) -> None:
         """
-        Contribute this store's skills folder to the core blmcp skill
-        index. Runtime sources scan last, so user-saved skills override
-        builtins of the same name.
+        Contribute this store's skills folder to the skills index. Runtime
+        sources scan last, so user-saved skills override builtins of the
+        same name.
         """
-        from blmcp.skills import register_skills_source
-        register_skills_source("agent-store", self.skills_dir)
+        self.skills_index.register_source("agent-store", self.skills_dir)
 
-    @staticmethod
-    def _core_index():
-        from blmcp.skills import ensure_index
-        return ensure_index()
+    def _core_index(self) -> Any:
+        return self.skills_index.ensure()
 
     def list_skills(self) -> list[Skill]:
         """
@@ -398,8 +475,7 @@ class AgentStore:
         with open(os.path.join(skill_folder, "SKILL.md"), "w", encoding="utf-8") as fh:
             fh.write(body)
 
-        from blmcp.skills import ensure_index
-        ensure_index(refresh=True)
+        self.skills_index.ensure(refresh=True)
 
     # ------------------------------------------------------------------
     # Memory.
