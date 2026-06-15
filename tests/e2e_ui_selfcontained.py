@@ -91,6 +91,24 @@ def main():
                         "rounds": [], "gathered": None, "done": done, "audit": None,
                         "currentRound": 0, "draft": None}
 
+            # --- planner card: draft-phase "looking around" projects from the
+            #     snapshot's planner field (feedback before objectives arrive) ---
+            push_view({**view({}, []), "planner": {
+                "phase": "draft", "round": 0, "active": True,
+                "reasoning": "PLANNER_LOOKING_AROUND_77", "content": ""}})
+            page.wait_for_timeout(250)
+            text = page.evaluate(_DOM_TEXT)
+            _check("planner: draft card shown before objectives", "Planning objectives" in text)
+            _check("planner: reasoning trace streamed", "PLANNER_LOOKING_AROUND_77" in text)
+            # plan-phase card carries the round label
+            push_view({**view({}, []), "currentRound": 1, "planner": {
+                "phase": "plan", "round": 1, "active": False,
+                "reasoning": "DECOMPOSING_TRACE_88", "content": ""}})
+            page.wait_for_timeout(250)
+            text = page.evaluate(_DOM_TEXT)
+            _check("planner: plan card labels the round", "Decomposing round 2" in text)
+            _check("planner: plan reasoning shown", "DECOMPOSING_TRACE_88" in text)
+
             # --- autonomy_accepted adopts session id + sets busy + resets view ---
             push_view(view({"orch-1:w:t0": {"id": "orch-1:w:t0", "role": "worker", "task": "stale",
                                             "state": "running", "timeline": [], "calls": {}, "media": []}},
@@ -120,11 +138,19 @@ def main():
 
             # --- done worker shows its proof (snapshot) ---
             done_worker = {"orch-1:w:t1": {**running_worker["orch-1:w:t1"], "state": "done",
-                                           "ok": True, "proof": "PROOF_DONE_42"}}
+                                           "ok": True,
+                                           "proof": "PROOF_DONE_42\n\n- item one\n- item two"}}
             push_view(view(done_worker, ["orch-1:w:t1"]))
             page.wait_for_timeout(300)
             text = page.evaluate(_DOM_TEXT)
             _check("worker: proof shown on done (Result tab default)", "PROOF_DONE_42" in text)
+            # Proof is rendered markdown: block elements (no raw bullets), and the
+            # container must NOT be pre-wrap (that double-spaced the rendered HTML).
+            proof_probe = page.evaluate("""() => { let r=null; const w=(root)=>{const el=root.querySelector&&root.querySelector('.proof'); if(el)r=el; root.querySelectorAll&&root.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)w(e.shadowRoot)})}; w(document); return r ? {ws: getComputedStyle(r).whiteSpace, lis: r.querySelectorAll('li').length} : null; }""")
+            _check("worker proof: not pre-wrap (no double-spacing)",
+                   proof_probe and proof_probe["ws"] != "pre-wrap", str(proof_probe))
+            _check("worker proof: markdown list rendered as <li>",
+                   proof_probe and proof_probe["lis"] == 2, str(proof_probe))
             _check("done worker: Result tab hides the work timeline", "execute_blender_code" not in text)
             # switch to the Work tab -> timeline (tool calls) appears
             page.evaluate("""() => { const find=(r)=>{for(const b of r.querySelectorAll('button')){if((b.textContent||'').trim()==='Work')return b; const s=b.shadowRoot&&find(b.shadowRoot); } for(const e of r.querySelectorAll('*')){if(e.shadowRoot){const f=find(e.shadowRoot); if(f)return f;}} return null;}; const b=find(document); if(b)b.click(); }""")

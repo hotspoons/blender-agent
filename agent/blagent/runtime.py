@@ -435,6 +435,33 @@ class AgentRuntime:
             pass
         return view
 
+    def _persist_emit_for(
+            self, session_id: str,
+            view: "OrchestratorView") -> "Callable[[dict[str, Any]], Awaitable[None]]":
+        """Build the emit used by autonomy runs AND guided-intake drafting:
+        reduce each event into the backend-owned view, emit the raw event for
+        non-autonomy consumers, then emit the view SNAPSHOT (the frontend's only
+        autonomy state — a pure projection). Token-like deltas are throttled;
+        milestones persist the snapshot so a reload re-projects the latest."""
+        async def persist_emit(event: dict[str, Any]) -> None:
+            changed = False
+            try:
+                changed = view.apply(event)
+            except Exception as ex:  # pylint: disable=broad-except
+                _log.warning("orchestrator view.apply failed session=%s: %s", session_id, ex)
+            await self.emit(event)
+            if changed:
+                t = event.get("type")
+                is_token = t == "token" or (t == "planner_stream" and event.get("state") == "delta")
+                now = time.monotonic()
+                if (not is_token) or (now - self._view_emit_at.get(session_id, 0.0) >= _VIEW_THROTTLE_SECONDS):
+                    self._view_emit_at[session_id] = now
+                    await self.emit({"type": "autonomy_view", "session_id": session_id,
+                                     "view": view.snapshot()})
+                    if not is_token:        # persist on milestones (not every token)
+                        self._persist_view(session_id, view)
+        return persist_emit
+
     def _persist_view(self, session_id: str, view: "OrchestratorView") -> None:
         try:
             path = self._view_path(session_id)
@@ -685,25 +712,67 @@ class AgentRuntime:
 
         return probe
 
-    def draft_objectives(self, session_id: str, goal: str) -> None:
+    def draft_objectives(self, session_id: str, goal: str) -> str:
         """
-        Guided intake: draft objectives from a one-line *goal* (LLM), emitting
-        ``objectives_draft`` for the composer's editor. Fire-and-forget task.
+        Guided intake: draft objectives from a one-line *goal* (LLM). Surfaces a
+        live PLANNING CARD via the backend view (``planner_stream`` -> snapshot)
+        so the work isn't dropped between submit and objectives appearing, and
+        PERSISTS the request + draft to the session so history survives reload.
+        Emits ``objectives_draft`` for the composer's read-only list. Returns the
+        session id (created when absent) so the caller can adopt it.
         """
         from .autonomy import draft_objectives as _draft
 
+        if not session_id:
+            session_id = self.new_session()
+        session = self._get_or_load_session(session_id)
+        view = self._reset_view(session_id)
+        persist_emit = self._persist_emit_for(session_id, view)
+        # The submitted request becomes the session's first record (history).
+        try:
+            session.engine.push_record({"role": "user", "content": goal, "autonomy_goal": True})
+        except Exception as ex:  # pylint: disable=broad-except
+            _log.warning("persist draft goal failed session=%s: %s", session_id, ex)
+
         async def _run() -> None:
+            await persist_emit({"type": "planner_stream", "session_id": session_id,
+                                "phase": "draft", "state": "start"})
+
+            async def on_delta(content: str, reasoning: str) -> None:
+                await persist_emit({"type": "planner_stream", "session_id": session_id,
+                                    "phase": "draft", "state": "delta",
+                                    "content": content, "reasoning": reasoning})
             try:
-                objs = await _draft(self._make_llm(), self._model_name(), goal)
+                objs = await _draft(self._make_llm(), self._model_name(), goal, on_delta=on_delta)
             except Exception as ex:  # pylint: disable=broad-except
                 _log.warning("draft_objectives failed: %s", ex)
                 objs = []
+            await persist_emit({"type": "planner_stream", "session_id": session_id,
+                                "phase": "draft", "state": "done"})
             await self.emit({
                 "type": "objectives_draft", "session_id": session_id,
                 "goal": goal, "objectives": objs,
             })
+            # Persist the draft so a reload shows what was proposed (not an empty
+            # transcript) — the composer re-reads it from the loaded record.
+            if objs:
+                try:
+                    session.engine.push_record({
+                        "role": "assistant",
+                        "content": "**Proposed objectives** for: {:s}\n{:s}".format(
+                            goal, "\n".join(
+                                "{:d}. {:s}{:s}".format(
+                                    i + 1, o["text"],
+                                    "\n   _done when: {:s}_".format(o["acceptance"]) if o.get("acceptance") else "")
+                                for i, o in enumerate(objs))),
+                        "autonomy_objectives_draft": objs,
+                    })
+                except Exception as ex:  # pylint: disable=broad-except
+                    _log.warning("persist draft objectives failed session=%s: %s", session_id, ex)
+            self._persist_view(session_id, view)
 
         asyncio.create_task(_run())
+        return session_id
 
     async def run_autonomy_turn(
             self,
@@ -762,28 +831,7 @@ class AgentRuntime:
         })
 
         view = self._reset_view(session_id)   # fresh backend-owned view for this run
-
-        async def persist_emit(event: dict[str, Any]) -> None:
-            # Reduce the event into the backend-owned view, then emit the
-            # SNAPSHOT (the frontend renders it; it holds no autonomy state).
-            # The raw event still flows for non-autonomy consumers; the UI
-            # ignores autonomy events now (no JS reducer). Token-driven
-            # snapshots are throttled; milestones persist the snapshot to disk.
-            changed = False
-            try:
-                changed = view.apply(event)
-            except Exception as ex:  # pylint: disable=broad-except
-                _log.warning("orchestrator view.apply failed session=%s: %s", session_id, ex)
-            await self.emit(event)
-            if changed:
-                is_token = event.get("type") == "token"
-                now = time.monotonic()
-                if (not is_token) or (now - self._view_emit_at.get(session_id, 0.0) >= _VIEW_THROTTLE_SECONDS):
-                    self._view_emit_at[session_id] = now
-                    await self.emit({"type": "autonomy_view", "session_id": session_id,
-                                     "view": view.snapshot()})
-                    if not is_token:        # persist on milestones (not every token)
-                        self._persist_view(session_id, view)
+        persist_emit = self._persist_emit_for(session_id, view)
 
         policy = (
             AutoPauseWhenBlockedPolicy()
@@ -840,7 +888,9 @@ class AgentRuntime:
             if config.autonomy_qa else None
         )
         orchestrator = AutonomyOrchestrator(
-            planner=LlmPlanner(llm, model),
+            # The planner streams its decomposition ("looking around") to the UI
+            # as planner_stream events -> the view's planner card.
+            planner=LlmPlanner(llm, model, emit=persist_emit, session_id=session_id),
             scheduler=scheduler,
             evaluator=StateAwareEvaluator(llm, model, probe=probe),
             policy=policy,

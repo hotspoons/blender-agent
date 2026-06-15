@@ -392,6 +392,18 @@ export class BaChatStage extends LitElement {
       border: 1px solid var(--border); border-left: 3px solid var(--text-muted);
       border-radius: var(--radius-md); background: var(--surface-elevated); overflow: hidden;
     }
+    /* Planner "looking around" card (draft + per-round decomposition). */
+    .planner { margin: 8px 0; border: 1px solid var(--border); border-left: 3px solid var(--accent);
+      border-radius: var(--radius-md); background: var(--surface); padding: 10px 12px; }
+    .planner.done { opacity: 0.85; }
+    .planner-head { display: flex; align-items: center; gap: 8px; }
+    .planner-head .spin { display: inline-flex; animation: spin 1.4s linear infinite; color: var(--accent); }
+    .planner-head svg { width: 14px; height: 14px; }
+    .planner-label { font-size: 12.5px; font-weight: 600; color: var(--text); }
+    .planner-trace { margin-top: 7px; font-size: 12px; color: var(--text-muted); white-space: pre-wrap;
+      overflow-wrap: anywhere; max-height: 180px; overflow-y: auto; }
+    .planner-body { margin-top: 6px; font-size: 11.5px; color: var(--text-muted); font-family: var(--font-mono);
+      white-space: pre-wrap; overflow-wrap: anywhere; opacity: 0.7; max-height: 90px; overflow-y: auto; }
     .agent.worker { border-left-color: var(--accent); }
     .agent.eval { border-left-color: var(--warning); }
     .agent.gather { border-left-color: var(--accent-2); }
@@ -432,8 +444,17 @@ export class BaChatStage extends LitElement {
     .agent .state .spin { animation: spin 1.4s linear infinite; }
     .agent .state.ok { color: var(--success); }
     .agent .state.fail { color: var(--danger); }
-    .agent .proof { padding: 0 12px 10px 12px; font-size: 12.5px; color: var(--text);
-      white-space: pre-wrap; border-top: 1px solid var(--border); padding-top: 8px; }
+    /* Proof is RENDERED markdown (not raw text), so let the block elements own
+       the spacing — pre-wrap here would double-space (block margins + the
+       preserved source newlines between tags). */
+    .agent .proof { padding: 8px 12px 10px 12px; font-size: 12.5px; color: var(--text);
+      border-top: 1px solid var(--border); line-height: 1.5; }
+    .agent .proof > :first-child { margin-top: 0; }
+    .agent .proof > :last-child { margin-bottom: 0; }
+    .agent .proof p { margin: 0 0 8px; }
+    .agent .proof ul, .agent .proof ol { margin: 6px 0; padding-left: 22px; }
+    .agent .proof li { margin: 2px 0; }
+    .agent .proof pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
     .agent .inject { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border); }
     .agent .inject input { flex: 1; background: var(--surface); color: var(--text);
       border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 5px 8px; font: inherit; font-size: 12.5px; }
@@ -860,14 +881,36 @@ export class BaChatStage extends LitElement {
       </div>`;
   }
 
+  /** The planner "looking around" — a live card shown after a request is
+   *  submitted (draft phase) and between a round starting and its workers
+   *  spawning (plan phase), so the work is never dropped. */
+  _renderPlanner(p) {
+    if (!p) return nothing;
+    const label = p.phase === "draft"
+      ? "Planning objectives"
+      : `Decomposing round ${(p.round ?? 0) + 1}`;
+    const trace = String(p.reasoning || "");
+    const body = String(p.content || "");
+    return html`
+      <div class="planner ${p.active ? "active" : "done"}">
+        <div class="planner-head">
+          ${p.active ? html`<span class="spin">${icon("arrow-path")}</span>` : icon("clipboard")}
+          <span class="planner-label">${label}${p.active ? "…" : ""}</span>
+        </div>
+        ${trace ? html`<div class="planner-trace">${trace}</div>` : nothing}
+        ${body && p.active ? html`<div class="planner-body">${body}</div>` : nothing}
+      </div>`;
+  }
+
   _renderAutonomy() {
     const a = this._autonomy || {};
-    const active = (a.objectives?.length || a.agentOrder?.length || a.done);
+    const active = (a.objectives?.length || a.agentOrder?.length || a.done || a.planner);
     if (!active) return nothing;
     const sym = (s) => (s === "met" ? "✓" : "○");
     const done = a.done;
     return html`
       <div class="auto">
+        ${a.objectives?.length ? html`
         <div class="objectives">
           <div class="obj-head">
             <span>Objectives</span>
@@ -880,7 +923,8 @@ export class BaChatStage extends LitElement {
               <span class="obj-text">${o.text}</span>
               ${o.evidence ? html`<span class="ev" title=${o.evidence}>${o.evidence}</span>` : nothing}
             </div>`)}
-        </div>
+        </div>` : nothing}
+        ${this._renderPlanner(a.planner)}
         ${(() => {
           const rows = [];
           let lastRound;
@@ -927,7 +971,7 @@ export class BaChatStage extends LitElement {
   render() {
     const records = this._records.filter((r) => !r.synthetic && r.role !== "tool");
     const autoActive = !!(this._autonomy && (this._autonomy.objectives?.length
-      || this._autonomy.agentOrder?.length || this._autonomy.done));
+      || this._autonomy.agentOrder?.length || this._autonomy.done || this._autonomy.planner));
     // (compaction "summary" records render as a divider, see _renderRecord)
     const showEmpty = records.length === 0 && !this._streaming && !this._busy && !autoActive;
     return html`

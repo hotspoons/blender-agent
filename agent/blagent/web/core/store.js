@@ -152,6 +152,20 @@ class Store extends EventTarget {
         if (!sameSessionBusy && msg.autonomy_view) {
           patch.autonomy = msg.autonomy_view;
         }
+        // Restore a not-yet-run objectives DRAFT so "Begin run" survives reload:
+        // replay the last persisted draft record into autonomy.draft, but only
+        // when no run has started in this session (no worker cards / no result).
+        if (!sameSessionBusy) {
+          const av = patch.autonomy || this.state.autonomy;
+          if (!av.agentOrder?.length && !av.done) {
+            const last = [...(msg.records || [])].reverse()
+              .find((r) => Array.isArray(r.autonomy_objectives_draft));
+            if (last) {
+              patch.autonomy = { ...av, draft: {
+                goal: (last.content || "").split("\n")[0], objectives: last.autonomy_objectives_draft } };
+            }
+          }
+        }
         this._set(patch);
         break;
       }
@@ -270,9 +284,16 @@ class Store extends EventTarget {
           autonomy: this._freshAutonomy(),
         });
         break;
+      case "draft_accepted":
+        // Adopt the (possibly newly-created) session the draft persists into,
+        // so its planning card + saved history resolve to this session.
+        this._set({ sessionId: msg.session_id || this.state.sessionId });
+        this.send({ type: "list_sessions" });
+        break;
       case "objectives_draft": {
         const a = { ...this.state.autonomy, draft: { goal: msg.goal || "", objectives: msg.objectives || [] } };
-        this._set({ autonomy: a, draftPending: false });
+        this._set({ autonomy: a, draftPending: false,
+                    sessionId: msg.session_id || this.state.sessionId });
         if (!(msg.objectives || []).length) {
           this._set({ error: "Draft came back empty — try a more concrete goal, or add objectives manually." });
         }
@@ -365,7 +386,7 @@ class Store extends EventTarget {
   _freshAutonomy() {
     return {
       objectives: [], agents: {}, agentOrder: [], rounds: [],
-      gathered: null, done: null, draft: null, audit: null, currentRound: 0,
+      gathered: null, done: null, draft: null, audit: null, planner: null, currentRound: 0,
     };
   }
 

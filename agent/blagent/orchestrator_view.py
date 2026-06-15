@@ -33,6 +33,7 @@ class OrchestratorView:
         self.gathered: dict[str, Any] | None = None
         self.done: dict[str, Any] | None = None
         self.audit: dict[str, Any] | None = None
+        self.planner: dict[str, Any] | None = None
         self.current_round: int = 0
 
     def snapshot(self) -> dict[str, Any]:
@@ -44,6 +45,7 @@ class OrchestratorView:
             "gathered": self.gathered,
             "done": self.done,
             "audit": self.audit,
+            "planner": self.planner,
             "currentRound": self.current_round,
             "draft": None,
         }
@@ -59,6 +61,24 @@ class OrchestratorView:
             if ev.get("objectives") is not None:
                 self.objectives = ev["objectives"]
             self.current_round = int(ev.get("round", self.current_round) or 0)
+            self.planner = None      # fresh planner panel each round
+            return True
+        if t == "planner_stream":
+            # The planner "looking around": the draft phase (goal -> objectives,
+            # the coordinator's first response) AND each in-run round's
+            # decomposition (objectives -> worker tasks) surface here as a live
+            # planning card, so the work is never dropped between submit and
+            # objectives appearing.
+            phase = ev.get("phase", "plan")
+            state = ev.get("state")
+            if state == "start" or self.planner is None or self.planner.get("phase") != phase:
+                self.planner = {"phase": phase, "round": self.current_round,
+                                "reasoning": "", "content": "", "active": True}
+            if state != "start":
+                self.planner["reasoning"] += str(ev.get("reasoning", "") or "")
+                self.planner["content"] += str(ev.get("content", "") or "")
+            if state == "done":
+                self.planner["active"] = False
             return True
         if t == "objectives_update":
             if ev.get("objectives") is not None:

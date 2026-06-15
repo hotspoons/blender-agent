@@ -216,6 +216,40 @@ class TestAutonomyLoop(unittest.TestCase):
         self.assertTrue(by_id["o1"].met)
         self.assertFalse(by_id["o2"].met)
 
+    def test_planner_streams_decomposition_to_ui(self) -> None:
+        a = _import_autonomy()
+        from blagent.llm import LlmChunk, LlmClient
+
+        class StreamingLlm(LlmClient):
+            async def stream(self, request: dict[str, Any]) -> Any:
+                yield LlmChunk(reasoning="thinking about ")
+                yield LlmChunk(reasoning="the tasks ")
+                yield LlmChunk(content='{"tasks": [{"objective_id": "o1", "instruction": "do o1"}]}')
+
+        events: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            events.append(event)
+
+        planner = a.LlmPlanner(StreamingLlm(), "m", emit=emit, session_id="s1")
+        tasks = _run(planner.plan([a.Objective(id="o1", text="goal", acceptance="ac")]))
+
+        self.assertEqual(len(tasks), 1)
+        streams = [e for e in events if e["type"] == "planner_stream"]
+        self.assertEqual(streams[0]["state"], "start")
+        self.assertEqual(streams[-1]["state"], "done")
+        self.assertTrue(all(e["phase"] == "plan" for e in streams))
+        # The reasoning trace ("looking around") streamed to the UI.
+        reasoning = "".join(e.get("reasoning", "") for e in streams)
+        self.assertIn("thinking about the tasks", reasoning)
+
+    def test_planner_without_emit_streams_nothing(self) -> None:
+        a = _import_autonomy()
+        llm = self._scripted_llm(['{"tasks": [{"objective_id": "o1", "instruction": "x"}]}'])
+        # No emit -> no streaming side effects, still returns tasks.
+        tasks = _run(a.LlmPlanner(llm, "m").plan([a.Objective(id="o1", text="g", acceptance="a")]))
+        self.assertEqual(len(tasks), 1)
+
     def test_qa_reviewer_spawns_dedicated_agent_and_annotates_worker(self) -> None:
         a = _import_autonomy()
         # Planner -> one task; QA reviewer flags it; evaluator -> met (QA is

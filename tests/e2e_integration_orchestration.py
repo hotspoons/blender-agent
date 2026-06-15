@@ -104,6 +104,15 @@ def main():
             page.locator("textarea").first.fill("Clean up duplicates and assemble the robot arm.")
             page.locator("button.circle.act.draft").first.click()
 
+            # a planning card appears DURING the draft (feedback before objectives)
+            planning = False
+            for _ in range(40):
+                page.wait_for_timeout(200)
+                if _drive(page, "return store.state.autonomy.planner != null;"):
+                    planning = True
+                    break
+            check("draft shows a planning card before objectives arrive", planning)
+
             # objectives decomposed by the (real) draft path
             drafted = False
             for _ in range(40):

@@ -90,6 +90,31 @@ class TestOrchestratorView(unittest.TestCase):
         review = snap["agents"]["run:w:t0"]["review"]
         self.assertEqual(review, {"passed": False, "note": "missing X", "by": "run:qa:t0"})
 
+    def test_planner_stream_reduces_to_a_planning_card(self):
+        V = _mod().OrchestratorView
+        v = V()
+        # draft phase: a planning card with reasoning, active until done.
+        self.assertTrue(v.apply({"type": "planner_stream", "session_id": "run",
+                                 "phase": "draft", "state": "start"}))
+        v.apply({"type": "planner_stream", "session_id": "run", "phase": "draft",
+                 "state": "delta", "reasoning": "breaking the ", "content": ""})
+        v.apply({"type": "planner_stream", "session_id": "run", "phase": "draft",
+                 "state": "delta", "reasoning": "goal down", "content": "{...}"})
+        p = v.snapshot()["planner"]
+        self.assertEqual(p["phase"], "draft")
+        self.assertTrue(p["active"])
+        self.assertEqual(p["reasoning"], "breaking the goal down")
+        v.apply({"type": "planner_stream", "session_id": "run", "phase": "draft", "state": "done"})
+        self.assertFalse(v.snapshot()["planner"]["active"])
+
+    def test_round_start_clears_prior_planner_card(self):
+        V = _mod().OrchestratorView
+        v = V()
+        v.apply({"type": "planner_stream", "session_id": "run", "phase": "plan",
+                 "state": "delta", "reasoning": "stale"})
+        v.apply({"type": "autonomy_round_start", "session_id": "run", "round": 1, "objectives": []})
+        self.assertIsNone(v.snapshot()["planner"])
+
     def test_worker_review_for_unknown_worker_is_ignored(self):
         V = _mod().OrchestratorView
         v = V()

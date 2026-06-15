@@ -138,10 +138,13 @@ _COMPLETE_TIMEOUT_SECONDS = 240.0
 
 
 async def _complete(llm: LlmClient, model: str, system: str, user: str,
-                    timeout: float = _COMPLETE_TIMEOUT_SECONDS) -> str:
-    """One non-streamed-to-UI completion; returns the content (falling back to
-    the reasoning trace when a reasoning model answers there and leaves content
-    empty). Bounded by *timeout* so a hang surfaces as a partial/empty result."""
+                    timeout: float = _COMPLETE_TIMEOUT_SECONDS,
+                    on_delta: "Callable[[str, str], Awaitable[None]] | None" = None) -> str:
+    """One completion; returns the content (falling back to the reasoning trace
+    when a reasoning model answers there and leaves content empty). Bounded by
+    *timeout* so a hang surfaces as a partial/empty result. When *on_delta* is
+    given it is awaited per chunk with ``(content_delta, reasoning_delta)`` so a
+    caller can stream the planner/draft "looking around" to the UI."""
     request = {
         "model": model,
         "messages": [
@@ -159,6 +162,8 @@ async def _complete(llm: LlmClient, model: str, system: str, user: str,
             trace = getattr(chunk, "reasoning", "")
             if trace:
                 reasoning.append(trace)
+            if on_delta is not None and (chunk.content or trace):
+                await on_delta(chunk.content or "", trace or "")
 
     try:
         await asyncio.wait_for(_drain(), timeout=timeout)
@@ -200,12 +205,15 @@ _DRAFT_SYSTEM = (
 )
 
 
-async def draft_objectives(llm: LlmClient, model: str, goal: str) -> list[dict[str, str]]:
+async def draft_objectives(
+        llm: LlmClient, model: str, goal: str,
+        on_delta: "Callable[[str, str], Awaitable[None]] | None" = None) -> list[dict[str, str]]:
     """
     Propose objectives (each {text, acceptance}) for *goal*. The user edits/
     confirms before a run starts (guided intake, with an explicit-edit fallback).
+    *on_delta* streams the draft's reasoning/content to the UI as it decomposes.
     """
-    text = await _complete(llm, model, _DRAFT_SYSTEM, "GOAL: " + goal)
+    text = await _complete(llm, model, _DRAFT_SYSTEM, "GOAL: " + goal, on_delta=on_delta)
     data = _extract_json_object(text)
     out: list[dict[str, str]] = []
     for raw in data.get("objectives", []) or []:
@@ -233,19 +241,40 @@ _PLANNER_SYSTEM = (
 
 
 class LlmPlanner:
-    """Default planner: asks the LLM to decompose unmet objectives."""
+    """Default planner: asks the LLM to decompose unmet objectives. When given
+    an *emit* + *session_id* it streams its "looking around" (reasoning/content)
+    to the UI as ``planner_stream`` events, so a run shows decomposition
+    feedback between a round starting and its workers spawning."""
 
-    def __init__(self, llm: LlmClient, model: str) -> None:
+    def __init__(self, llm: LlmClient, model: str,
+                 emit: "Callable[[dict[str, Any]], Awaitable[None]] | None" = None,
+                 session_id: str = "") -> None:
         self._llm = llm
         self._model = model
+        self._emit = emit
+        self._session_id = session_id
+
+    async def _planner_event(self, state: str, content: str = "", reasoning: str = "") -> None:
+        if self._emit is None:
+            return
+        await self._emit({
+            "type": "planner_stream", "session_id": self._session_id,
+            "phase": "plan", "state": state, "content": content, "reasoning": reasoning,
+        })
 
     async def plan(self, unmet: list[Objective]) -> list[WorkerTask]:
         listing = "\n".join(
             "- id={:s} | goal: {:s} | acceptance: {:s}".format(o.id, o.text, o.acceptance)
             for o in unmet
         )
+        await self._planner_event("start")
+
+        async def on_delta(content: str, reasoning: str) -> None:
+            await self._planner_event("delta", content, reasoning)
+
         text = await _complete(self._llm, self._model, _PLANNER_SYSTEM,
-                               "UNMET OBJECTIVES:\n" + listing)
+                               "UNMET OBJECTIVES:\n" + listing, on_delta=on_delta)
+        await self._planner_event("done")
         data = _extract_json_object(text)
         by_id = {o.id: o for o in unmet}
         tasks: list[WorkerTask] = []
@@ -708,6 +737,8 @@ class AutonomyOrchestrator:
         project state, before the next worker runs. Emits its own spawn/done
         (it is a first-class agent with the ``qa`` role) and a ``worker_review``
         event that annotates the worker card it reviewed."""
+        if self._reviewer is None:        # guarded by the caller; keeps types honest
+            return QaNote(task.id, task.objective_id, True, "")
         qa_id = "{:s}:qa:{:s}".format(self._session_id, task.id)
         await self._emit({
             "type": "agent_spawned",

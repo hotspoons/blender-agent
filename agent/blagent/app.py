@@ -251,10 +251,13 @@ async def _handle_control(runtime: AgentRuntime, ws: WebSocket, data: dict[str, 
                 await runtime.emit({
                     "type": "objectives_update", "session_id": sid, "objectives": payload})
         elif msg_type == "draft_objectives":
-            # Guided intake: turn a one-line goal into draft objectives.
+            # Guided intake: turn a one-line goal into draft objectives. Returns
+            # the session id (created when absent) so the client adopts it — the
+            # planning card + persisted history then resolve to this session.
             goal = str(data.get("goal", "")).strip()
             if goal:
-                runtime.draft_objectives(str(data.get("session_id", "")), goal)
+                sid = runtime.draft_objectives(str(data.get("session_id", "")), goal)
+                await ws.send_json({"type": "draft_accepted", "session_id": sid})
         elif msg_type == "inject":
             # Voice of god: queue a message into a running worker's context
             # (lands at its next round boundary).

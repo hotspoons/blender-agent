@@ -113,7 +113,8 @@ async def completions(request: Request) -> StreamingResponse:
     if kind == "draft":
         gen = _stream_text("Let me break the goal into objectives.", json.dumps(_DRAFT_OBJECTIVES))
     elif kind == "planner":
-        gen = _stream_text("", json.dumps(_PLAN_TASKS))
+        gen = _stream_text("Decomposing the unmet objectives into worker tasks.",
+                           json.dumps(_PLAN_TASKS))
     elif kind == "evaluator":
         gen = _stream_text("Checking the scene state.", json.dumps(_VERDICTS))
     elif kind == "auditor":
