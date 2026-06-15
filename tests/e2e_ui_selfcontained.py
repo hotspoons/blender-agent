@@ -123,7 +123,7 @@ def main():
             # --- worker card (from snapshot) collapses <think>, renders tool, no raw tags ---
             running_worker = {"orch-1:w:t1": {
                 "id": "orch-1:w:t1", "role": "worker", "task": "do x", "state": "running",
-                "timeline": [{"kind": "text", "content": "<think>SECRET_PLAN_42</think>VISIBLE_ANSWER_42"},
+                "timeline": [{"kind": "text", "content": "<think>SECRET_PLAN_42</think>VISIBLE_ANSWER_42\n\n```\nVERYLONGTOKEN_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n```"},
                              {"kind": "call", "call_id": "c1"}],
                 "calls": {"c1": {"name": "execute_blender_code", "arguments": "{}", "state": "done"}},
                 "media": [], "stream": "", "proof": "", "ok": None}}
@@ -135,6 +135,10 @@ def main():
             _check("worker: reasoning collapsed (hidden)", "SECRET_PLAN_42" not in text)
             _check("worker: Thought disclosure present", "Thought for a moment" in text)
             _check("worker: tool call rendered", "execute_blender_code" in text)
+            # A long code block in worker prose WRAPS (no horizontal scroll/truncation).
+            pre_probe = page.evaluate("""() => { let pre=null; const w=(r)=>{const p=r.querySelector&&r.querySelector('.wtext pre'); if(p)pre=p; r.querySelectorAll&&r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)w(e.shadowRoot)})}; w(document); return pre ? {ws: getComputedStyle(pre).whiteSpace, overflowsX: pre.scrollWidth > pre.clientWidth + 2} : null; }""")
+            _check("worker code block wraps (pre-wrap, no x-overflow)",
+                   pre_probe and pre_probe["ws"] == "pre-wrap" and not pre_probe["overflowsX"], str(pre_probe))
 
             # --- done worker shows its proof (snapshot) ---
             done_worker = {"orch-1:w:t1": {**running_worker["orch-1:w:t1"], "state": "done",
@@ -157,6 +161,14 @@ def main():
             page.wait_for_timeout(300)
             text = page.evaluate(_DOM_TEXT)
             _check("done worker: Work tab shows the activity timeline", "execute_blender_code" in text)
+            # Work timeline scrolls INSIDE the card (doesn't push the session down),
+            # and worker cards have a clear shadow for separation.
+            wprobe = page.evaluate("""() => { let act=null, card=null; const w=(r)=>{const a=r.querySelector&&r.querySelector('.agent-activity'); if(a)act=a; const c=r.querySelector&&r.querySelector('.agent'); if(c)card=c; r.querySelectorAll&&r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)w(e.shadowRoot)})}; w(document); return {actMax: act&&getComputedStyle(act).maxHeight, actOv: act&&getComputedStyle(act).overflowY, shadow: card&&getComputedStyle(card).boxShadow}; }""")
+            _check("work timeline scrolls internally (capped max-height)",
+                   wprobe and wprobe["actMax"] not in (None, "none", "") and wprobe["actOv"] in ("auto", "scroll"),
+                   str(wprobe))
+            _check("worker card has a separation shadow",
+                   wprobe and wprobe["shadow"] not in (None, "none", ""), str(wprobe))
 
             # --- dedicated QA reviewer: its own agent card + a QA note pinned
             #     on the worker it reviewed (opt-in per-worker QA) ---

@@ -753,8 +753,6 @@ class AgentRuntime:
                 "type": "objectives_draft", "session_id": session_id,
                 "goal": goal, "objectives": objs,
             })
-            # Persist the draft so a reload shows what was proposed (not an empty
-            # transcript) — the composer re-reads it from the loaded record.
             if objs:
                 try:
                     session.engine.push_record({
@@ -881,15 +879,11 @@ class AgentRuntime:
                 unregister=self._unregister_worker,
             )
             scheduler = SequentialScheduler()
-        # Opt-in dedicated QA reviewer (a fresh LLM context + read-only probe),
-        # reviewing each worker's proof before the next worker runs.
         reviewer = (
             WorkerReviewer(self._make_llm(), model, probe=probe)
             if config.autonomy_qa else None
         )
         orchestrator = AutonomyOrchestrator(
-            # The planner streams its decomposition ("looking around") to the UI
-            # as planner_stream events -> the view's planner card.
             planner=LlmPlanner(llm, model, emit=persist_emit, session_id=session_id),
             scheduler=scheduler,
             evaluator=StateAwareEvaluator(llm, model, probe=probe),

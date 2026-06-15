@@ -61,13 +61,17 @@ _DEFAULT_MATRIX: dict[str, dict[str, Any]] = {
     # Context-blind budget judge (reviewer.py): a pure adjudicator — no tools.
     "reviewer": {"default": DISABLED},
     # Dedicated per-worker QA reviewer: read-only state probes to judge a
-    # worker's proof against the actual scene (evidence, not narrative).
+    # worker's proof against the actual scene (evidence, not narrative). Covers
+    # both the legacy get_*/*summary* tools AND the verb-dispatched core tools
+    # (scene/blendfile/capture/docs) so the allow-list survives the tool collapse.
     "qa": {"default": DISABLED, "tools": {
         "get_*": ALLOW, "*summary*": ALLOW, "*diagnostics*": ALLOW,
+        "scene": ALLOW, "blendfile": ALLOW, "capture": ALLOW, "docs": ALLOW,
         "skills": ALLOW, "media_io": ALLOW}},
-    # Independent verifier: read-only state probes only.
+    # Independent verifier: read-only state probes only (same dual coverage).
     "auditor": {"default": DISABLED, "tools": {
         "get_*": ALLOW, "*summary*": ALLOW, "*diagnostics*": ALLOW,
+        "scene": ALLOW, "blendfile": ALLOW, "capture": ALLOW, "docs": ALLOW,
         "skills": ALLOW, "media_io": ALLOW}},
 }
 

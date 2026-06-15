@@ -674,9 +674,7 @@ class AutonomyOrchestrator:
         self._emit = emit
         self._session_id = session_id
         self._share_context = share_context
-        # Opt-in per-worker QA: a dedicated reviewer agent (not the
-        # orchestrator) that reviews each worker's proof before the next runs.
-        self._reviewer = reviewer
+        self._reviewer = reviewer   # opt-in per-worker QA (not the orchestrator)
 
     def _shared_context(self, objectives: list[Objective]) -> str:
         """The orchestrator's objective view, shared with informed workers."""

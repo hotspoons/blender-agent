@@ -64,11 +64,6 @@ class OrchestratorView:
             self.planner = None      # fresh planner panel each round
             return True
         if t == "planner_stream":
-            # The planner "looking around": the draft phase (goal -> objectives,
-            # the coordinator's first response) AND each in-run round's
-            # decomposition (objectives -> worker tasks) surface here as a live
-            # planning card, so the work is never dropped between submit and
-            # objectives appearing.
             phase = ev.get("phase", "plan")
             state = ev.get("state")
             if state == "start" or self.planner is None or self.planner.get("phase") != phase:
@@ -117,8 +112,6 @@ class OrchestratorView:
                 self.agent_order.append(aid)
             return True
         if t == "worker_review":
-            # A dedicated QA agent's verdict, annotated onto the worker it
-            # reviewed (the QA agent itself is a normal spawned/done agent).
             ag = self.agents.get(str(ev.get("agent_id", "")))
             if ag is not None:
                 ag["review"] = {"passed": bool(ev.get("passed")),

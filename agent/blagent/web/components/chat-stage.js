@@ -161,7 +161,8 @@ export class BaChatStage extends LitElement {
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       padding: 10px 12px;
-      overflow-x: auto;
+      white-space: pre-wrap;   /* wrap, don't horizontal-scroll */
+      overflow-wrap: anywhere;
       font-size: 12.5px;
     }
     .msg.assistant code { font-family: var(--font-mono); }
@@ -367,7 +368,7 @@ export class BaChatStage extends LitElement {
     @keyframes spin { to { transform: rotate(360deg); } }
     /* Autonomy view: objectives card (inline, scrolls with the transcript)
        + bounded nested agent cards. */
-    .auto { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+    .auto { display: flex; flex-direction: column; gap: 18px; margin-bottom: 12px; }
     .objectives {
       background: var(--surface-elevated); border: 1px solid var(--border);
       border-radius: var(--radius-md); padding: 10px 12px;
@@ -391,6 +392,7 @@ export class BaChatStage extends LitElement {
     .agent {
       border: 1px solid var(--border); border-left: 3px solid var(--text-muted);
       border-radius: var(--radius-md); background: var(--surface-elevated); overflow: hidden;
+      box-shadow: 0 3px 14px rgba(0,0,0,0.32);
     }
     /* Planner "looking around" card (draft + per-round decomposition). */
     .planner { margin: 8px 0; border: 1px solid var(--border); border-left: 3px solid var(--accent);
@@ -444,11 +446,10 @@ export class BaChatStage extends LitElement {
     .agent .state .spin { animation: spin 1.4s linear infinite; }
     .agent .state.ok { color: var(--success); }
     .agent .state.fail { color: var(--danger); }
-    /* Proof is RENDERED markdown (not raw text), so let the block elements own
-       the spacing — pre-wrap here would double-space (block margins + the
-       preserved source newlines between tags). */
+    /* Rendered markdown: block elements own spacing (pre-wrap would double-space). */
     .agent .proof { padding: 8px 12px 10px 12px; font-size: 12.5px; color: var(--text);
-      border-top: 1px solid var(--border); line-height: 1.5; }
+      border-top: 1px solid var(--border); line-height: 1.5;
+      max-height: 480px; overflow-y: auto; overscroll-behavior: contain; }
     .agent .proof > :first-child { margin-top: 0; }
     .agent .proof > :last-child { margin-bottom: 0; }
     .agent .proof p { margin: 0 0 8px; }
@@ -464,11 +465,20 @@ export class BaChatStage extends LitElement {
     .agent .inject button:hover { color: var(--text); }
     .agent .inject button.now { color: var(--brand); border-color: var(--brand); }
     /* Live worker activity: a compact mini-transcript inside the card. */
+    /* Scroll inside the card; don't push the session down. */
     .agent-activity { padding: 8px 12px; border-top: 1px solid var(--border);
-      display: flex; flex-direction: column; gap: 6px; }
-    .agent-activity.media-strip { flex-direction: row; }
+      display: flex; flex-direction: column; gap: 6px;
+      max-height: 360px; overflow-y: auto; overscroll-behavior: contain; }
+    .agent-activity.media-strip { flex-direction: row; max-height: none; }
     .wtext { font-size: 12.5px; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
     .wtext.stream { color: var(--text-muted); }
+    .wtext pre, .agent .proof pre, .think-body pre {
+      white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 8px 10px; margin: 6px 0; font-size: 12px; }
+    .wtext code, .agent .proof code, .think-body code { font-family: var(--font-mono); }
+    .wtext :not(pre) > code, .agent .proof :not(pre) > code {
+      background: var(--surface-muted); border-radius: 4px; padding: 1px 5px; font-size: 0.88em; }
     .winject { font-size: 12px; color: var(--accent); font-style: italic; }
     .wdraft { font-size: 11.5px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
     .wdraft svg { width: 12px; height: 12px; animation: spin 1.4s linear infinite; }
@@ -512,7 +522,7 @@ export class BaChatStage extends LitElement {
     .audit-row .over-chip { font-size: 10px; font-weight: 700; text-transform: uppercase;
       color: var(--danger); border: 1px solid var(--danger); border-radius: var(--radius-sm); padding: 0 5px; }
     .audit-row .aev { flex: 1; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .round-div { display: flex; align-items: center; gap: 10px; margin: 4px 2px 2px;
+    .round-div { display: flex; align-items: center; gap: 10px; margin: 10px 2px 4px;
       font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
       color: var(--text-muted); }
     .round-div::before, .round-div::after { content: ""; flex: 1; height: 1px; background: var(--border); }
@@ -816,8 +826,7 @@ export class BaChatStage extends LitElement {
 
     const result = html`<div class="proof">${unsafeHtml(renderMarkdown(String(agent.proof || "")))}</div>`;
 
-    // A dedicated QA reviewer's verdict on this worker's proof (opt-in), shown
-    // inline regardless of the active tab so the QA signal is never buried.
+    // QA verdict, shown on both tabs so it's never buried.
     const review = agent.review ? html`
       <div class="qa-note ${agent.review.passed ? "ok" : "warn"}"
         title="QA reviewer verdict">
@@ -881,9 +890,7 @@ export class BaChatStage extends LitElement {
       </div>`;
   }
 
-  /** The planner "looking around" — a live card shown after a request is
-   *  submitted (draft phase) and between a round starting and its workers
-   *  spawning (plan phase), so the work is never dropped. */
+  /** Live planning card (draft + per-round decomposition). */
   _renderPlanner(p) {
     if (!p) return nothing;
     const label = p.phase === "draft"
