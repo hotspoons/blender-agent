@@ -129,6 +129,18 @@ export class BaChatStage extends LitElement {
       if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 240) {
         el.scrollTop = el.scrollHeight;
       }
+      // Nested streaming areas follow live output (latched to the bottom)
+      // until the user scrolls up; scrolling back to the bottom re-latches.
+      // The page scroll is never touched (overscroll-behavior: contain).
+      this.renderRoot.querySelectorAll(".latch").forEach((n) => {
+        if (!n.dataset.latchBound) {
+          n.dataset.latchBound = "1";
+          n.addEventListener("scroll", () => {
+            n.dataset.unlatched = (n.scrollHeight - n.scrollTop - n.clientHeight > 40) ? "1" : "";
+          });
+        }
+        if (n.dataset.unlatched !== "1") n.scrollTop = n.scrollHeight;
+      });
     });
   }
 
@@ -808,7 +820,7 @@ export class BaChatStage extends LitElement {
       <div class="agent-task-full" title="The task delegated to this worker">
         ${icon("clipboard")} ${agent.task || agent.id}</div>
       ${agent.timeline?.length ? html`
-        <div class="agent-activity">
+        <div class="agent-activity latch">
           ${agent.timeline.map((e, i) => {
             if (e.kind === "text") return this._renderWorkerText(e.content, `${agent.id}:t${i}`);
             if (e.kind === "injected") return html`<div class="winject">⟶ ${e.content}</div>`;
@@ -910,7 +922,7 @@ export class BaChatStage extends LitElement {
           ${p.active ? html`<span class="spin">${icon("arrow-path")}</span>` : icon("clipboard")}
           <span class="planner-label">${label}${p.active ? "…" : ""}</span>
         </div>
-        ${trace ? html`<div class="planner-trace">${trace}</div>` : nothing}
+        ${trace ? html`<div class="planner-trace latch">${trace}</div>` : nothing}
         ${body && p.active ? html`<div class="planner-body">${body}</div>` : nothing}
       </div>`;
   }

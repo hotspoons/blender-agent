@@ -203,6 +203,28 @@ def main():
             qa_class = page.evaluate("""() => { let f=false; const w=(r)=>{if(r.querySelector&&r.querySelector('.agent.qa'))f=true; r.querySelectorAll&&r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)w(e.shadowRoot)})}; w(document); return f; }""")
             _check("qa: QA agent card has dedicated role class", qa_class)
 
+            # --- a tall streaming work timeline latches to the bottom (follows
+            #     live output) without scrolling the whole page ---
+            many = {"c%d" % i: {"name": "get_objects_summary", "state": "done"} for i in range(28)}
+            latch_worker = {"orch-1:w:t1": {
+                "id": "orch-1:w:t1", "role": "worker", "task": "x", "state": "running",
+                "timeline": [{"kind": "call", "call_id": "c%d" % i} for i in range(28)],
+                "calls": many, "media": [], "stream": "", "proof": "", "ok": None}}
+            push_view(view(latch_worker, ["orch-1:w:t1"]))
+            page.wait_for_timeout(400)
+            latch = page.evaluate("""() => { let a=null; const w=(r)=>{const el=r.querySelector&&r.querySelector('.agent-activity.latch'); if(el)a=el; r.querySelectorAll&&r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)w(e.shadowRoot)})}; w(document); return a ? {overflows: a.scrollHeight > a.clientHeight + 10, atBottom: (a.scrollHeight - a.scrollTop - a.clientHeight) < 80} : null; }""")
+            _check("work timeline latches to bottom (overflows + pinned)",
+                   latch and latch["overflows"] and latch["atBottom"], str(latch))
+            # User scrolls up -> unlatches; further output must NOT yank to bottom.
+            page.evaluate("""() => { const f=(r)=>{const el=r.querySelector&&r.querySelector('.agent-activity.latch'); if(el){el.scrollTop=0; el.dispatchEvent(new Event('scroll'));} r.querySelectorAll&&r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)f(e.shadowRoot)})}; f(document); }""")
+            many["c28"] = {"name": "get_objects_summary", "state": "done"}
+            latch_worker["orch-1:w:t1"]["timeline"].append({"kind": "call", "call_id": "c28"})
+            push_view(view(latch_worker, ["orch-1:w:t1"]))
+            page.wait_for_timeout(300)
+            top = page.evaluate("""() => { let a=null; const w=(r)=>{const el=r.querySelector&&r.querySelector('.agent-activity.latch'); if(el)a=el; r.querySelectorAll&&r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)w(e.shadowRoot)})}; w(document); return a ? a.scrollTop : null; }""")
+            _check("scrolling up unlatches (new output doesn't yank to bottom)",
+                   top is not None and top < 80, "scrollTop=%s" % top)
+
             # --- worker→orchestrator Q&A renders on the work timeline ---
             qna_worker = {"orch-1:w:t1": {
                 "id": "orch-1:w:t1", "role": "worker", "task": "do x", "state": "running",
