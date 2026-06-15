@@ -50,6 +50,20 @@ class OrchestratorView:
             "draft": None,
         }
 
+    def mark_stopped(self) -> None:
+        """Finalize a stopped/aborted run: no agent stays 'running' (stale stop
+        controls), and the planner card goes inactive."""
+        for ag in self.agents.values():
+            if ag.get("state") == "running":
+                ag["state"] = "done"
+                ag["ok"] = False
+                ag["stopping"] = False
+        if self.planner and self.planner.get("active"):
+            self.planner["active"] = False
+        if self.done is None:
+            self.done = {"paused": False, "allMet": False, "rounds": self.current_round + 1,
+                         "stopped": True}
+
     def apply(self, ev: dict[str, Any]) -> bool:
         """Fold one event into the view. Returns True if the view changed."""
         t = ev.get("type")
@@ -163,6 +177,14 @@ class OrchestratorView:
                 "state": ev.get("state"), "summary": ev.get("summary") or ex.get("summary", ""),
                 "media_ids": ev.get("media_ids") or ex.get("media_ids") or []}
             push_call(cid)
+            return True
+        if t == "worker_question":
+            ag["timeline"].append({"kind": "question", "content": ev.get("question", ""),
+                                   "options": ev.get("options") or []})
+            return True
+        if t == "worker_question_answered":
+            ag["timeline"].append({"kind": "answer", "content": ev.get("answer", ""),
+                                   "source": ev.get("source", "orchestrator")})
             return True
         if t == "worker_media":
             ag.setdefault("media", []).append({"id": ev.get("media_id"), "data_url": ev.get("data_url")})

@@ -13,6 +13,7 @@ discriminator inside the args.
 """
 
 __all__ = (
+    "AskOrchestratorTool",
     "AskUserTool",
     "ContinueWorkingTool",
     "MediaTool",
@@ -89,6 +90,54 @@ class AskUserTool(Tool):
         return ToolResult(
             summary="; ".join(parts) or "(no answer)",
             data={"choices": choices, "text": text})
+
+
+class AskOrchestratorTool(Tool):
+    name = "ask_orchestrator"
+    group = "interaction"
+    read_only = True
+    description = (
+        "Ask the ORCHESTRATOR a clarifying question when your task is genuinely "
+        "ambiguous or blocked. The orchestrator holds the full objective context "
+        "and will either answer you directly or, only when truly necessary, "
+        "surface the question to the user. STRONGLY prefer deciding yourself and "
+        "stating your assumption; use this only when a wrong guess would waste "
+        "real work. Returns the answer (from the orchestrator or the user)."
+    )
+
+    def __init__(self, ask: "Callable[[str, str, list[str]], Awaitable[dict[str, Any]]]") -> None:
+        self._ask = ask
+
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "The clarifying question."},
+                "options": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Suggested choices (optional).",
+                },
+            },
+            "required": ["question"],
+        }
+
+    async def call(self, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+        question = str(args.get("question", "")).strip()
+        if not question:
+            raise ToolError("question is required")
+        if self._ask is None:
+            raise ToolError(
+                "no orchestrator attached — proceed with your best judgement and "
+                "state your assumption")
+        options = [str(o) for o in (args.get("options") or [])]
+        resp = await self._ask(ctx.session_id, question, options)
+        answer = str(resp.get("answer", "")).strip()
+        source = str(resp.get("source", "orchestrator"))
+        if not answer:
+            return ToolResult(summary="no answer returned", data={"answer": "", "source": source})
+        return ToolResult(
+            summary="{:s} answered: {:s}".format(source, answer),
+            data={"answer": answer, "source": source})
 
 
 class SkillsTool(Tool):

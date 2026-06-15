@@ -121,6 +121,32 @@ class TestOrchestratorView(unittest.TestCase):
         self.assertFalse(v.apply({"type": "worker_review", "session_id": "run",
                                   "agent_id": "nope", "passed": True, "note": "x"}))
 
+    def test_worker_question_and_answer_land_on_timeline(self):
+        V = _mod().OrchestratorView
+        v = V()
+        v.apply({"type": "agent_spawned", "session_id": "run", "agent_id": "run:w:t0",
+                 "role": "worker", "task": "do A"})
+        v.apply({"type": "worker_question", "session_id": "run:w:t0", "parent_session_id": "run",
+                 "question": "Which axis?", "options": ["X", "Z"]})
+        v.apply({"type": "worker_question_answered", "session_id": "run:w:t0",
+                 "parent_session_id": "run", "answer": "use Z", "source": "orchestrator"})
+        tl = v.snapshot()["agents"]["run:w:t0"]["timeline"]
+        kinds = [(e["kind"], e.get("content"), e.get("source")) for e in tl]
+        self.assertIn(("question", "Which axis?", None), kinds)
+        self.assertIn(("answer", "use Z", "orchestrator"), kinds)
+
+    def test_mark_stopped_clears_running_state(self):
+        V = _mod().OrchestratorView
+        v = V()
+        v.apply({"type": "agent_spawned", "session_id": "run", "agent_id": "run:w:t0", "role": "worker"})
+        v.apply({"type": "planner_stream", "session_id": "run", "phase": "plan", "state": "start"})
+        v.mark_stopped()
+        snap = v.snapshot()
+        self.assertEqual(snap["agents"]["run:w:t0"]["state"], "done")
+        self.assertFalse(snap["agents"]["run:w:t0"]["ok"])
+        self.assertFalse(snap["planner"]["active"])
+        self.assertTrue(snap["done"]["stopped"])
+
     def test_worker_event_for_unknown_agent_is_ignored(self):
         V = _mod().OrchestratorView
         v = V()

@@ -480,6 +480,9 @@ export class BaChatStage extends LitElement {
     .wtext :not(pre) > code, .agent .proof :not(pre) > code {
       background: var(--surface-muted); border-radius: 4px; padding: 1px 5px; font-size: 0.88em; }
     .winject { font-size: 12px; color: var(--accent); font-style: italic; }
+    .wask { font-size: 12px; color: var(--warning); display: flex; gap: 6px; align-items: baseline; overflow-wrap: anywhere; }
+    .wask svg { width: 12px; height: 12px; flex: none; }
+    .wans { font-size: 12px; color: var(--accent-2); overflow-wrap: anywhere; }
     .wdraft { font-size: 11.5px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
     .wdraft svg { width: 12px; height: 12px; animation: spin 1.4s linear infinite; }
     .wcall { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
@@ -809,6 +812,8 @@ export class BaChatStage extends LitElement {
           ${agent.timeline.map((e, i) => {
             if (e.kind === "text") return this._renderWorkerText(e.content, `${agent.id}:t${i}`);
             if (e.kind === "injected") return html`<div class="winject">⟶ ${e.content}</div>`;
+            if (e.kind === "question") return html`<div class="wask">${icon("exclamation-triangle")} asked: ${e.content}</div>`;
+            if (e.kind === "answer") return html`<div class="wans">↳ ${e.source}: ${e.content}</div>`;
             return this._renderWorkerCall(agent.id, e.call_id, agent.calls[e.call_id]);
           })}
           ${agent.stream ? this._renderWorkerText(agent.stream, `${agent.id}:stream`, true) : nothing}

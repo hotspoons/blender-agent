@@ -444,20 +444,24 @@ class AgentStore:
             if not os.path.isfile(transcript):
                 continue
             title = ""
+            explicit = ""
             try:
                 with open(transcript, encoding="utf-8") as fh:
                     for line in fh:
                         record = json.loads(line)
-                        # Skip synthetic seeds (autonomy-change notices, shared
-                        # context) so the title reflects the real first ask.
+                        # The real first ask wins; otherwise an explicit title on a
+                        # synthetic seed (e.g. the orchestrator's first objective).
                         if record.get("role") == "user" and not record.get("synthetic"):
                             title = str(record.get("content", ""))[:80]
+                            break
+                        if not explicit and record.get("title"):
+                            explicit = str(record["title"])[:80]
                             break
             except (OSError, ValueError):
                 pass
             sessions.append({
                 "id": session_id,
-                "title": title or "(empty session)",
+                "title": title or explicit or "(empty session)",
                 "modified": os.path.getmtime(transcript),
             })
         sessions.sort(key=lambda s: -float(str(s["modified"])))

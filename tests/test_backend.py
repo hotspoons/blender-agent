@@ -293,11 +293,74 @@ class TestRuntimeBackendWiring(unittest.TestCase):
         _run(rt.run_autonomy_turn(sid, [{"text": "Assemble the robot arm", "acceptance": "peg mates"}]))
 
         recs = rt.session_records(sid)
-        real = [r for r in recs if r.get("role") == "user" and not r.get("synthetic")]
-        self.assertTrue(any("Assemble the robot arm" in str(r.get("content", "")) for r in real))
+        # The objectives persist (so the session reloads non-empty), but as a
+        # SYNTHETIC record — shown via the Objectives card, not a raw bubble.
+        objrec = [r for r in recs if r.get("autonomy_objectives")]
+        self.assertTrue(objrec)
+        self.assertTrue(objrec[0].get("synthetic"))
+        # Title comes from the explicit objective title, not the synthetic notice
+        # or the verbose "**Objectives**" header.
         title = next(s["title"] for s in rt.list_sessions() if s["id"] == sid)
-        self.assertNotIn("Autonomy changed", str(title))     # synthetic skipped
-        self.assertIn("Objectives", str(title))
+        self.assertNotIn("Autonomy changed", str(title))
+        self.assertIn("Assemble the robot arm", str(title))
+
+
+    def test_worker_ask_orchestrator_answers_directly(self) -> None:
+        from blagent.llm import LlmChunk, LlmClient
+        rt = self._runtime([self._probe_tool()])
+
+        class FakeLlm(LlmClient):
+            async def stream(self, request):  # noqa: ANN001
+                yield LlmChunk(content='{"answer": "use the Z axis"}')
+
+        rt._make_llm = lambda: FakeLlm()      # type: ignore[method-assign]
+        rt._model_name = lambda: "m"          # type: ignore[method-assign]
+        sid = rt.new_session()
+        rt._autonomy_objs[sid] = []
+        seen: list[dict] = []
+
+        async def emit(ev):  # noqa: ANN001
+            seen.append(ev)
+
+        ask = rt._make_orchestrator_ask(sid, emit)
+        resp = _run(ask(sid + ":w:t0", "Which axis?", ["X", "Z"]))
+        self.assertEqual(resp["source"], "orchestrator")
+        self.assertIn("Z axis", resp["answer"])
+        self.assertIn("worker_question", [e["type"] for e in seen])
+        ans = [e for e in seen if e["type"] == "worker_question_answered"][0]
+        self.assertEqual(ans["source"], "orchestrator")
+
+    def test_worker_ask_orchestrator_escalates_to_user(self) -> None:
+        from blagent.llm import LlmChunk, LlmClient
+        rt = self._runtime([self._probe_tool()])
+
+        class FakeLlm(LlmClient):
+            async def stream(self, request):  # noqa: ANN001
+                yield LlmChunk(content='{"escalate": true, "question": "Glossy or matte?"}')
+
+        rt._make_llm = lambda: FakeLlm()      # type: ignore[method-assign]
+        rt._model_name = lambda: "m"          # type: ignore[method-assign]
+        sid = rt.new_session()
+        rt._autonomy_objs[sid] = []
+        rt._get_or_load_session(sid)
+
+        async def drive():
+            q = rt.subscribe()
+            ask = rt._make_orchestrator_ask(sid, rt.emit)
+            task = asyncio.ensure_future(ask(sid + ":w:t0", "done?", []))
+            elicit_id = None
+            while elicit_id is None:
+                ev = await asyncio.wait_for(q.get(), timeout=5)
+                if ev.get("type") == "elicitation":
+                    elicit_id = ev["elicit_id"]
+            rt.resolve_elicit(sid, elicit_id, {"choices": ["matte"], "text": ""})
+            result = await asyncio.wait_for(task, timeout=5)
+            rt.unsubscribe(q)
+            return result
+
+        resp = _run(drive())
+        self.assertEqual(resp["source"], "user")
+        self.assertIn("matte", resp["answer"])
 
 
 if __name__ == "__main__":

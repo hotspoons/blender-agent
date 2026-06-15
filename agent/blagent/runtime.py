@@ -23,7 +23,8 @@ import time
 
 from typing import Any, Awaitable, Callable
 
-from .agent_tools import AskUserTool, ContinueWorkingTool, MediaTool, SetAutonomyTool, SkillsTool
+from .agent_tools import (
+    AskOrchestratorTool, AskUserTool, ContinueWorkingTool, MediaTool, SetAutonomyTool, SkillsTool)
 from .backend import PythonToolBackend, ToolBackend
 from .engine import AgentEngine, _strip_thinking
 from .orchestrator_view import OrchestratorView
@@ -54,10 +55,11 @@ _WORKER_MISSION = """
 ---
 # YOUR ROLE: autonomous worker sub-agent
 An orchestrator has delegated ONE task to you. You are NOT in a conversation
-with a human — there is no user to ask. Do NOT ask clarifying questions, do
-NOT offer menus of options, and do NOT wait for confirmation or approval.
-Make the most reasonable interpretation, ACT, verify, and report. Note any
-assumptions in your proof of work.
+with a human. STRONGLY prefer to make the most reasonable interpretation, ACT,
+verify, and report — noting any assumptions in your proof of work. Only if the
+task is genuinely ambiguous and a wrong guess would waste real work, you may
+call `ask_orchestrator` once; the orchestrator answers from context or, rarely,
+asks the user. Never wait for approval otherwise.
 
 ## YOUR TASK
 {instruction}
@@ -209,6 +211,17 @@ _SYSTEM_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "
 # (it renders the snapshot; it does NOT reduce events). Token-driven snapshots
 # are throttled to this interval to avoid flooding the socket on live streaming.
 _VIEW_THROTTLE_SECONDS = 0.12
+
+_ORCH_DECIDE_SYSTEM = (
+    "You are the ORCHESTRATOR of a Blender autonomy run. A worker sub-agent hit "
+    "a genuinely unclear point and asked a question. You hold the objective "
+    "context. STRONGLY prefer answering it yourself from the objectives and "
+    "sensible defaults — do NOT bother the user unless the question truly cannot "
+    "be resolved without a human decision (a real preference or missing intent "
+    "only they can supply). Reply with ONLY a JSON object: either "
+    '{"answer": "<direct answer to the worker>"} or, only if you must, '
+    '{"escalate": true, "question": "<the question rephrased for the user>"}.'
+)
 
 
 class _Session:
@@ -462,6 +475,20 @@ class AgentRuntime:
                         self._persist_view(session_id, view)
         return persist_emit
 
+    def _finalize_stopped_view(self, session_id: str) -> None:
+        """On stop/abort, finalize the view so no worker card shows stale 'running'
+        controls, then re-emit + persist the snapshot."""
+        view = self._views.get(session_id)
+        if view is None:
+            return
+        view.mark_stopped()
+        self._persist_view(session_id, view)
+        try:
+            asyncio.create_task(self.emit({
+                "type": "autonomy_view", "session_id": session_id, "view": view.snapshot()}))
+        except RuntimeError:
+            pass
+
     def _persist_view(self, session_id: str, view: "OrchestratorView") -> None:
         try:
             path = self._view_path(session_id)
@@ -646,6 +673,59 @@ class AgentRuntime:
 
         return probe
 
+    def _make_orchestrator_ask(
+            self, session_id: str,
+            emit: "Callable[[dict[str, Any]], Awaitable[None]]",
+    ) -> "Callable[[str, str, list[str]], Awaitable[dict[str, Any]]]":
+        """A worker's ``ask_orchestrator`` channel: the orchestrator decides
+        from objective context whether to answer directly or escalate to the
+        user. All logic is backend; the user only ever sees a prompt (the
+        existing elicitation). The Q&A reduces into the view snapshot."""
+        async def ask(worker_id: str, question: str, options: list[str]) -> dict[str, Any]:
+            await emit({"type": "worker_question", "session_id": worker_id,
+                        "parent_session_id": session_id, "role": "worker",
+                        "question": question, "options": options})
+            decision = await self._orchestrator_decide(session_id, question, options)
+            if decision.get("escalate"):
+                resp = await self._get_or_load_session(session_id).engine._elicit(  # noqa: SLF001
+                    session_id, question=str(decision.get("question") or question),
+                    options=options)
+                answer = "; ".join(
+                    [c for c in (resp.get("choices") or [])]
+                    + ([resp.get("text")] if resp.get("text") else [])).strip()
+                if resp.get("cancelled") or not answer:
+                    answer = "the user did not answer — use your best judgement and state your assumption"
+                source = "user"
+            else:
+                answer = str(decision.get("answer", "")).strip()
+                source = "orchestrator"
+            await emit({"type": "worker_question_answered", "session_id": worker_id,
+                        "parent_session_id": session_id, "role": "worker",
+                        "answer": answer, "source": source})
+            return {"answer": answer, "source": source}
+
+        return ask
+
+    async def _orchestrator_decide(
+            self, session_id: str, question: str, options: list[str]) -> dict[str, Any]:
+        from .autonomy import _complete, _extract_json_object
+
+        objs = self._autonomy_objs.get(session_id) or []
+        listing = "\n".join(
+            "- {:s} (done when: {:s})".format(o.text, o.acceptance or "n/a") for o in objs
+        ) or "(no objectives on record)"
+        user = "OBJECTIVES:\n{:s}\n\nA worker asks:\n{:s}\n\nOptions it offered: {:s}".format(
+            listing, question, ", ".join(options) or "(none)")
+        try:
+            text = await _complete(self._make_llm(), self._model_name(), _ORCH_DECIDE_SYSTEM, user)
+        except Exception as ex:  # pylint: disable=broad-except
+            _log.warning("orchestrator decision failed session=%s: %s", session_id, ex)
+            return {"escalate": True, "question": question}
+        data = _extract_json_object(text)
+        if data.get("escalate") and not str(data.get("answer", "")).strip():
+            return {"escalate": True, "question": str(data.get("question") or question)}
+        return {"answer": str(data.get("answer", "")).strip()}
+
     async def _probe_state(self, session_id: str) -> str:
         """The Blender ground-truth probe wired into the PythonToolBackend:
         a read-only scene snapshot via ``get_objects_summary``. (Lives here
@@ -764,6 +844,7 @@ class AgentRuntime:
                                     "\n   _done when: {:s}_".format(o["acceptance"]) if o.get("acceptance") else "")
                                 for i, o in enumerate(objs))),
                         "autonomy_objectives_draft": objs,
+                        "synthetic": True,
                     })
                 except Exception as ex:  # pylint: disable=broad-except
                     _log.warning("persist draft objectives failed session=%s: %s", session_id, ex)
@@ -826,6 +907,8 @@ class AgentRuntime:
                         "\n   _done when: {:s}_".format(o.acceptance) if o.acceptance else "")
                     for i, o in enumerate(objs))),
             "autonomy_objectives": [dataclasses.asdict(o) for o in objs],
+            "synthetic": True,   # shown via the Objectives card, not a raw bubble
+            "title": objs[0].text if objs else "Orchestrator run",
         })
 
         view = self._reset_view(session_id)   # fresh backend-owned view for this run
@@ -862,9 +945,11 @@ class AgentRuntime:
         else:
             swarm_strategy = None
             probe = self._make_probe(session_id)
+            worker_registry = ToolRegistry(
+                list(self.registry_for_role("worker"))
+                + [AskOrchestratorTool(self._make_orchestrator_ask(session_id, persist_emit))])
             runner = ChildSessionRunner(
-                # RBAC: workers get the matrix-filtered tool surface.
-                registry=self.registry_for_role("worker"),
+                registry=worker_registry,
                 make_llm=self._make_llm,
                 model=model,
                 emit=persist_emit,
@@ -943,6 +1028,7 @@ class AgentRuntime:
                     _persist("assistant", "**Independent audit: {:s}** — {:s}".format(
                         "PASS" if report.passed else "FAIL", report.summary))
             except asyncio.CancelledError:
+                self._finalize_stopped_view(session_id)
                 await self.emit({"type": "turn_done", "session_id": session_id, "aborted": True})
                 raise
             except LlmError as ex:

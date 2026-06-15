@@ -193,6 +193,18 @@ def main():
             qa_class = page.evaluate("""() => { let f=false; const w=(r)=>{if(r.querySelector&&r.querySelector('.agent.qa'))f=true; r.querySelectorAll&&r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)w(e.shadowRoot)})}; w(document); return f; }""")
             _check("qa: QA agent card has dedicated role class", qa_class)
 
+            # --- worker→orchestrator Q&A renders on the work timeline ---
+            qna_worker = {"orch-1:w:t1": {
+                "id": "orch-1:w:t1", "role": "worker", "task": "do x", "state": "running",
+                "timeline": [{"kind": "question", "content": "WHICH_AXIS_Q", "options": ["X", "Z"]},
+                             {"kind": "answer", "content": "USE_Z_ANSWER", "source": "orchestrator"}],
+                "calls": {}, "media": [], "stream": "", "proof": "", "ok": None}}
+            push_view(view(qna_worker, ["orch-1:w:t1"]))
+            page.wait_for_timeout(250)
+            text = page.evaluate(_DOM_TEXT)
+            _check("worker question rendered on timeline", "WHICH_AXIS_Q" in text)
+            _check("orchestrator answer rendered on timeline", "USE_Z_ANSWER" in text)
+
             # --- worker-produced media surfaces in the Artifacts panel (live) ---
             media_worker = {"orch-1:w:t1": {
                 "id": "orch-1:w:t1", "role": "worker", "task": "render", "state": "running",
