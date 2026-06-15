@@ -263,12 +263,14 @@ is introspectable (`as_public`) for a future live RBAC editor / group toggles.
 
 ## 5. Build sequence (each step tested, main stays green)
 
-1. **Python transport + profile + YAML** — introduce `ToolBackend`,
-   `BackendTool` adapter, `AgentProfile`, and `load_agent(yaml)`; refactor the
-   current Blender wiring onto a `PythonToolBackend`. Behavior identical.
-2. **HTTP transport** — `HttpToolBackend` + the OpenAPI schema + a reference
-   handler (a tiny Starlette app that re-exposes a Python backend over the REST
-   contract, so the contract is dogfooded and testable in-process).
+1. **[DONE]** **Python transport + profile + YAML** — `ToolBackend`,
+   `BackendTool` adapter, `AgentProfile`, and `load_agent(yaml)`; the Blender
+   wiring runs on a `PythonToolBackend`. Behavior identical.
+2. **[DONE]** **HTTP transport** — `HttpToolBackend` + the OpenAPI schema
+   (`TOOL_BACKEND_OPENAPI`) + a reference handler (`serve_backend`) that
+   re-exposes a Python backend over the REST contract, dogfooded in-process
+   (`http_backend.py`, `tests/test_http_backend.py`). Swarm-over-HTTP endpoints
+   still pending (the in-process swarm framework already works).
 3. **Physical split** — move the domain-agnostic modules + generic UI into a
    top-level `agentcore/` package (its own `pyproject`, no shared root with
    `blagent`, so it can spin out to its own repo). `blagent` becomes the thin
