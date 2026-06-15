@@ -685,6 +685,22 @@ class AgentRuntime:
         # Expose the live objective list so update_objectives can edit/append
         # mid-run; the orchestrator re-reads it each round.
         self._autonomy_objs[session_id] = objs
+        rounds_cap = max_rounds or config.max_autonomy_rounds
+
+        # Persist the run to the session transcript so it isn't empty on reload
+        # (the live orchestrator view is event-driven/ephemeral). The objectives
+        # become the session's first real record (and its title).
+        session.engine.push_record({
+            "role": "user",
+            "content": "**Objectives** (orchestrator, {:d} round{:s} max):\n{:s}".format(
+                rounds_cap, "" if rounds_cap == 1 else "s",
+                "\n".join(
+                    "{:d}. {:s}{:s}".format(
+                        i + 1, o.text,
+                        "\n   _done when: {:s}_".format(o.acceptance) if o.acceptance else "")
+                    for i, o in enumerate(objs))),
+            "autonomy_objectives": [dataclasses.asdict(o) for o in objs],
+        })
 
         policy = (
             AutoPauseWhenBlockedPolicy()
@@ -744,11 +760,27 @@ class AgentRuntime:
             session_id=session_id,
             share_context=config.autonomy_share_context,
         )
-        rounds = max_rounds or config.max_autonomy_rounds
+        rounds = rounds_cap
+
+        def _persist(role: str, content: str) -> None:
+            try:
+                session.engine.push_record({"role": role, "content": content})
+            except Exception as ex:  # pylint: disable=broad-except
+                _log.warning("persist autonomy record failed session=%s: %s", session_id, ex)
 
         async def _run() -> None:
             try:
-                await orchestrator.run(objs, max_rounds=rounds)
+                result = await orchestrator.run(objs, max_rounds=rounds)
+                # Persist a readable outcome so the session reloads with what
+                # the orchestrator actually did (not an empty transcript).
+                lines = ["**Orchestrator run complete** — {:s} ({:d} round{:s}).".format(
+                    "all objectives met" if result.get("all_met") else "stopped with unmet objectives",
+                    int(result.get("rounds", 0)), "" if result.get("rounds") == 1 else "s")]
+                for o in objs:
+                    lines.append("- [{:s}] {:s}{:s}".format(
+                        "met" if o.status == "met" else "unmet", o.text,
+                        " — {:s}".format(o.evidence) if getattr(o, "evidence", "") else ""))
+                _persist("assistant", "\n".join(lines))
                 # Swarm: after workers finish, the gather agent merges their
                 # component .blends into one master scene.
                 if swarm_strategy is not None:
@@ -774,6 +806,8 @@ class AgentRuntime:
                         "overclaims": report.overclaims,
                         "verdicts": [dataclasses.asdict(v) for v in report.verdicts],
                     })
+                    _persist("assistant", "**Independent audit: {:s}** — {:s}".format(
+                        "PASS" if report.passed else "FAIL", report.summary))
             except asyncio.CancelledError:
                 await self.emit({"type": "turn_done", "session_id": session_id, "aborted": True})
                 raise

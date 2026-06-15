@@ -442,7 +442,9 @@ class AgentStore:
                 with open(transcript, encoding="utf-8") as fh:
                     for line in fh:
                         record = json.loads(line)
-                        if record.get("role") == "user":
+                        # Skip synthetic seeds (autonomy-change notices, shared
+                        # context) so the title reflects the real first ask.
+                        if record.get("role") == "user" and not record.get("synthetic"):
                             title = str(record.get("content", ""))[:80]
                             break
             except (OSError, ValueError):

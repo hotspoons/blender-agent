@@ -273,6 +273,32 @@ class TestRuntimeBackendWiring(unittest.TestCase):
         # The /worker-media route resolver maps the agent id back to that dir.
         self.assertIsNotNone(rt.worker_media_library(agent_id).get(wid))
 
+    def test_orchestrator_run_persists_objectives(self) -> None:
+        # Orchestrator sessions must not reload empty: the objectives are
+        # persisted to the transcript (synchronously, before the run task) and
+        # drive a meaningful session title (not the synthetic autonomy notice).
+        from blagent.llm import LlmChunk, LlmClient
+        rt = self._runtime([])
+
+        class FakeLlm(LlmClient):
+            async def stream(self, request):  # noqa: ANN001
+                yield LlmChunk(content='{"tasks": []}')
+
+        rt._make_llm = lambda: FakeLlm()      # type: ignore[method-assign]
+        rt._model_name = lambda: "m"          # type: ignore[method-assign]
+        # A synthetic autonomy notice already in the session (as set_autonomy adds).
+        sid = rt.new_session()
+        rt._get_or_load_session(sid).engine.push_record(
+            {"role": "user", "content": "[Autonomy changed] orchestrator", "synthetic": True})
+        _run(rt.run_autonomy_turn(sid, [{"text": "Assemble the robot arm", "acceptance": "peg mates"}]))
+
+        recs = rt.session_records(sid)
+        real = [r for r in recs if r.get("role") == "user" and not r.get("synthetic")]
+        self.assertTrue(any("Assemble the robot arm" in str(r.get("content", "")) for r in real))
+        title = next(s["title"] for s in rt.list_sessions() if s["id"] == sid)
+        self.assertNotIn("Autonomy changed", str(title))     # synthetic skipped
+        self.assertIn("Objectives", str(title))
+
 
 if __name__ == "__main__":
     unittest.main()
