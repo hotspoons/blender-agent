@@ -363,10 +363,10 @@ export class BaChatStage extends LitElement {
       color: var(--text-muted);
     }
     @keyframes spin { to { transform: rotate(360deg); } }
-    /* Autonomy view: sticky objectives + bounded nested agent cards. */
+    /* Autonomy view: objectives card (inline, scrolls with the transcript)
+       + bounded nested agent cards. */
     .auto { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
     .objectives {
-      position: sticky; top: 0; z-index: 2;
       background: var(--surface-elevated); border: 1px solid var(--border);
       border-radius: var(--radius-md); padding: 10px 12px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.25);

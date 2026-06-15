@@ -32,6 +32,11 @@ roles:
       set_autonomy: disabled
       ask_user: disabled
 
+  # Decomposes a goal / objectives into worker tasks (the draft step +
+  # LlmPlanner). A pure LLM call — no tools.
+  planner:
+    default: disabled
+
   # Context-blind budget adjudicator (reviewer.py): judges text, runs no tools.
   reviewer:
     default: disabled

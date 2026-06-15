@@ -55,6 +55,9 @@ _DEFAULT_MATRIX: dict[str, dict[str, Any]] = {
     "orchestrator": {"default": ALLOW, "tools": {"set_autonomy": ELICIT}},
     # Autonomous sub-agent on one task: no user to ask, no self-autonomy.
     "worker": {"default": ALLOW, "tools": {name: DISABLED for name in WORKER_DENY}},
+    # Decomposes a goal/objectives into worker tasks (LlmPlanner + the draft
+    # step). A pure LLM call — no tools.
+    "planner": {"default": DISABLED},
     # Context-blind budget judge (reviewer.py): a pure adjudicator — no tools.
     "reviewer": {"default": DISABLED},
     # Independent verifier: read-only state probes only.
