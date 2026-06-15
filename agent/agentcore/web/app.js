@@ -1,4 +1,6 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 agentcore contributors
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // App shell: full-height left rail (brand / sessions / controls),
 // center conversation column with a slim status bar, full-height

@@ -1,4 +1,6 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 agentcore contributors
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // WebLLM (MLC) engine behind the same postMessage-shaped protocol as
 // core/local-llm-engine.js, so the local-model panel can swap engines

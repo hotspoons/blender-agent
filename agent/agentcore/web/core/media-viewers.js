@@ -1,4 +1,6 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 agentcore contributors
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // Media-viewer registry: the generic core renders images and a
 // download chip; domain UI extensions register richer viewers (e.g.

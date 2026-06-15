@@ -2,8 +2,9 @@
 """
 Headless browser smoke test for the web UI extension boundary.
 
-Serves agent/blagent/web exactly as app.py does (index at /, files under
-/static) and loads it in Chromium to confirm:
+Serves the layered web bundle exactly as app.py does — the Blender overlay
+(agent/blagent/web) ahead of the generic agentcore shell (agent/agentcore/web),
+index at /, files under /static — and loads it in Chromium to confirm:
   * every ES module in the graph loads (no import/syntax/reference errors),
   * the Blender UI extension applied its profile (title + brand word),
   * the neutral core ships no Blender artwork until the extension loads.
@@ -22,8 +23,17 @@ from starlette.responses import FileResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-_WEB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                    "agent", "blagent", "web")
+_AGENT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "agent")
+_WEB = os.path.join(_AGENT, "blagent", "web")        # Blender overlay (index.html lives here)
+_CORE_WEB = os.path.join(_AGENT, "agentcore", "web")  # generic shell behind it
+
+
+def _layered_static():
+    # Blender overlay first, generic agentcore shell behind it (same
+    # first-match-wins as agentcore.app.LayeredStaticFiles).
+    static = StaticFiles(directory=_WEB, check_dir=False)
+    static.all_directories = [_WEB, _CORE_WEB]
+    return static
 _PORT = 8731
 
 
@@ -33,7 +43,7 @@ def _make_app() -> Starlette:
 
     return Starlette(routes=[
         Route("/", index),
-        Mount("/static", app=StaticFiles(directory=_WEB), name="static"),
+        Mount("/static", app=_layered_static(), name="static"),
     ])
 
 

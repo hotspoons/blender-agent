@@ -79,7 +79,7 @@ class _ChatApiTestCase(unittest.TestCase):
         return asyncio.new_event_loop().run_until_complete(build())
 
     def _client(self, fake_llm_factory):
-        from blagent.app import create_app
+        from blagent.server import create_app
         from starlette.testclient import TestClient
 
         runtime = self._runtime(fake_llm_factory)

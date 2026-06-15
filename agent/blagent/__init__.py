@@ -102,7 +102,7 @@ async def run_server(
     """
     import uvicorn
 
-    from .app import create_app
+    from .server import create_app
     from .blender_surface import (
         BlenderSurface, bridge_reachable, spawned_by_blender, surface_decision,
     )

@@ -1,0 +1,11 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+/*
+ * Blender brand overlay: the orange wordmark color, per theme. Loaded
+ * after the generic styles.css (see index.html) so it wins the cascade.
+ * The neutral agentcore shell ships an accent-derived `--brand`; this is
+ * the one piece of Blender branding that lives in CSS rather than in
+ * extensions/blender.js (which can't reach per-theme `--brand` cleanly).
+ */
+html { --brand: #e87d0d; }                  /* dark (default) */
+html[data-theme="dim"]   { --brand: #e87d0d; }
+html[data-theme="light"] { --brand: #d96b00; }

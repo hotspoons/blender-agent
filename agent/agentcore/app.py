@@ -1,11 +1,17 @@
-# SPDX-FileCopyrightText: 2026 Blender Authors
+# SPDX-FileCopyrightText: 2026 agentcore contributors
 #
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
 """
 Starlette application: static web UI, the agent control-plane
-WebSocket, the local-model reverse-tunnel WebSocket, media serving, and
-the optional MCP-over-HTTP exposure of the same tool registry.
+WebSocket, the local-model reverse-tunnel WebSocket, and media serving.
+
+Domain-agnostic. The web UI is served from an ordered list of *web
+roots* (``LayeredStaticFiles``): a domain build overlays its own files
+(extension module, branding, viewers) on top of the generic shell, and
+``create_app`` accepts ``extra_routes`` so a build can mount extra
+endpoints (e.g. an OpenAI-compatible facade) without this module
+knowing about them.
 
 Control-plane protocol (JSON over ``/ws``):
 
@@ -33,12 +39,14 @@ handlers below for shapes.
 """
 
 __all__ = (
+    "DEFAULT_WEB_ROOT",
+    "LayeredStaticFiles",
     "create_app",
 )
 
 import os
 
-from typing import Any
+from typing import Any, Sequence
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -49,16 +57,52 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from agentcore.runtime import AgentRuntime
 
-_WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+# The generic shell shipped with agentcore. A domain build overlays its
+# own root ahead of this one (see ``create_app(web_roots=...)``).
+DEFAULT_WEB_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 
 
-def create_app(runtime: AgentRuntime) -> Starlette:
+class LayeredStaticFiles(StaticFiles):
+    """
+    Serve ``/static`` from an ordered list of roots, first match wins.
+    Lets a domain build overlay its own files (extension, branding,
+    viewers) on top of the generic shell without copying the shell.
+    ``StaticFiles`` already searches ``all_directories`` in order, so we
+    just seed it with the full list.
+    """
+
+    def __init__(self, roots: Sequence[str]) -> None:
+        super().__init__(directory=roots[0], check_dir=False)
+        self.all_directories = list(roots)
+
+
+def _index_path(web_roots: Sequence[str]) -> str:
+    """First root that carries an ``index.html`` (a domain overlay wins)."""
+    for root in web_roots:
+        candidate = os.path.join(root, "index.html")
+        if os.path.isfile(candidate):
+            return candidate
+    return os.path.join(web_roots[0], "index.html")
+
+
+def create_app(
+        runtime: AgentRuntime,
+        *,
+        web_roots: "Sequence[str] | None" = None,
+        extra_routes: "list[Any] | None" = None,
+) -> Starlette:
     """
     Build the ASGI app around *runtime*.
+
+    *web_roots* is the ordered static search path (default: the generic
+    agentcore shell alone). *extra_routes* are prepended to the route
+    table so a domain build can mount its own endpoints.
     """
+    roots = list(web_roots) if web_roots else [DEFAULT_WEB_ROOT]
+    index_path = _index_path(roots)
 
     async def index(_request: Request) -> FileResponse:
-        return FileResponse(os.path.join(_WEB_DIR, "index.html"))
+        return FileResponse(index_path)
 
     async def healthz(_request: Request) -> JSONResponse:
         return JSONResponse({
@@ -185,17 +229,13 @@ def create_app(runtime: AgentRuntime) -> Starlette:
         Route("/instance", instance_update, methods=["POST"]),
         WebSocketRoute("/ws", ws_control),
         WebSocketRoute("/ws/local-llm", ws_local_llm),
-        Mount("/static", app=StaticFiles(directory=_WEB_DIR), name="static"),
+        Mount("/static", app=LayeredStaticFiles(roots), name="static"),
     ]
 
-    # Optional OpenAI-compatible front end (BLENDER_AGENT_CHAT_API=1):
-    # API-only chat with per-client sessions, media both ways, and tool
-    # calls as non-standard properties. Raises at startup when the
-    # required remote-LLM env vars are missing.
-    from . import chat_api
-    if chat_api.enabled():
-        chat_api.configure(runtime)
-        routes = chat_api.routes(runtime) + routes
+    # A domain build injects its own endpoints here (e.g. blagent's
+    # OpenAI-compatible chat facade), prepended so they take precedence.
+    if extra_routes:
+        routes = list(extra_routes) + routes
 
     return Starlette(routes=routes)
 

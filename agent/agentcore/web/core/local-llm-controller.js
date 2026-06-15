@@ -1,4 +1,6 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 agentcore contributors
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // Singleton controller for the in-browser local model: owns the
 // inference host (Transformers.js worker / main-thread engine / WebLLM

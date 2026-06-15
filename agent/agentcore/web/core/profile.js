@@ -1,4 +1,6 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 agentcore contributors
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // The UI profile: all the brand/copy that makes the generic agentcore
 // shell look like a *specific* agent. Core ships neutral defaults so an

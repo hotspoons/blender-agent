@@ -1,4 +1,6 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 agentcore contributors
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // ba-json: structured JSON viewer for tool-call payloads.
 // Tree tab: expandable nodes laid out as key | value rows.

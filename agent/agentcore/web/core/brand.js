@@ -1,4 +1,6 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 agentcore contributors
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // The NEUTRAL core mark for an unbranded `agentcore` build: a simple
 // rounded glyph in the accent color. Domain builds replace it with their

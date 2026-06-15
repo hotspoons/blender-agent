@@ -1,15 +1,14 @@
 <!doctype html>
+<!-- SPDX-License-Identifier: MIT OR Apache-2.0 -->
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Agent</title>
-<!-- Neutral core mark (matches core/brand.js). The domain UI extension
+<!-- Neutral core mark (matches core/brand.js). A domain UI extension
      overrides the title + favicon at boot via applyProfile(). -->
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect x='3' y='3' width='18' height='18' rx='5' fill='%235b8def'/><circle cx='12' cy='12' r='3.4' fill='%23fff'/></svg>">
 <link rel="stylesheet" href="/static/styles.css">
-<!-- Blender brand overlay (orange wordmark, per theme) - wins over styles.css. -->
-<link rel="stylesheet" href="/static/extensions/blender.css">
 <!--
   Import map: bare specifiers for the vendored libraries. Zero build
   step, zero Node at runtime - everything is ES modules served as-is.
@@ -26,10 +25,9 @@
 <script type="module">
   import { applyTheme } from "/static/core/theme.js";
   applyTheme();
-  // Load the domain UI extension (branding + media viewers) BEFORE the
-  // app shell so the profile and viewer registry are populated before
-  // the first render. Swap this one module to rebrand the whole app.
-  await import("/static/extensions/blender.js");
+  // Generic build: no domain extension. A branded build ships its own
+  // index.html (overlaying this one) that imports an extension module
+  // BEFORE app.js to populate the profile + media-viewer registry.
   import("/static/app.js");
 </script>
 </head>

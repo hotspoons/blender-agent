@@ -1,4 +1,6 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 agentcore contributors
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // Settings dialog. Model source is a mutually exclusive choice:
 // a remote OpenAI-compatible endpoint (with the model combo box

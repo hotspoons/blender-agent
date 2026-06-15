@@ -1,4 +1,6 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 agentcore contributors
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // Client-side state + control-plane WebSocket, modeled on Foyer
 // Studio's `core/store.js`/`core/ws.js` pair but speaking the lean

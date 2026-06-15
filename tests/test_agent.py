@@ -362,7 +362,7 @@ class TestAgentTurn(unittest.TestCase):
         event sequence over /ws.
         """
         _import_blagent()
-        from blagent.app import create_app
+        from blagent.server import create_app
         from blagent.blender_tools import build_blender_registry
         from agentcore.llm import LlmChunk, LlmClient
         from agentcore.runtime import AgentRuntime
@@ -931,7 +931,7 @@ class TestInstanceTitle(unittest.TestCase):
 
     def test_hello_carries_title_and_update_broadcasts(self) -> None:
         _import_blagent()
-        from blagent.app import create_app
+        from blagent.server import create_app
         from agentcore.runtime import AgentRuntime
         from agentcore.store import AgentStore
 

@@ -1,4 +1,6 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 agentcore contributors
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // Local-model inference engine on Transformers.js, host-agnostic: the
 // same class runs inside a Web Worker (core/local-llm-worker.js) or on

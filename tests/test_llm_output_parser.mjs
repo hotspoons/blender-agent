@@ -12,7 +12,7 @@ import {
   createParser,
   inferFamily,
   toolParamTypes,
-} from "../agent/blagent/web/core/llm-output-parser.js";
+} from "../agent/agentcore/web/core/llm-output-parser.js";
 
 const TOOLS = [{
   type: "function",

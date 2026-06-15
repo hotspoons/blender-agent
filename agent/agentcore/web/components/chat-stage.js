@@ -1,4 +1,6 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 agentcore contributors
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // Conversation stage: transcript with markdown, collapsible model
 // thinking blocks (Qwen-style <think> tags), the live streaming

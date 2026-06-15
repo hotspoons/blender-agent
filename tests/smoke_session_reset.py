@@ -20,8 +20,17 @@ from starlette.responses import FileResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-_WEB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                    "agent", "blagent", "web")
+_AGENT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "agent")
+_WEB = os.path.join(_AGENT, "blagent", "web")        # Blender overlay (index.html lives here)
+_CORE_WEB = os.path.join(_AGENT, "agentcore", "web")  # generic shell behind it
+
+
+def _layered_static():
+    # Blender overlay first, generic agentcore shell behind it (same
+    # first-match-wins as agentcore.app.LayeredStaticFiles).
+    static = StaticFiles(directory=_WEB, check_dir=False)
+    static.all_directories = [_WEB, _CORE_WEB]
+    return static
 _PORT = 8734
 
 
@@ -30,7 +39,7 @@ def _app() -> Starlette:
         return FileResponse(os.path.join(_WEB, "index.html"))
     return Starlette(routes=[
         Route("/", index),
-        Mount("/static", app=StaticFiles(directory=_WEB), name="static"),
+        Mount("/static", app=_layered_static(), name="static"),
     ])
 
 

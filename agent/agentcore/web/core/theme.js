@@ -1,4 +1,6 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 agentcore contributors
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // Theme system, ported from Foyer Studio's `ui-core/theme.js`:
 // `[data-theme="..."]` scopes on <html>, localStorage persistence, and

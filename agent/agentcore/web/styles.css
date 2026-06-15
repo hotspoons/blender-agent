@@ -1,4 +1,5 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 agentcore contributors */
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /*
  * Design tokens, adapted from Foyer Studio's theme (itself derived
  * from Patapsco's platform-ui): slate-indigo dark surfaces, Jost
@@ -35,7 +36,7 @@
   --accent:           #818cf8;
   --accent-2:         #a78bfa;
   --accent-soft:      rgba(129, 140, 248, 0.14);
-  --brand:            #e87d0d;          /* Blender orange - wordmark only */
+  --brand:            #818cf8;          /* neutral accent; domain build overrides per theme */
   --success:          #22c55e;
   --warning:          #eab308;
   --danger:           #ef4444;
@@ -55,7 +56,7 @@ html[data-theme="dim"] {
   --accent:           #6366f1;
   --accent-2:         #8b5cf6;
   --accent-soft:      rgba(99, 102, 241, 0.14);
-  --brand:            #e87d0d;
+  --brand:            #6366f1;
   --success:          #22c55e;
   --warning:          #eab308;
   --danger:           #ef4444;
@@ -74,7 +75,7 @@ html[data-theme="light"] {
   --accent:           #4f46e5;
   --accent-2:         #7c3aed;
   --accent-soft:      rgba(79, 70, 229, 0.10);
-  --brand:            #d96b00;
+  --brand:            #4f46e5;
   --success:          #16a34a;
   --warning:          #a16207;
   --danger:           #dc2626;

@@ -1,4 +1,6 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 agentcore contributors
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // Heroicons (https://heroicons.com, MIT License, Copyright (c) Tailwind
 // Labs) - 24px outline subset, vendored as lit templates at v2.2.0.

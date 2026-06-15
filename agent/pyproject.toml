@@ -30,6 +30,7 @@ include = ["blagent*", "agentcore*"]
 ]
 "agentcore" = [
     "data/permissions.yaml",
+    "web/**/*",
 ]
 
 [tool.mypy]
