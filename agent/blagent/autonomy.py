@@ -128,8 +128,18 @@ class RoundResult:
 # LLM helpers
 # --------------------------------------------------------------------------
 
-async def _complete(llm: LlmClient, model: str, system: str, user: str) -> str:
-    """One non-streamed-to-UI completion; returns concatenated content."""
+# Orchestrator/draft/eval/audit LLM calls are backend-only (no UI stream). Cap
+# them so a hung or pathologically-slow model degrades gracefully (the callers
+# fall back: empty plan -> one task per objective, empty verdict -> unmet)
+# instead of freezing the whole run.
+_COMPLETE_TIMEOUT_SECONDS = 240.0
+
+
+async def _complete(llm: LlmClient, model: str, system: str, user: str,
+                    timeout: float = _COMPLETE_TIMEOUT_SECONDS) -> str:
+    """One non-streamed-to-UI completion; returns the content (falling back to
+    the reasoning trace when a reasoning model answers there and leaves content
+    empty). Bounded by *timeout* so a hang surfaces as a partial/empty result."""
     request = {
         "model": model,
         "messages": [
@@ -137,11 +147,25 @@ async def _complete(llm: LlmClient, model: str, system: str, user: str) -> str:
             {"role": "user", "content": user},
         ],
     }
-    parts: list[str] = []
-    async for chunk in llm.stream(request):
-        if chunk.content:
-            parts.append(chunk.content)
-    return "".join(parts)
+    content: list[str] = []
+    reasoning: list[str] = []
+
+    async def _drain() -> None:
+        async for chunk in llm.stream(request):
+            if chunk.content:
+                content.append(chunk.content)
+            trace = getattr(chunk, "reasoning", "")
+            if trace:
+                reasoning.append(trace)
+
+    try:
+        await asyncio.wait_for(_drain(), timeout=timeout)
+    except asyncio.TimeoutError:
+        _log.warning("LLM completion timed out after %.0fs; using partial result", timeout)
+    text = "".join(content).strip()
+    # Reasoning models sometimes emit the whole answer (incl. the JSON) in the
+    # reasoning channel with empty content — let the JSON extractor see it.
+    return text or "".join(reasoning).strip()
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
