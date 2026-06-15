@@ -20,6 +20,7 @@ export class BaArtifactPanel extends LitElement {
     super();
     this._media = store.state.media;
     this._sessionId = store.state.sessionId;
+    this._autonomy = store.state.autonomy;
     this._lightbox = null;
   }
 
@@ -28,7 +29,44 @@ export class BaArtifactPanel extends LitElement {
     this._unsub = store.subscribe((keys) => {
       if (keys.has("media")) this._media = [...store.state.media];
       if (keys.has("sessionId")) this._sessionId = store.state.sessionId;
+      // Worker renders surface live (from the orchestrator view snapshot),
+      // not only after the run when session media is re-aggregated.
+      if (keys.has("autonomy")) this._autonomy = store.state.autonomy;
     });
+  }
+
+  /** Media produced by orchestrator workers, derived from the live view: swarm
+   *  inline media (data_url) + in-process tool-produced media (id -> the
+   *  /worker-media route). */
+  _workerMedia() {
+    const out = [];
+    const a = this._autonomy || {};
+    for (const id of (a.agentOrder || [])) {
+      const ag = a.agents?.[id];
+      if (!ag) continue;
+      for (const m of (ag.media || [])) {
+        if (m.data_url) out.push({ id: m.id, mime: "image/png", url: m.data_url, worker: true, label: "worker render" });
+      }
+      for (const c of Object.values(ag.calls || {})) {
+        for (const mid of (c.media_ids || [])) {
+          out.push({ id: mid, url: `/worker-media/${id}/${mid}`, mime: "", worker: true, label: "worker render" });
+        }
+      }
+    }
+    return out;
+  }
+
+  /** Session media + live worker media, de-duped by URL. */
+  _allMedia() {
+    const seen = new Set();
+    const out = [];
+    for (const m of [...(this._media || []), ...this._workerMedia()]) {
+      const url = m.url || `/media/${this._sessionId}/${m.id}`;
+      if (seen.has(url)) continue;
+      seen.add(url);
+      out.push(m);
+    }
+    return out;
   }
 
   disconnectedCallback() {
@@ -90,13 +128,14 @@ export class BaArtifactPanel extends LitElement {
   `;
 
   render() {
+    const media = this._allMedia();
     return html`
       <h3>${icon("photo")} Artifacts</h3>
-      ${this._media.length === 0
+      ${media.length === 0
         ? html`<div class="empty">Screenshots and renders produced by the agent appear here.</div>`
         : html`
           <div class="grid">
-            ${this._media.map((m) => {
+            ${media.map((m) => {
               // `url` is server-provided (session media -> /media, worker
               // media -> /worker-media); fall back for older payloads.
               const src = m.url || `/media/${this._sessionId}/${m.id}`;

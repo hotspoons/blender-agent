@@ -132,6 +132,17 @@ def main():
             text = page.evaluate(_DOM_TEXT)
             _check("done worker: Work tab shows the activity timeline", "execute_blender_code" in text)
 
+            # --- worker-produced media surfaces in the Artifacts panel (live) ---
+            media_worker = {"orch-1:w:t1": {
+                "id": "orch-1:w:t1", "role": "worker", "task": "render", "state": "running",
+                "timeline": [{"kind": "call", "call_id": "c9"}],
+                "calls": {"c9": {"name": "media_io", "state": "done", "media_ids": ["i7"]}},
+                "media": [], "stream": "", "proof": "", "ok": None}}
+            push_view(view(media_worker, ["orch-1:w:t1"]))
+            page.wait_for_timeout(300)
+            html_all = page.evaluate("""() => { const o=[]; const w=(r)=>{r.querySelectorAll('*').forEach(e=>{o.push(e.outerHTML||''); if(e.shadowRoot)w(e.shadowRoot)})}; w(document); return o.join(''); }""")
+            _check("worker media appears in Artifacts panel", "/worker-media/orch-1:w:t1/i7" in html_all)
+
             # --- session switch clears the autonomy view (no jumble) + busy ---
             _drive(page, "store._handle({type:'session_loaded', session_id:'plain-1', records:[], media:[]});")
             page.wait_for_timeout(200)
@@ -181,8 +192,11 @@ def main():
             _check("reload projects worker proof", "RECON_PROOF_123" in text)
             _check("reload projection: no raw <think>", "<think>" not in text)
 
-            _check("no fatal console errors", not [e for e in errs if "websocket" not in e.lower() and "/ws" not in e.lower()],
-                   "; ".join(errs[:3]))
+            # Benign in a static-only harness: the /ws socket 403s and media
+            # <img> URLs (/media, /worker-media) 404 (no backend serving them).
+            fatal = [e for e in errs if "websocket" not in e.lower()
+                     and "failed to load resource" not in e.lower()]
+            _check("no fatal console errors", not fatal, "; ".join(fatal[:3]))
             browser.close()
     finally:
         server.should_exit = True
