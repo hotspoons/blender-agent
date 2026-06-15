@@ -1386,6 +1386,60 @@ class TestElicitation(unittest.TestCase):
         self.assertIn("B", blob)
         self.assertTrue(any(e["type"] == "elicitation_done" for e in events))
 
+class TestReasoningTrace(unittest.TestCase):
+    """A model that streams chain-of-thought in `reasoning` (Kimi-style):
+    captured + shown as a <think> block, but stripped before the next call."""
+
+    def test_reasoning_folded_and_stripped(self) -> None:
+        _import_blagent()
+        from blagent.engine import AgentEngine
+        from blagent.llm import LlmChunk, LlmClient
+        from blagent.tools import ToolRegistry
+
+        records = []
+
+        class Llm(LlmClient):
+            def __init__(self):
+                self.round = 0
+                self.round2_msgs = None
+
+            async def stream(self, request):
+                self.round += 1
+                if self.round == 1:
+                    # reasoning streams first (content empty), then the answer
+                    yield LlmChunk(reasoning="I should inspect the scene first.")
+                    yield LlmChunk(content="Done — the cube is centered.")
+                else:
+                    self.round2_msgs = request["messages"]
+                    yield LlmChunk(content="ok")
+
+        async def emit(_e):
+            pass
+
+        engine = AgentEngine(registry=ToolRegistry([]), media=None, system_prompt="",
+                             emit=emit, append_record=lambda r: records.append(r))
+        llm = Llm()
+        asyncio.new_event_loop().run_until_complete(engine.run_turn(
+            "s1", "go", llm, "m", autonomy="auto", max_rounds=2, budget_review=False))
+
+        asst = [r for r in records if r.get("role") == "assistant"]
+        self.assertTrue(asst)
+        # The reasoning is folded into the record as a <think> block (display).
+        self.assertIn("<think>", asst[0]["content"])
+        self.assertIn("inspect the scene first", asst[0]["content"])
+        self.assertIn("cube is centered", asst[0]["content"])
+        # A follow-up turn proves the think block is stripped before resend.
+        records.clear()
+        engine.records = list(asst)  # seed with the reasoning-bearing turn
+        asyncio.new_event_loop().run_until_complete(engine.run_turn(
+            "s1", "again", llm, "m", autonomy="auto", max_rounds=1, budget_review=False))
+        blob = json.dumps(llm.round2_msgs or [])
+        self.assertNotIn("inspect the scene first", blob)   # reasoning stripped
+        self.assertIn("cube is centered", blob)             # real content kept
+
+
+class TestAskUserHeadless(unittest.TestCase):
+
     def test_ask_user_without_interactive_user_errors(self) -> None:
         _import_blagent()
         from blagent.agent_tools import AskUserTool

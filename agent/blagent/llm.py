@@ -39,19 +39,23 @@ class LlmError(Exception):
 
 class LlmChunk:
     """
-    One streamed delta: optional content text, optional tool-call
-    fragments (OpenAI delta shape), optional finish reason.
+    One streamed delta: optional content text, optional reasoning text
+    (for models whose endpoint separates chain-of-thought into a
+    ``reasoning_content``/``reasoning`` field — e.g. Kimi/DeepSeek-R1 on
+    vLLM/SGLang), optional tool-call fragments, optional finish reason.
     """
 
-    __slots__ = ("content", "tool_calls", "finish_reason")
+    __slots__ = ("content", "reasoning", "tool_calls", "finish_reason")
 
     def __init__(
             self,
             content: str = "",
             tool_calls: list[dict[str, Any]] | None = None,
             finish_reason: str | None = None,
+            reasoning: str = "",
     ) -> None:
         self.content = content
+        self.reasoning = reasoning
         self.tool_calls = tool_calls or []
         self.finish_reason = finish_reason
 
@@ -62,8 +66,12 @@ class LlmChunk:
             return None
         choice = choices[0]
         delta = choice.get("delta") or {}
+        # Servers vary: vLLM/SGLang use `reasoning_content`, some use
+        # `reasoning`. Capture either so the trace isn't lost (it would
+        # otherwise look like dead air while content stays empty).
         return cls(
             content=delta.get("content") or "",
+            reasoning=delta.get("reasoning_content") or delta.get("reasoning") or "",
             tool_calls=delta.get("tool_calls") or [],
             finish_reason=choice.get("finish_reason"),
         )

@@ -135,6 +135,16 @@ def _strip_thinking(text: str) -> str:
         return text
     return _THINK_RE.sub("", text).strip()
 
+
+def _fold_reasoning(reasoning: str, content: str) -> str:
+    """Prepend a separated reasoning trace as a <think> block for DISPLAY +
+    the persisted transcript. Stripped again by ``_strip_thinking`` before the
+    text is sent back to the model, so the context / KV cache is untouched."""
+    if not reasoning:
+        return content
+    block = "<think>\n{:s}\n</think>".format(reasoning)
+    return block if not content else "{:s}\n\n{:s}".format(block, content)
+
 _SUMMARY_SYSTEM_PROMPT = (
     "You compress conversation history for a Blender assistant agent. "
     "Produce a compact briefing the agent can rely on IN PLACE of the "
@@ -235,6 +245,9 @@ class AgentEngine:
         # next safe point (a running tool still finishes). Distinct from
         # ``_interrupt``, which only cuts one generation to re-plan.
         self._abort = asyncio.Event()
+        # Reasoning trace from the most recent streamed round (folded into the
+        # record for display by the run loop).
+        self._round_reasoning = ""
 
     def inject(self, content: str, now: bool = False) -> None:
         """
@@ -698,21 +711,25 @@ class AgentEngine:
                 # A 'now' injection cut this generation short. Keep any
                 # partial text, then re-loop to apply the injected guidance
                 # (drained at the top) rather than act on a half-formed plan.
-                if content.strip():
-                    self.push_record({"role": "assistant", "content": content})
+                if content.strip() or self._round_reasoning:
+                    folded = _fold_reasoning(self._round_reasoning, content)
+                    self.push_record({"role": "assistant", "content": folded})
                     await self._emit({
                         "type": "assistant_done", "session_id": session_id,
-                        "content": content, "tool_calls": [], "interrupted": True})
+                        "content": folded, "tool_calls": [], "interrupted": True})
                 continue
 
-            record: dict[str, Any] = {"role": "assistant", "content": content}
+            # Fold the reasoning trace into the stored/displayed content (only;
+            # _strip_thinking removes it before the next model call).
+            display = _fold_reasoning(self._round_reasoning, content)
+            record: dict[str, Any] = {"role": "assistant", "content": display}
             if tool_calls:
                 record["tool_calls"] = tool_calls
             self.push_record(record)
             await self._emit({
                 "type": "assistant_done",
                 "session_id": session_id,
-                "content": content,
+                "content": display,
                 "tool_calls": [
                     {"id": c["id"], "name": c["name"], "arguments": c["arguments"]}
                     for c in tool_calls
@@ -882,6 +899,13 @@ class AgentEngine:
         and tool calls from the deltas.
         """
         content_parts: list[str] = []
+        # Reasoning trace (models whose endpoint separates chain-of-thought
+        # into reasoning_content/reasoning — e.g. Kimi). Streamed to the UI as
+        # a <think> block so it isn't dead air, and folded into the record for
+        # display; _strip_thinking drops it before anything goes back to the
+        # model, so the KV cache / context is untouched.
+        reasoning_parts: list[str] = []
+        think_open = False
         # index -> {id, name, arguments}
         calls: dict[int, dict[str, Any]] = {}
         # While the model writes a long tool call (hundreds of lines of
@@ -906,7 +930,16 @@ class AgentEngine:
                     # re-loops to apply the injection. (Tool calls aren't
                     # dispatched on an interrupted round.)
                     break
+                if chunk.reasoning:
+                    if not think_open:
+                        think_open = True
+                        await self._emit({"type": "token", "session_id": session_id, "text": "<think>"})
+                    reasoning_parts.append(chunk.reasoning)
+                    await self._emit({"type": "token", "session_id": session_id, "text": chunk.reasoning})
                 if chunk.content:
+                    if think_open:
+                        think_open = False
+                        await self._emit({"type": "token", "session_id": session_id, "text": "</think>"})
                     content_parts.append(chunk.content)
                     await self._emit({"type": "token", "session_id": session_id, "text": chunk.content})
                 for delta in chunk.tool_calls:
@@ -935,6 +968,14 @@ class AgentEngine:
                 await watchdog
             except asyncio.CancelledError:
                 pass
+
+        # Reasoning that ran straight into tool calls (no content) leaves the
+        # <think> block open in the stream — close it.
+        if think_open:
+            await self._emit({"type": "token", "session_id": session_id, "text": "</think>"})
+        # Hand the trace to the caller to fold into the persisted record
+        # (display-only; stripped before the next model call).
+        self._round_reasoning = "".join(reasoning_parts).strip()
 
         tool_calls = []
         for index in sorted(calls):
