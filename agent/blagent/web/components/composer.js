@@ -751,7 +751,7 @@ export class BaComposer extends LitElement {
                     @click=${() => this._send()}>
                     ${this._draftPending
                       ? html`<span class="spin">${icon("arrow-path")}</span>`
-                      : icon("sparkles")}</button>`
+                      : icon("clipboard")}</button>`
                 : html`<button class="circle act" title=${
                     this._autonomyMode() ? "Begin run (Enter)" : "Send (Enter)"}
                     ?disabled=${!this._connected} @click=${() => this._send()}>

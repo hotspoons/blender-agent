@@ -1062,7 +1062,7 @@ export class BaChatStage extends LitElement {
     const canSend = this._elicitSel.size > 0 || (this._elicitText || "").trim().length > 0;
     return html`
       <div class="elicit">
-        <div class="q">${icon("sparkles")} ${e.question}</div>
+        <div class="q">${e.question}</div>
         ${e.options?.length ? html`
           <div class="opts">
             ${e.options.map((opt) => html`
