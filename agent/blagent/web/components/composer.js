@@ -454,10 +454,19 @@ export class BaComposer extends LitElement {
     }
     this._autoload = false;
     if (this._autonomyMode()) {
-      // Autonomy modes: an open objectives editor wins; otherwise the line
-      // is a single quick objective (the explicit shortcut).
-      if (this._objRows.length) this._beginRun();
-      else store.objectives([{ text: text, acceptance: "" }]);
+      // Autonomy modes: if objectives are already drafted/edited, launch them;
+      // otherwise SEND DECOMPOSES the goal into a set of objectives (guided
+      // intake) rather than running the whole prompt as one giant objective.
+      if (this._objRows.length) {
+        this._beginRun();
+      } else if (text) {
+        this._draftObjectives(text);
+        ta.value = "";
+        ta.style.height = "auto";
+        return;
+      } else {
+        return;
+      }
     } else {
       store.chat(text || "(see attached image)", ready);
     }
@@ -592,9 +601,11 @@ export class BaComposer extends LitElement {
       ${this._renderSwarmPreflight()}`;
   }
 
-  _draftObjectives() {
+  _draftObjectives(goal) {
     const ta = this.renderRoot.querySelector("textarea");
-    store.draftObjectives((ta?.value || "").trim());
+    const text = (goal ?? (ta?.value || "")).trim();
+    if (!text) return;
+    store.draftObjectives(text);
   }
 
   _setRow(i, field, value) {
@@ -722,15 +733,6 @@ export class BaComposer extends LitElement {
             ${icon("plus")}</button>
           <input type="file" multiple
             @change=${(e) => { this._addFiles([...e.target.files]); e.target.value = ""; }}>
-          ${this._autonomyMode() ? html`
-            <button class="draft-btn ${this._draftPending ? "pending" : ""}"
-              title="Draft objectives from your goal (guided intake)"
-              ?disabled=${this._busy || !this._connected || this._draftPending}
-              @click=${() => this._draftObjectives()}>
-              ${this._draftPending
-                ? html`<span class="spin">${icon("arrow-path")}</span> Drafting…`
-                : html`✦ Draft`}</button>`
-            : nothing}
           <span class="spacer"></span>
           ${this._busy
             ? html`
@@ -742,9 +744,18 @@ export class BaComposer extends LitElement {
             : this._autoload
               ? html`<button class="circle act" disabled title=${localLlm.progress?.text || "Loading model..."}>
                   <span class="spin">${icon("arrow-path")}</span></button>`
-              : html`<button class="circle act" title="Send (Enter)"
-                  ?disabled=${!this._connected} @click=${() => this._send()}>
-                  ${icon("arrow-up")}</button>`}
+              : (this._autonomyMode() && !this._objRows.length)
+                ? html`<button class="circle act draft ${this._draftPending ? "pending" : ""}"
+                    title="Draft objectives from your goal, then review &amp; run"
+                    ?disabled=${!this._connected || this._draftPending}
+                    @click=${() => this._send()}>
+                    ${this._draftPending
+                      ? html`<span class="spin">${icon("arrow-path")}</span>`
+                      : icon("sparkles")}</button>`
+                : html`<button class="circle act" title=${
+                    this._autonomyMode() ? "Begin run (Enter)" : "Send (Enter)"}
+                    ?disabled=${!this._connected} @click=${() => this._send()}>
+                    ${icon("arrow-up")}</button>`}
         </div>
       </div>
     `;
