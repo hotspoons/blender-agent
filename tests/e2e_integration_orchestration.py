@@ -63,8 +63,8 @@ def main():
     # 2) test data dir + config pointing at the fake LLM, orchestrator mode,
     #    minimal rounds for a quick deterministic run.
     os.makedirs(_DATA, exist_ok=True)
-    with open(os.path.join(_DATA, "config.json"), "w", encoding="utf-8") as fh:
-        json.dump({
+    with open(os.path.join(_DATA, "config.yaml"), "w", encoding="utf-8") as fh:
+        json.dump({  # JSON is valid YAML
             "endpoint": "http://127.0.0.1:{}/v1".format(_LLM_PORT),
             "model": "fake/test-model", "use_local_llm": False,
             "autonomy": "auto", "autonomy_level": "orchestrator",

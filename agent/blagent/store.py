@@ -9,7 +9,7 @@ Filesystem-backed agent store, ported from Foyer Studio's
 
 Layout under the data dir (default ``$XDG_DATA_HOME/blender-agent``)::
 
-    config.json
+    config.yaml
     memory.md
     skills/<name>/SKILL.md
     sessions/<id>/transcript.jsonl
@@ -125,7 +125,7 @@ def _default_data_dir() -> str:
 @dataclasses.dataclass
 class AgentConfig:
     """
-    Deployment knobs, persisted to ``config.json``. Environment
+    Deployment knobs, persisted to ``config.yaml``. Environment
     variables override the stored values at load time.
     """
 
@@ -182,16 +182,14 @@ class AgentConfig:
 
     @classmethod
     def load(cls, path: str) -> "AgentConfig":
+        import yaml
         config = cls()
         if os.path.isfile(path):
             try:
                 with open(path, encoding="utf-8") as fh:
-                    raw = json.load(fh)
+                    raw = yaml.safe_load(fh) or {}
             except (OSError, ValueError):
                 raw = {}
-            # Pre-Transformers.js configs stored this under the engine name.
-            if "use_local_llm" not in raw and "use_webllm" in raw:
-                raw["use_local_llm"] = raw["use_webllm"]
             for field in dataclasses.fields(cls):
                 if field.name in raw:
                     setattr(config, field.name, raw[field.name])
@@ -201,9 +199,10 @@ class AgentConfig:
         return config
 
     def save(self, path: str) -> None:
+        import yaml
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as fh:
-            json.dump(dataclasses.asdict(self), fh, indent=2)
+            yaml.safe_dump(dataclasses.asdict(self), fh, sort_keys=False)
 
     def as_public(self) -> dict[str, object]:
         """
@@ -293,7 +292,7 @@ class AgentStore:
     def __init__(self, data_dir: str | None = None) -> None:
         self.data_dir = data_dir or os.environ.get("BLENDER_AGENT_DATA_DIR") or _default_data_dir()
         os.makedirs(self.data_dir, exist_ok=True)
-        self._config_path = os.path.join(self.data_dir, "config.json")
+        self._config_path = os.path.join(self.data_dir, "config.yaml")
         self.config = AgentConfig.load(self._config_path)
         # Held session locks, for same-process re-entrancy (one store
         # per process; everything runs on the asyncio loop thread).
