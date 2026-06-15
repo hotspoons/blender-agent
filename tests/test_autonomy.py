@@ -250,61 +250,7 @@ class TestAutonomyLoop(unittest.TestCase):
         tasks = _run(a.LlmPlanner(llm, "m").plan([a.Objective(id="o1", text="g", acceptance="a")]))
         self.assertEqual(len(tasks), 1)
 
-    def test_qa_reviewer_spawns_dedicated_agent_and_annotates_worker(self) -> None:
-        a = _import_autonomy()
-        # Planner -> one task; QA reviewer flags it; evaluator -> met (QA is
-        # advisory and must NOT change the objective verdict).
-        llm = self._scripted_llm([
-            '{"tasks": [{"objective_id": "o1", "instruction": "build o1"}]}',
-            '{"passed": false, "note": "torso is non-manifold"}',
-            '{"verdicts": [{"objective_id": "o1", "met": true, "evidence": "torso in scene"}]}',
-        ])
-
-        async def worker_runner(task: Any) -> Any:
-            return a.WorkerResult(task.id, task.objective_id, "did it", ok=True)
-
-        events: list[dict[str, Any]] = []
-
-        async def emit(event: dict[str, Any]) -> None:
-            events.append(event)
-
-        async def probe() -> str:
-            return "objects: torso"
-
-        objectives = [a.Objective(id="o1", text="a torso", acceptance="torso exists")]
-        orch = a.AutonomyOrchestrator(
-            planner=a.LlmPlanner(llm, "m"),
-            scheduler=a.SequentialScheduler(),
-            evaluator=a.StateAwareEvaluator(llm, "m", probe=probe),
-            policy=a.AutoUntilDonePolicy(),
-            worker_runner=worker_runner,
-            emit=emit,
-            session_id="s1",
-            reviewer=a.WorkerReviewer(llm, "m", probe=probe),
-        )
-        result = _run(orch.run(objectives, max_rounds=1))
-
-        # Advisory: the failed QA note doesn't override the evaluator verdict.
-        self.assertTrue(result["all_met"])
-        # A dedicated QA agent was spawned (its own role/id), reviewing the worker.
-        qa_spawn = [e for e in events if e["type"] == "agent_spawned" and e["role"] == "qa"]
-        self.assertEqual(len(qa_spawn), 1)
-        self.assertEqual(qa_spawn[0]["agent_id"], "s1:qa:task-0-0")
-        self.assertEqual(qa_spawn[0]["reviews"], "s1:w:task-0-0")
-        # ...and a worker_review event annotates the worker it reviewed.
-        review = [e for e in events if e["type"] == "worker_review"]
-        self.assertEqual(len(review), 1)
-        self.assertEqual(review[0]["agent_id"], "s1:w:task-0-0")
-        self.assertFalse(review[0]["passed"])
-        self.assertIn("non-manifold", review[0]["note"])
-        # QA spawn lands AFTER the worker is done, BEFORE the round closes.
-        types = [e["type"] for e in events]
-        self.assertLess(types.index("agent_done"), types.index("worker_review"))
-        self.assertLess(
-            [i for i, e in enumerate(events) if e["type"] == "agent_spawned" and e["role"] == "qa"][0],
-            types.index("autonomy_round_done"))
-
-    def test_no_reviewer_means_no_qa_events(self) -> None:
+    def test_orchestrator_emits_no_qa_on_its_own(self) -> None:
         a = _import_autonomy()
         llm = self._scripted_llm([
             '{"tasks": [{"objective_id": "o1", "instruction": "build o1"}]}',
@@ -329,22 +275,10 @@ class TestAutonomyLoop(unittest.TestCase):
             session_id="s1",
         )
         _run(orch.run(objectives=[a.Objective(id="o1", text="x", acceptance="x")], max_rounds=1))
+        # The review loop is a runtime wrapper around worker_runner now; the bare
+        # orchestrator emits no QA / worker_review itself.
         self.assertFalse(any(e["type"] == "worker_review" for e in events))
         self.assertFalse(any(e.get("role") == "qa" for e in events))
-
-    def test_worker_reviewer_fails_closed_on_empty_verdict(self) -> None:
-        a = _import_autonomy()
-        llm = self._scripted_llm(["not json at all"])
-
-        async def probe() -> str:
-            return "objects: torso"
-
-        note = _run(a.WorkerReviewer(llm, "m", probe=probe).review(
-            a.WorkerTask(id="t1", objective_id="o1", instruction="build it"),
-            a.WorkerResult("t1", "o1", "did it", ok=True)))
-        self.assertFalse(note.passed)
-        self.assertEqual(note.task_id, "t1")
-        self.assertIn("unverified", note.note.lower())
 
     def test_sequential_scheduler_preserves_order(self) -> None:
         a = _import_autonomy()
@@ -521,14 +455,17 @@ class TestChildSessionRunner(unittest.TestCase):
             register=register,
             unregister=unregister,
         )
-        result = _run(runner(WorkerTask(id="t1", objective_id="o1", instruction="build it")))
+        task = WorkerTask(id="t1", objective_id="o1", instruction="build it")
+        result = _run(runner(task))
 
         self.assertTrue(result.ok)
         self.assertIn("Cube", result.proof)
         self.assertEqual(result.transcript_ref, "orch1:w:t1")
         self.assertEqual(len(tool_calls), 1)  # the worker really ran the tool
-        # Registered for injection during the run, cleaned up after.
         self.assertEqual(registered, ["orch1:w:t1"])
+        # The engine is kept alive for continuation until released explicitly.
+        self.assertIn("orch1:w:t1", live)
+        runner.release(task)
         self.assertEqual(live, {})
         worker_events = [e for e in events if e.get("parent_session_id") == "orch1"]
         self.assertTrue(worker_events)

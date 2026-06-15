@@ -134,7 +134,9 @@ class OrchestratorView:
             ag = self.agents.get(str(ev.get("agent_id", "")))
             if ag is not None:
                 ag["review"] = {"passed": bool(ev.get("passed")),
-                                "note": ev.get("note", ""), "by": ev.get("by", "")}
+                                "note": ev.get("note", ""), "qa": ev.get("qa", ""),
+                                "attempt": ev.get("attempt", 0),
+                                "stopped": bool(ev.get("stopped"))}
                 return True
             return False
         if t == "swarm_gathered":

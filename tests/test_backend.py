@@ -316,6 +316,89 @@ class TestRuntimeBackendWiring(unittest.TestCase):
         with open(rt.store._config_path, encoding="utf-8") as fh:
             self.assertTrue(yaml.safe_load(fh).get("autonomy_qa"))
 
+    def _review_stub(self):
+        from blagent.autonomy import WorkerResult, WorkerTask
+
+        class StubRunner:
+            def __init__(self) -> None:
+                self.continues = 0
+                self.released = False
+
+            async def __call__(self, task):  # noqa: ANN001
+                return WorkerResult(task.id, task.objective_id, "first attempt", ok=True)
+
+            async def continue_(self, task, guidance):  # noqa: ANN001
+                self.continues += 1
+                return WorkerResult(task.id, task.objective_id, "continued: " + guidance, ok=True)
+
+            def release(self, task):  # noqa: ANN001
+                self.released = True
+
+        return StubRunner(), WorkerTask(id="t0", objective_id="o1", instruction="build it",
+                                        acceptance="exists")
+
+    def test_review_loop_replenishes_and_reruns_until_accepted(self) -> None:
+        from blagent.llm import LlmChunk, LlmClient
+        rt = self._runtime([self._probe_tool()])
+
+        class ReviewLlm(LlmClient):
+            def __init__(self) -> None:
+                self.n = 0
+
+            async def stream(self, request):  # noqa: ANN001
+                self.n += 1
+                if self.n == 1:
+                    yield LlmChunk(content='{"accept": false, "guidance": "fix the seam", "request_qa": false}')
+                else:
+                    yield LlmChunk(content='{"accept": true, "guidance": "", "request_qa": false}')
+
+        llm = ReviewLlm()
+        rt._make_llm = lambda: llm                # type: ignore[method-assign]
+        rt._model_name = lambda: "m"              # type: ignore[method-assign]
+        stub, task = self._review_stub()
+        events: list[dict] = []
+
+        async def emit(ev):  # noqa: ANN001
+            events.append(ev)
+
+        reviewing = rt._make_reviewing_runner(
+            "s1", stub, emit, rt._make_probe("s1"), "m",
+            qa_enabled=False, media_factory=lambda a: None)
+        result = _run(reviewing(task))
+
+        self.assertEqual(stub.continues, 1)       # one guided re-run, then accepted
+        self.assertTrue(stub.released)
+        self.assertIn("fix the seam", result.proof)
+        reviews = [e for e in events if e["type"] == "worker_review"]
+        self.assertEqual([r["passed"] for r in reviews], [False, True])
+
+    def test_review_loop_does_not_rerun_a_stopped_worker(self) -> None:
+        from blagent.llm import LlmChunk, LlmClient
+        rt = self._runtime([self._probe_tool()])
+
+        class RejectLlm(LlmClient):
+            async def stream(self, request):  # noqa: ANN001
+                yield LlmChunk(content='{"accept": false, "guidance": "more", "request_qa": false}')
+
+        rt._make_llm = lambda: RejectLlm()        # type: ignore[method-assign]
+        rt._model_name = lambda: "m"              # type: ignore[method-assign]
+        stub, task = self._review_stub()
+        rt._stopped_workers.add("s1:w:t0")        # user hit Stop
+        events: list[dict] = []
+
+        async def emit(ev):  # noqa: ANN001
+            events.append(ev)
+
+        reviewing = rt._make_reviewing_runner(
+            "s1", stub, emit, rt._make_probe("s1"), "m",
+            qa_enabled=False, media_factory=lambda a: None)
+        _run(reviewing(task))
+
+        self.assertEqual(stub.continues, 0)       # stopped -> orchestrator notified, no re-run
+        review = [e for e in events if e["type"] == "worker_review"][0]
+        self.assertTrue(review["stopped"])
+        self.assertTrue(review["passed"])         # accepted as-is
+
     def test_worker_ask_orchestrator_answers_directly(self) -> None:
         from blagent.llm import LlmChunk, LlmClient
         rt = self._runtime([self._probe_tool()])

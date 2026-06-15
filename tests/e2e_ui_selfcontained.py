@@ -178,26 +178,28 @@ def main():
             _check("worker card has a separation shadow",
                    wprobe and wprobe["shadow"] not in (None, "none", ""), str(wprobe))
 
-            # --- dedicated QA reviewer: its own agent card + a QA note pinned
-            #     on the worker it reviewed (opt-in per-worker QA) ---
+            # --- review loop: orchestrator verdict on the worker + a bounded
+            #     QA inspector agent card ---
             qa_view = view({
                 "orch-1:w:t1": {
                     "id": "orch-1:w:t1", "role": "worker", "task": "build torso",
                     "state": "done", "ok": True, "proof": "PROOF_QA_42",
                     "timeline": [], "calls": {}, "media": [],
-                    "review": {"passed": False, "note": "QA_FLAG_NONMANIFOLD", "by": "orch-1:qa:t1"}},
-                "orch-1:qa:t1": {
-                    "id": "orch-1:qa:t1", "role": "qa", "task": "QA review — build torso",
-                    "state": "done", "ok": False, "proof": "QA_VERDICT_TEXT",
+                    "review": {"passed": False, "note": "GUIDANCE_FIX_SEAM", "qa": "",
+                               "attempt": 1, "stopped": False}},
+                "orch-1:qa:t1:0": {
+                    "id": "orch-1:qa:t1:0", "role": "qa", "task": "QA inspect — build torso",
+                    "state": "done", "ok": False, "proof": "QA_FINDINGS_TEXT",
                     "reviews": "orch-1:w:t1", "timeline": [], "calls": {}, "media": []}},
-                ["orch-1:w:t1", "orch-1:qa:t1"])
+                ["orch-1:w:t1", "orch-1:qa:t1:0"])
             push_view(qa_view)
             page.wait_for_timeout(300)
             text = page.evaluate(_DOM_TEXT)
-            _check("qa: dedicated QA agent card rendered", "QA review — build torso" in text)
-            _check("qa: QA agent verdict shown", "QA_VERDICT_TEXT" in text)
-            _check("qa: worker shows QA note inline", "QA_FLAG_NONMANIFOLD" in text)
-            _check("qa: failed QA flagged (not pass)", "QA flag" in text)
+            _check("qa: bounded QA inspector card rendered", "QA inspect — build torso" in text)
+            _check("qa: QA inspector findings shown", "QA_FINDINGS_TEXT" in text)
+            _check("review: orchestrator guidance shown on worker", "GUIDANCE_FIX_SEAM" in text)
+            _check("review: needs-work verdict shown", "needs work" in text)
+            _check("review: cycle count shown", "pass 2" in text)
             qa_class = page.evaluate("""() => { let f=false; const w=(r)=>{if(r.querySelector&&r.querySelector('.agent.qa'))f=true; r.querySelectorAll&&r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)w(e.shadowRoot)})}; w(document); return f; }""")
             _check("qa: QA agent card has dedicated role class", qa_class)
 

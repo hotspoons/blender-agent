@@ -88,7 +88,8 @@ class TestOrchestratorView(unittest.TestCase):
         self.assertEqual(snap["agents"]["run:qa:t0"]["role"], "qa")
         self.assertEqual(snap["agents"]["run:qa:t0"]["reviews"], "run:w:t0")
         review = snap["agents"]["run:w:t0"]["review"]
-        self.assertEqual(review, {"passed": False, "note": "missing X", "by": "run:qa:t0"})
+        self.assertFalse(review["passed"])
+        self.assertEqual(review["note"], "missing X")
 
     def test_planner_stream_reduces_to_a_planning_card(self):
         V = _mod().OrchestratorView

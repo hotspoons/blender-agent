@@ -131,24 +131,19 @@ class ChildSessionRunner:
         # user can inject messages straight into it (voice of god).
         self._register = register
         self._unregister = unregister
+        # Engines kept alive between review cycles (continue_ / release).
+        self._live: dict[str, dict[str, Any]] = {}
 
     async def __call__(self, task: Any) -> Any:
-        from .autonomy import WorkerResult
-
         agent_id = "{:s}:w:{:s}".format(self._parent, task.id)
         records: list[dict[str, Any]] = []
 
         async def child_emit(event: dict[str, Any]) -> None:
             await self._emit({**event, "parent_session_id": self._parent, "role": "worker"})
 
-        def append(record: dict[str, Any]) -> None:
-            records.append(record)
-
         # Pin the full mission in the SYSTEM prompt (which _fit_context never
         # trims), so huge welcome/scene-summary tool results can't push the
-        # worker's task out of context and disorient it. The informed-worker
-        # context (share_context) rides along here too — pinned, not a
-        # trimmable synthetic user turn.
+        # worker's task out of context and disorient it.
         context_block = ""
         if getattr(task, "context", ""):
             context_block = "\n## ORCHESTRATOR CONTEXT\n{:s}\n".format(task.context)
@@ -163,45 +158,64 @@ class ChildSessionRunner:
             media=self._media_factory(agent_id),
             system_prompt=worker_system,
             emit=child_emit,
-            append_record=append,
+            append_record=records.append,
         )
+        # Kept alive so the orchestrator can replenish the budget and continue
+        # the SAME worker (continue_) after a review; released explicitly.
+        self._live[agent_id] = {"engine": engine, "records": records, "task": task}
         if self._register is not None:
             self._register(agent_id, engine)
+        return await self._turn(
+            agent_id, engine, records, task,
+            "Begin now — execute your assigned task end to end, then report your proof of work.")
+
+    async def _turn(self, agent_id: str, engine: "AgentEngine",
+                    records: list[dict[str, Any]], task: Any, user_text: str) -> Any:
+        from .autonomy import WorkerResult
         try:
             await engine.run_turn(
-                session_id=agent_id,
-                user_text="Begin now — execute your assigned task end to end, "
-                          "then report your proof of work.",
-                llm=self._make_llm(),
-                model=self._model,
-                autonomy=self._autonomy,
-                max_rounds=self._max_rounds,
-                context_tokens=self._context_tokens,
-                budget_review=self._budget_review,
-            )
+                session_id=agent_id, user_text=user_text, llm=self._make_llm(),
+                model=self._model, autonomy=self._autonomy, max_rounds=self._max_rounds,
+                context_tokens=self._context_tokens, budget_review=self._budget_review)
         except Exception as ex:  # pylint: disable=broad-except
             _log.warning("worker %s failed: %s", task.id, ex)
             return WorkerResult(
                 task_id=task.id, objective_id=task.objective_id,
                 proof="worker errored: {:s}".format(ex), ok=False, transcript_ref=agent_id)
-        finally:
-            if self._unregister is not None:
-                self._unregister(agent_id)
-
-        proof = ""
-        for record in reversed(records):
-            if record.get("role") == "assistant":
-                # Strip the reasoning trace: the proof is the worker's CLAIM,
-                # shown in the card and judged by the evaluator — not its
-                # chain-of-thought. (A think-only round strips to empty -> skip.)
-                content = _strip_thinking(str(record.get("content", ""))).strip()
-                if content:
-                    proof = content
-                    break
+        proof = self._extract_proof(records)
         return WorkerResult(
             task_id=task.id, objective_id=task.objective_id,
             proof=proof or "(worker produced no final report)",
             ok=bool(proof), transcript_ref=agent_id)
+
+    async def continue_(self, task: Any, guidance: str) -> Any:
+        """Replenish the worker's budget and continue the SAME engine with the
+        orchestrator's guidance (after a review cycle)."""
+        agent_id = "{:s}:w:{:s}".format(self._parent, task.id)
+        live = self._live.get(agent_id)
+        if live is None:
+            return await self(task)
+        return await self._turn(
+            agent_id, live["engine"], live["records"], task,
+            "[Orchestrator guidance — your tool budget is replenished. Address this, then "
+            "report your updated proof of work.]\n{:s}".format(guidance))
+
+    def release(self, task: Any) -> None:
+        agent_id = "{:s}:w:{:s}".format(self._parent, task.id)
+        self._live.pop(agent_id, None)
+        if self._unregister is not None:
+            self._unregister(agent_id)
+
+    @staticmethod
+    def _extract_proof(records: list[dict[str, Any]]) -> str:
+        # The proof is the worker's latest CLAIM (shown in the card, judged by
+        # the evaluator) — not its chain-of-thought, so strip the reasoning.
+        for record in reversed(records):
+            if record.get("role") == "assistant":
+                content = _strip_thinking(str(record.get("content", ""))).strip()
+                if content:
+                    return content
+        return ""
 
 _SYSTEM_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "system_prompt.md")
 
@@ -222,6 +236,40 @@ _ORCH_DECIDE_SYSTEM = (
     '{"answer": "<direct answer to the worker>"} or, only if you must, '
     '{"escalate": true, "question": "<the question rephrased for the user>"}.'
 )
+
+_REVIEW_SYSTEM = (
+    "You are the ORCHESTRATOR of a Blender autonomy run, reviewing ONE worker's "
+    "result against its task and acceptance criteria, using the project-state "
+    "evidence (and any QA inspector findings) as ground truth — not the worker's "
+    "narrative. Decide: is this piece of work good enough to accept? If not, give "
+    "SPECIFIC, actionable guidance the worker can act on with a replenished tool "
+    "budget. Set request_qa when you need an independent inspection of the scene "
+    "before judging. If the worker was STOPPED by the user, do NOT ask to re-run "
+    "it — accept the partial result and note what remains. Reply with ONLY a JSON "
+    'object: {"accept": true|false, "guidance": "<what to fix, if not accepted>", '
+    '"request_qa": true|false}.'
+)
+
+_QA_INSPECT_MISSION = """
+
+---
+# YOUR ROLE: QA inspector
+A worker just finished a task and CLAIMS a result. Independently INSPECT the
+actual scene to verify the claim against the acceptance criteria. You MAY use
+any tools to see the result (move the camera, render a view, run diagnostics),
+but do NOT redo the worker's task or make substantive edits. Be quick — a couple
+of tool calls at most. Then end your turn with concise QA FINDINGS: what holds
+up, and what is missing or wrong.
+
+## THE TASK UNDER REVIEW
+{instruction}
+
+## ACCEPTANCE CRITERIA
+{acceptance}
+
+## THE WORKER'S CLAIM
+{proof}
+"""
 
 
 class _Session:
@@ -287,6 +335,7 @@ class AgentRuntime:
         self._swarm_stoppers: dict[str, "Callable[[], None]"] = {}
         # Live autonomy objective lists by session id, for mid-run updates.
         self._autonomy_objs: dict[str, list[Any]] = {}
+        self._stopped_workers: set[str] = set()
         # Backend-owned orchestrator view (the frontend projects its snapshot).
         self._views: dict[str, OrchestratorView] = {}
         self._view_emit_at: dict[str, float] = {}
@@ -344,6 +393,7 @@ class AgentRuntime:
         self._workers = {}
         self._swarm_stoppers = {}
         self._autonomy_objs = {}
+        self._stopped_workers = set()
         self._views = {}
         self._view_emit_at = {}
         self._subscribers = set()
@@ -735,6 +785,124 @@ class AgentRuntime:
             return {"escalate": True, "question": str(data.get("question") or question)}
         return {"answer": str(data.get("answer", "")).strip()}
 
+    def _make_reviewing_runner(
+            self, session_id: str, runner: "ChildSessionRunner",
+            emit: "Callable[[dict[str, Any]], Awaitable[None]]",
+            probe: "Callable[[], Awaitable[str]]", model: str,
+            *, qa_enabled: bool, media_factory: "Callable[[str], MediaLibrary]",
+            max_cycles: int = 3) -> "Callable[[Any], Awaitable[Any]]":
+        """Wrap a worker runner with the per-worker review loop: the orchestrator
+        is pinged with every result, optionally spawns a bounded QA inspector,
+        then accepts or replenishes the worker's budget with guidance (capped).
+        Returned callable is the orchestrator's worker_runner — the loop is
+        invisible to AutonomyOrchestrator."""
+        async def reviewing(task: Any) -> Any:
+            worker_id = "{:s}:w:{:s}".format(session_id, task.id)
+            result = await runner(task)
+            try:
+                for attempt in range(max_cycles):
+                    stopped = worker_id in self._stopped_workers
+                    qa = ""
+                    if qa_enabled and not stopped:
+                        qa = await self._qa_inspect(session_id, task, result, emit, model,
+                                                    media_factory, attempt)
+                    decision = await self._review_worker(session_id, task, result, qa, stopped)
+                    if decision.get("request_qa") and not qa and not stopped:
+                        qa = await self._qa_inspect(session_id, task, result, emit, model,
+                                                    media_factory, attempt)
+                        decision = await self._review_worker(session_id, task, result, qa, stopped)
+                    accept = bool(decision.get("accept")) or stopped
+                    guidance = str(decision.get("guidance", "")).strip()
+                    await emit({
+                        "type": "worker_review", "session_id": session_id, "agent_id": worker_id,
+                        "passed": accept, "note": guidance, "qa": qa,
+                        "attempt": attempt, "stopped": stopped})
+                    if accept or attempt == max_cycles - 1 or not guidance:
+                        break
+                    result = await runner.continue_(task, guidance)
+            except Exception as ex:  # pylint: disable=broad-except
+                _log.warning("review loop failed session=%s task=%s: %s", session_id, task.id, ex)
+            finally:
+                runner.release(task)
+                self._stopped_workers.discard(worker_id)
+            return result
+
+        return reviewing
+
+    async def _review_worker(
+            self, session_id: str, task: Any, result: Any,
+            qa_findings: str, stopped: bool) -> dict[str, Any]:
+        """The orchestrator's per-worker verdict: accept, or guidance to re-run."""
+        from .autonomy import _complete, _extract_json_object
+
+        state = "(no project-state probe configured)"
+        try:
+            state = await self._make_probe(session_id)()
+        except Exception:  # pylint: disable=broad-except
+            pass
+        user = (
+            "TASK: {:s}\nACCEPTANCE: {:s}\n\nWORKER CLAIM:\n{:s}\n\n"
+            "QA INSPECTOR FINDINGS:\n{:s}\n\nPROJECT STATE (ground truth):\n{:s}\n\n"
+            "{:s}".format(
+                task.instruction, getattr(task, "acceptance", "") or "(n/a)",
+                result.proof or "(no proof)", qa_findings or "(no QA inspection)",
+                state, "NOTE: the user STOPPED this worker." if stopped else "")
+        )
+        try:
+            text = await _complete(self._make_llm(), self._model_name(), _REVIEW_SYSTEM, user)
+        except Exception as ex:  # pylint: disable=broad-except
+            _log.warning("worker review failed session=%s: %s", session_id, ex)
+            return {"accept": True, "guidance": "", "request_qa": False}
+        data = _extract_json_object(text)
+        return {"accept": bool(data.get("accept", False)),
+                "guidance": str(data.get("guidance", "")).strip(),
+                "request_qa": bool(data.get("request_qa", False))}
+
+    async def _qa_inspect(
+            self, session_id: str, task: Any, result: Any,
+            emit: "Callable[[dict[str, Any]], Awaitable[None]]", model: str,
+            media_factory: "Callable[[str], MediaLibrary]", attempt: int) -> str:
+        """A bounded QA inspector sub-agent (full tool surface, few rounds): it
+        inspects the scene to verify the worker's claim and reports findings.
+        Spawns as its own qa-role agent card."""
+        qa_id = "{:s}:qa:{:s}:{:d}".format(session_id, task.id, attempt)
+        worker_id = "{:s}:w:{:s}".format(session_id, task.id)
+        await emit({"type": "agent_spawned", "session_id": session_id, "agent_id": qa_id,
+                    "role": "qa", "objective_id": task.objective_id,
+                    "task": "QA inspect — {:s}".format(task.instruction), "reviews": worker_id})
+        records: list[dict[str, Any]] = []
+
+        async def qa_emit(event: dict[str, Any]) -> None:
+            await emit({**event, "parent_session_id": session_id, "role": "qa"})
+
+        system = self._system_prompt + _QA_INSPECT_MISSION.format(
+            instruction=task.instruction,
+            acceptance=getattr(task, "acceptance", "") or "(n/a)",
+            proof=result.proof or "(no proof)")
+        engine = AgentEngine(
+            registry=self.registry_for_role("worker"),   # full surface (camera/render ok)
+            media=media_factory(qa_id), system_prompt=system,
+            emit=qa_emit, append_record=records.append)
+        findings = ""
+        try:
+            await engine.run_turn(
+                session_id=qa_id, user_text="Inspect now and report your QA findings.",
+                llm=self._make_llm(), model=model, autonomy="auto", max_rounds=2,
+                context_tokens=0, budget_review=False)
+            for r in reversed(records):
+                if r.get("role") == "assistant":
+                    c = _strip_thinking(str(r.get("content", ""))).strip()
+                    if c:
+                        findings = c
+                        break
+        except Exception as ex:  # pylint: disable=broad-except
+            _log.warning("qa inspect failed session=%s: %s", session_id, ex)
+            findings = "QA inspection errored: {:s}".format(ex)
+        await emit({"type": "agent_done", "session_id": session_id, "agent_id": qa_id,
+                    "role": "qa", "objective_id": task.objective_id,
+                    "ok": bool(findings), "proof": findings or "(no findings)"})
+        return findings
+
     async def _probe_state(self, session_id: str) -> str:
         """The Blender ground-truth probe wired into the PythonToolBackend:
         a read-only scene snapshot via ``get_objects_summary``. (Lives here
@@ -882,7 +1050,7 @@ class AgentRuntime:
         from .autonomy import (
             AutonomyOrchestrator, AutoPauseWhenBlockedPolicy, AutoUntilDonePolicy,
             IndependentAuditor, LlmPlanner, Objective, SequentialScheduler,
-            StateAwareEvaluator, WorkerReviewer,
+            StateAwareEvaluator,
         )
 
         if not session_id:
@@ -978,20 +1146,24 @@ class AgentRuntime:
                 unregister=self._unregister_worker,
             )
             scheduler = SequentialScheduler()
-        reviewer = (
-            WorkerReviewer(self._make_llm(), model, probe=probe)
-            if config.autonomy_qa else None
-        )
+        # Per-worker review loop: the orchestrator is pinged with every worker
+        # result, optionally spawns a bounded QA inspector, then accepts or
+        # replenishes the worker's budget with guidance (capped). In-process
+        # only — swarm workers run out of process with no continuation handle.
+        review_runner = runner
+        if swarm_strategy is None:
+            review_runner = self._make_reviewing_runner(
+                session_id, runner, persist_emit, probe, model,
+                qa_enabled=config.autonomy_qa, media_factory=media_factory)
         orchestrator = AutonomyOrchestrator(
             planner=LlmPlanner(llm, model, emit=persist_emit, session_id=session_id),
             scheduler=scheduler,
             evaluator=StateAwareEvaluator(llm, model, probe=probe),
             policy=policy,
-            worker_runner=runner,
+            worker_runner=review_runner,
             emit=persist_emit,
             session_id=session_id,
             share_context=config.autonomy_share_context,
-            reviewer=reviewer,
         )
         rounds = rounds_cap
 
@@ -1171,6 +1343,7 @@ class AgentRuntime:
         """
         engine = self._workers.get(agent_id)
         if engine is not None:
+            self._stopped_workers.add(agent_id)   # the review loop won't re-run it
             engine.abort()
             return True
         stop = self._swarm_stoppers.get(agent_id)

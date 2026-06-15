@@ -831,13 +831,14 @@ export class BaChatStage extends LitElement {
 
     const result = html`<div class="proof">${unsafeHtml(renderMarkdown(String(agent.proof || "")))}</div>`;
 
-    // QA verdict, shown on both tabs so it's never buried.
-    const review = agent.review ? html`
-      <div class="qa-note ${agent.review.passed ? "ok" : "warn"}"
-        title="QA reviewer verdict">
-        ${icon(agent.review.passed ? "check" : "exclamation-triangle")}
-        <span class="qa-label">QA ${agent.review.passed ? "pass" : "flag"}</span>
-        <span class="qa-text">${agent.review.note}</span>
+    // Orchestrator's review verdict, shown on both tabs so it's never buried.
+    const r = agent.review;
+    const review = r ? html`
+      <div class="qa-note ${r.passed ? "ok" : "warn"}" title="Orchestrator review">
+        ${icon(r.passed ? "check" : "exclamation-triangle")}
+        <span class="qa-label">${r.stopped ? "stopped" : r.passed ? "accepted" : "needs work"}${
+          r.attempt ? ` · pass ${r.attempt + 1}` : ""}</span>
+        ${r.note ? html`<span class="qa-text">${r.note}</span>` : nothing}
       </div>` : nothing;
 
     if (!showTabs) {

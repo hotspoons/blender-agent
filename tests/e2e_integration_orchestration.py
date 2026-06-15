@@ -162,8 +162,8 @@ def main():
                                    ".some(a => a.role === 'qa') && "
                                    "Object.values(store.state.autonomy.agents||{})"
                                    ".some(a => a.review);")
-            check("dedicated QA reviewer spawned + annotated the worker", qa_seen)
-            check("QA verdict rendered in the UI", "QA review" in txt)
+            check("bounded QA inspector spawned + worker reviewed", qa_seen)
+            check("QA inspector rendered in the UI", "QA inspect" in txt)
 
             # persistence: reload the session, history survives
             sid = _drive(page, "return store.state.sessionId;")
