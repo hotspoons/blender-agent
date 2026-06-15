@@ -102,7 +102,7 @@ class TestReviewLoop(unittest.TestCase):
         The reviewer calls search_history first, receives the hit, and
         only then renders its verdict — the checks land in the detail.
         """
-        from blagent.llm import LlmChunk, LlmClient
+        from agentcore.llm import LlmChunk, LlmClient
         from blagent.reviewer import review_budget
 
         class Skeptic(LlmClient):
@@ -133,7 +133,7 @@ class TestReviewLoop(unittest.TestCase):
         A reviewer that only ever calls tools runs out of rounds, gets
         one tool-less final request, and an unparseable answer = stop.
         """
-        from blagent.llm import LlmChunk, LlmClient
+        from agentcore.llm import LlmChunk, LlmClient
         from blagent.reviewer import review_budget
 
         class Waffler(LlmClient):

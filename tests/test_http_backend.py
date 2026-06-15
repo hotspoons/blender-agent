@@ -30,7 +30,7 @@ def _imp() -> Any:
     for p in (os.path.join(_REPO, "mcp"), os.path.join(_REPO, "agent")):
         if p not in sys.path:
             sys.path.insert(0, p)
-    import blagent.http_backend as h
+    import agentcore.http_backend as h
     return h
 
 
@@ -47,8 +47,8 @@ def _client(app: Any) -> Any:
 class TestHttpToolBackend(unittest.TestCase):
 
     def _echo_backend(self) -> Any:
-        from blagent.backend import PythonToolBackend
-        from blagent.tools import Tool, ToolError, ToolResult
+        from agentcore.backend import PythonToolBackend
+        from agentcore.tools import Tool, ToolError, ToolResult
 
         seen: list[dict] = []
 
@@ -107,7 +107,7 @@ class TestHttpToolBackend(unittest.TestCase):
 
     def test_registry_from_backend_over_http(self) -> None:
         h = _imp()
-        from blagent.backend import registry_from_backend
+        from agentcore.backend import registry_from_backend
         py, _ = self._echo_backend()
         app = h.serve_backend(py)
 
@@ -117,7 +117,7 @@ class TestHttpToolBackend(unittest.TestCase):
             reg = await registry_from_backend(be)
             tool = reg.get("echo")
             # The adapted tool calls straight through the transport.
-            from blagent.tools import ToolContext
+            from agentcore.tools import ToolContext
             result = await tool.call(ToolContext(media=None, session_id="s1"), {"msg": "yo"})
             await client.aclose()
             return [t.name for t in reg], result
@@ -128,14 +128,14 @@ class TestHttpToolBackend(unittest.TestCase):
 
     def test_media_bytes_round_trip(self) -> None:
         h = _imp()
-        from blagent.backend import _DefaultBackendMixin, ToolSpec
+        from agentcore.backend import _DefaultBackendMixin, ToolSpec
 
         class MediaBackend(_DefaultBackendMixin):
             async def list_tools(self):
                 return [ToolSpec(name="noop", description="", input_schema={})]
 
             async def call_tool(self, name, args, *, session_id, media=None):
-                from blagent.backend import ToolCallResult
+                from agentcore.backend import ToolCallResult
                 return ToolCallResult(summary="ok")
 
             def capabilities(self):

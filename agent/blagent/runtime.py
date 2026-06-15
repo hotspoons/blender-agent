@@ -25,15 +25,15 @@ from typing import Any, Awaitable, Callable
 
 from .agent_tools import (
     AskOrchestratorTool, AskUserTool, ContinueWorkingTool, MediaTool, SetAutonomyTool, SkillsTool)
-from .backend import PythonToolBackend, ToolBackend
+from agentcore.backend import PythonToolBackend, ToolBackend
 from .engine import AgentEngine, _strip_thinking
 from .orchestrator_view import OrchestratorView
 from .permissions import ToolPermissions, WORKER_DENY
 from .profile import AgentProfile, blender_profile
-from .llm import LlmClient, LlmError, LocalLlmBridgeClient, OpenAiHttpClient
-from .media import MediaLibrary
+from agentcore.llm import LlmClient, LlmError, LocalLlmBridgeClient, OpenAiHttpClient
+from agentcore.media import MediaLibrary
 from .store import AgentStore, SessionBusyError
-from .tools import Tool, ToolContext, ToolRegistry
+from agentcore.tools import Tool, ToolContext, ToolRegistry
 from .local_llm import LocalLlmBridge
 
 _log = logging.getLogger("blagent.runtime")
@@ -381,7 +381,7 @@ class AgentRuntime:
         do not cross the wire — there is nothing to lose by routing through
         ``call_tool``.) The in-process Blender path uses the sync constructor.
         """
-        from .backend import registry_from_backend
+        from agentcore.backend import registry_from_backend
 
         self = cls.__new__(cls)
         self.store = store

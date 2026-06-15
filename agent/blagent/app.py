@@ -105,7 +105,7 @@ def create_app(runtime: AgentRuntime) -> Starlette:
         if mime.startswith("image/") and not mime.startswith("image/svg"):
             media_id = library.register_bytes(body, mime=mime, label=filename or "user attachment")
         else:
-            from .media import mime_for_name
+            from agentcore.media import mime_for_name
             name = filename or "attachment.bin"
             media_id = library.register_named_bytes(
                 body, name,

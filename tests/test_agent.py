@@ -364,7 +364,7 @@ class TestAgentTurn(unittest.TestCase):
         _import_blagent()
         from blagent.app import create_app
         from blagent.blender_tools import build_blender_registry
-        from blagent.llm import LlmChunk, LlmClient
+        from agentcore.llm import LlmChunk, LlmClient
         from blagent.runtime import AgentRuntime
         from blagent.store import AgentStore
 
@@ -437,8 +437,8 @@ class TestTurnBudgetExhaustion(unittest.TestCase):
     def test_unrun_calls_get_skipped_records(self) -> None:
         _import_blagent()
         from blagent.engine import AgentEngine
-        from blagent.llm import LlmChunk, LlmClient
-        from blagent.tools import ToolRegistry
+        from agentcore.llm import LlmChunk, LlmClient
+        from agentcore.tools import ToolRegistry
 
         events: list[dict[str, Any]] = []
 
@@ -495,8 +495,8 @@ class TestUnknownToolSuggestion(unittest.TestCase):
     def test_close_match_suggested(self) -> None:
         _import_blagent()
         from blagent.engine import AgentEngine
-        from blagent.llm import LlmChunk, LlmClient
-        from blagent.tools import Tool, ToolRegistry
+        from agentcore.llm import LlmChunk, LlmClient
+        from agentcore.tools import Tool, ToolRegistry
 
         class Stub(Tool):
             def __init__(self, name: str) -> None:
@@ -552,7 +552,7 @@ class TestBudgetReview(unittest.TestCase):
     def _engine(self, events: list[dict[str, Any]]) -> Any:
         _import_blagent()
         from blagent.engine import AgentEngine
-        from blagent.tools import ToolRegistry
+        from agentcore.tools import ToolRegistry
 
         async def emit(event: dict[str, Any]) -> None:
             events.append(event)
@@ -566,7 +566,7 @@ class TestBudgetReview(unittest.TestCase):
         )
 
     def _llm(self, verdict_json: str) -> Any:
-        from blagent.llm import LlmChunk, LlmClient
+        from agentcore.llm import LlmChunk, LlmClient
 
         class Orchestrated(LlmClient):
             """Dispatches by request shape: reviewer / self-report / worker."""
@@ -662,8 +662,8 @@ class TestContextBudget(unittest.TestCase):
     def _engine(self) -> Any:
         _import_blagent()
         from blagent.engine import AgentEngine
-        from blagent.media import MediaLibrary
-        from blagent.tools import ToolRegistry
+        from agentcore.media import MediaLibrary
+        from agentcore.tools import ToolRegistry
 
         async def emit(_event: Any) -> None:
             pass
@@ -743,7 +743,7 @@ class TestContextBudget(unittest.TestCase):
         Read-only (volatile) scene-query results shrink to stubs before
         ordinary tool results are touched.
         """
-        from blagent.tools import Tool
+        from agentcore.tools import Tool
 
         class VolatileTool(Tool):
             name = "scene_query"
@@ -778,7 +778,7 @@ class TestContextBudget(unittest.TestCase):
 
     def test_old_images_demoted_to_placeholders(self) -> None:
         engine = self._engine()
-        from blagent.media import MediaLibrary  # noqa: F401  (engine already has one)
+        from agentcore.media import MediaLibrary  # noqa: F401  (engine already has one)
 
         ids = [engine._media.register_bytes(b"\x89PNG fake", mime="image/png", label="p")
                for _ in range(5)]
@@ -797,8 +797,8 @@ class TestContextBudget(unittest.TestCase):
 
     def _engine_with_tools(self, tools: "list[Any]") -> Any:
         from blagent.engine import AgentEngine
-        from blagent.media import MediaLibrary
-        from blagent.tools import ToolRegistry
+        from agentcore.media import MediaLibrary
+        from agentcore.tools import ToolRegistry
 
         async def emit(_event: Any) -> None:
             pass
@@ -822,8 +822,8 @@ class TestCompaction(unittest.TestCase):
     def _engine(self) -> Any:
         _import_blagent()
         from blagent.engine import AgentEngine
-        from blagent.media import MediaLibrary
-        from blagent.tools import ToolRegistry
+        from agentcore.media import MediaLibrary
+        from agentcore.tools import ToolRegistry
 
         async def emit(_event: Any) -> None:
             pass
@@ -837,7 +837,7 @@ class TestCompaction(unittest.TestCase):
         )
 
     def test_compacts_and_projection_uses_summary(self) -> None:
-        from blagent.llm import LlmChunk, LlmClient
+        from agentcore.llm import LlmChunk, LlmClient
 
         class Summarizer(LlmClient):
             def __init__(self) -> None:
@@ -881,7 +881,7 @@ class TestCompaction(unittest.TestCase):
         far too brief for a large-context session — the word target
         scales with the budget (capped at 2500).
         """
-        from blagent.llm import LlmChunk, LlmClient
+        from agentcore.llm import LlmChunk, LlmClient
 
         class Summarizer(LlmClient):
             def __init__(self) -> None:
@@ -906,7 +906,7 @@ class TestCompaction(unittest.TestCase):
         self.assertGreater(len(prompt), 100_000)
 
     def test_no_compaction_under_threshold(self) -> None:
-        from blagent.llm import LlmClient
+        from agentcore.llm import LlmClient
 
         class Exploder(LlmClient):
             async def stream(self, request: dict[str, Any]) -> Any:
@@ -967,9 +967,9 @@ class TestVisionFallback(unittest.TestCase):
     def test_image_rejection_falls_back_to_text(self) -> None:
         _import_blagent()
         from blagent.engine import AgentEngine
-        from blagent.llm import LlmChunk, LlmClient, LlmError
-        from blagent.media import MediaLibrary
-        from blagent.tools import ToolRegistry
+        from agentcore.llm import LlmChunk, LlmClient, LlmError
+        from agentcore.media import MediaLibrary
+        from agentcore.tools import ToolRegistry
 
         media_dir = tempfile.mkdtemp(prefix="blagent-vision-")
         media = MediaLibrary(media_dir)
@@ -1116,8 +1116,8 @@ class TestWeightedRoundBudget(unittest.TestCase):
     def _rounds_until_exhaustion(self, tool_name: str, read_only: bool) -> int:
         _import_blagent()
         from blagent.engine import AgentEngine
-        from blagent.llm import LlmChunk, LlmClient
-        from blagent.tools import Tool, ToolRegistry, ToolResult
+        from agentcore.llm import LlmChunk, LlmClient
+        from agentcore.tools import Tool, ToolRegistry, ToolResult
 
         class Stub(Tool):
             def __init__(self, name: str, ro: bool) -> None:
@@ -1181,7 +1181,7 @@ class TestVoiceOfGodInjection(unittest.TestCase):
     def _engine_and_llm(self, llm_factory: Any) -> Any:
         _import_blagent()
         from blagent.engine import AgentEngine
-        from blagent.tools import Tool, ToolRegistry, ToolResult
+        from agentcore.tools import Tool, ToolRegistry, ToolResult
 
         class StubTool(Tool):
             name = "noop"
@@ -1209,7 +1209,7 @@ class TestVoiceOfGodInjection(unittest.TestCase):
         return engine, llm, events
 
     def test_after_round_injection_enters_next_round_context(self) -> None:
-        from blagent.llm import LlmChunk, LlmClient
+        from agentcore.llm import LlmChunk, LlmClient
 
         class Llm(LlmClient):
             def __init__(self, engine: Any) -> None:
@@ -1237,7 +1237,7 @@ class TestVoiceOfGodInjection(unittest.TestCase):
         self.assertTrue(any(r.get("injected") for r in engine.records))
 
     def test_interrupt_now_cuts_generation_and_reloops(self) -> None:
-        from blagent.llm import LlmChunk, LlmClient
+        from agentcore.llm import LlmChunk, LlmClient
 
         class Llm(LlmClient):
             def __init__(self, engine: Any) -> None:
@@ -1272,7 +1272,7 @@ class TestVoiceOfGodInjection(unittest.TestCase):
 
     def test_interrupt_promotes_queued_without_new_content(self) -> None:
         """interrupt() cuts generation to apply an already-queued message."""
-        from blagent.llm import LlmChunk, LlmClient
+        from agentcore.llm import LlmChunk, LlmClient
 
         class Llm(LlmClient):
             def __init__(self, engine: Any) -> None:
@@ -1303,7 +1303,7 @@ class TestVoiceOfGodInjection(unittest.TestCase):
 
     def test_abort_ends_turn_at_next_boundary(self) -> None:
         """abort() stops the turn cooperatively; turn_done carries aborted."""
-        from blagent.llm import LlmChunk, LlmClient
+        from agentcore.llm import LlmChunk, LlmClient
 
         class Llm(LlmClient):
             def __init__(self, engine: Any) -> None:
@@ -1336,8 +1336,8 @@ class TestElicitation(unittest.TestCase):
         _import_blagent()
         from blagent.agent_tools import AskUserTool
         from blagent.engine import AgentEngine
-        from blagent.llm import LlmChunk, LlmClient
-        from blagent.tools import ToolRegistry
+        from agentcore.llm import LlmChunk, LlmClient
+        from agentcore.tools import ToolRegistry
 
         events: list[dict[str, Any]] = []
 
@@ -1393,8 +1393,8 @@ class TestReasoningTrace(unittest.TestCase):
     def test_reasoning_folded_and_stripped(self) -> None:
         _import_blagent()
         from blagent.engine import AgentEngine
-        from blagent.llm import LlmChunk, LlmClient
-        from blagent.tools import ToolRegistry
+        from agentcore.llm import LlmChunk, LlmClient
+        from agentcore.tools import ToolRegistry
 
         records = []
 
@@ -1443,7 +1443,7 @@ class TestAskUserHeadless(unittest.TestCase):
     def test_ask_user_without_interactive_user_errors(self) -> None:
         _import_blagent()
         from blagent.agent_tools import AskUserTool
-        from blagent.tools import ToolContext, ToolError
+        from agentcore.tools import ToolContext, ToolError
 
         ctx = ToolContext(media=None, elicit=None)  # headless: no user attached
         with self.assertRaises(ToolError):
@@ -1457,7 +1457,7 @@ class TestSetAutonomyElicits(unittest.TestCase):
     def _call(self, elicit, args=None):
         _import_blagent()
         from blagent.agent_tools import SetAutonomyTool
-        from blagent.tools import ToolContext
+        from agentcore.tools import ToolContext
         applied: list[str] = []
         tool = SetAutonomyTool(lambda sid, level: applied.append(level))
         ctx = ToolContext(media=None, session_id="s1", elicit=elicit)

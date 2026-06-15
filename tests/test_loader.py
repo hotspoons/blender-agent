@@ -32,8 +32,8 @@ def _run(coro):  # noqa: ANN001
 
 # A module-level factory referenced by the test YAML (module:callable).
 def fake_backend_factory(**options):  # noqa: ANN001, ANN003
-    from blagent.backend import PythonToolBackend
-    from blagent.tools import Tool, ToolResult
+    from agentcore.backend import PythonToolBackend
+    from agentcore.tools import Tool, ToolResult
 
     class Ping(Tool):
         name = "ping"
@@ -84,7 +84,7 @@ class TestLoader(unittest.TestCase):
     def test_load_agent_python_backend(self) -> None:
         _prep_path()
         from blagent.loader import load_agent
-        from blagent.backend import PythonToolBackend
+        from agentcore.backend import PythonToolBackend
         path = self._write_yaml(_YAML.format())
         rt = _run(load_agent(path, data_dir=tempfile.mkdtemp(prefix="agentdata_")))
 
@@ -118,7 +118,7 @@ class TestLoader(unittest.TestCase):
         # Blender needed just to enumerate) and wires the scene probe.
         _prep_path()
         from blagent.blender_tools import make_backend
-        from blagent.backend import PythonToolBackend
+        from agentcore.backend import PythonToolBackend
         backend = _run(make_backend())
         self.assertIsInstance(backend, PythonToolBackend)
         self.assertIn("probe", backend.capabilities())

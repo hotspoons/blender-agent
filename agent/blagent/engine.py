@@ -31,10 +31,10 @@ import uuid
 
 from typing import Any, Awaitable, Callable
 
-from .llm import LlmClient, LlmError
-from .media import MediaLibrary
-from .thinking import THINK_RE, ThinkingDecoder, to_context, to_display
-from .tools import ToolContext, ToolError, ToolRegistry, TurnBudget
+from agentcore.llm import LlmClient, LlmError
+from agentcore.media import MediaLibrary
+from agentcore.thinking import THINK_RE, ThinkingDecoder, to_context, to_display
+from agentcore.tools import ToolContext, ToolError, ToolRegistry, TurnBudget
 
 _log = logging.getLogger("blagent.engine")
 
@@ -116,7 +116,7 @@ _SELF_REPORT_PROMPT = (
 
 _TRIM_NOTICE = "[Note: earlier conversation was trimmed to fit the context window.]"
 
-# Chain-of-thought handling lives in the codec (blagent.thinking): the CONTEXT
+# Chain-of-thought handling lives in the codec (agentcore.thinking): the CONTEXT
 # path (to_context) strips reasoning before text returns to the model; the
 # DISPLAY path (to_display) folds a separated trace into a <think> block; the
 # streaming ThinkingDecoder unifies server reasoning channels + inline tags.

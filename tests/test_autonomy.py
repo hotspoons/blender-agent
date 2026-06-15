@@ -45,7 +45,7 @@ def _run(coro: Any) -> Any:
 class TestAutonomyLoop(unittest.TestCase):
 
     def _scripted_llm(self, scripted: list[str]) -> Any:
-        from blagent.llm import LlmChunk, LlmClient
+        from agentcore.llm import LlmChunk, LlmClient
 
         class ScriptedLlm(LlmClient):
             def __init__(self) -> None:
@@ -218,7 +218,7 @@ class TestAutonomyLoop(unittest.TestCase):
 
     def test_planner_streams_decomposition_to_ui(self) -> None:
         a = _import_autonomy()
-        from blagent.llm import LlmChunk, LlmClient
+        from agentcore.llm import LlmChunk, LlmClient
 
         class StreamingLlm(LlmClient):
             async def stream(self, request: dict[str, Any]) -> Any:
@@ -319,7 +319,7 @@ class TestIndependentAuditor(unittest.TestCase):
     """Opt-in adversarial audit: re-checks goals against state, flags overclaims."""
 
     def _llm(self, text: str) -> Any:
-        from blagent.llm import LlmChunk, LlmClient
+        from agentcore.llm import LlmChunk, LlmClient
 
         class Once(LlmClient):
             async def stream(self, request: dict[str, Any]) -> Any:
@@ -393,10 +393,10 @@ class TestChildSessionRunner(unittest.TestCase):
             if path not in sys.path:
                 sys.path.insert(0, path)
         from blagent.autonomy import WorkerTask
-        from blagent.llm import LlmChunk, LlmClient
-        from blagent.media import MediaLibrary
+        from agentcore.llm import LlmChunk, LlmClient
+        from agentcore.media import MediaLibrary
         from blagent.runtime import ChildSessionRunner
-        from blagent.tools import Tool, ToolRegistry, ToolResult
+        from agentcore.tools import Tool, ToolRegistry, ToolResult
 
         tool_calls: list[dict[str, Any]] = []
 
@@ -477,10 +477,10 @@ class TestChildSessionRunner(unittest.TestCase):
             if path not in sys.path:
                 sys.path.insert(0, path)
         from blagent.autonomy import WorkerTask
-        from blagent.llm import LlmChunk, LlmClient
-        from blagent.media import MediaLibrary
+        from agentcore.llm import LlmChunk, LlmClient
+        from agentcore.media import MediaLibrary
         from blagent.runtime import ChildSessionRunner
-        from blagent.tools import Tool, ToolRegistry, ToolResult
+        from agentcore.tools import Tool, ToolRegistry, ToolResult
 
         def _stub(tool_name: str) -> Any:
             class _T(Tool):

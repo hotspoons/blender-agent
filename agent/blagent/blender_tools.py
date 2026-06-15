@@ -30,7 +30,7 @@ import yaml
 
 from mcp.server.fastmcp import FastMCP
 
-from .tools import Tool, ToolContext, ToolResult
+from agentcore.tools import Tool, ToolContext, ToolResult
 
 
 def _build_fastmcp() -> FastMCP:
@@ -203,8 +203,8 @@ async def make_backend(**_options: Any) -> "Any":
     accepted and ignored here for forward-compatibility.
     """
     import tempfile
-    from .backend import PythonToolBackend
-    from .media import MediaLibrary
+    from agentcore.backend import PythonToolBackend
+    from agentcore.media import MediaLibrary
 
     _mcp, tools = await build_blender_registry()
     by_name = {t.name: t for t in tools}

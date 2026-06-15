@@ -403,7 +403,7 @@ class TestAutonomyLevel(unittest.TestCase):
                 sys.path.insert(0, path)
         from blagent.runtime import AgentRuntime
         from blagent.store import AgentStore
-        from blagent.tools import ToolContext, ToolError
+        from agentcore.tools import ToolContext, ToolError
 
         rt = AgentRuntime(AgentStore(tempfile.mkdtemp(prefix="agentdata_")), [])
         sid = rt.new_session()

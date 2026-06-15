@@ -21,7 +21,7 @@ blender-agent = "blagent:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["blagent*"]
+include = ["blagent*", "agentcore*"]
 
 [tool.setuptools.package-data]
 "blagent" = [

@@ -87,7 +87,7 @@ class _ChatApiTestCase(unittest.TestCase):
 
 
 def _text_llm(reply: str = "Hello from the agent."):
-    from blagent.llm import LlmChunk, LlmClient
+    from agentcore.llm import LlmChunk, LlmClient
 
     class FakeLlm(LlmClient):
         async def stream(self, request):
@@ -101,7 +101,7 @@ def _tool_llm():
     Round 1: text + a `skills` tool call (local tool, no Blender
     bridge needed). Round 2: final text.
     """
-    from blagent.llm import LlmChunk, LlmClient
+    from agentcore.llm import LlmChunk, LlmClient
 
     class FakeLlm(LlmClient):
         def __init__(self) -> None:
@@ -215,7 +215,7 @@ class TestParsing(_ChatApiTestCase):
 class TestEventTranslator(_ChatApiTestCase):
 
     def _media_library(self):
-        from blagent.media import MediaLibrary
+        from agentcore.media import MediaLibrary
 
         library = MediaLibrary(os.path.join(self._tmp.name, "media"))
         media_id = library.register_bytes(_TINY_PNG, mime="image/png", label="t")

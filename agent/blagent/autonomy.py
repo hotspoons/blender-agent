@@ -47,7 +47,7 @@ import json
 import logging
 from typing import Any, Awaitable, Callable
 
-from .llm import LlmClient
+from agentcore.llm import LlmClient
 
 _log = logging.getLogger(__name__)
 

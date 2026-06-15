@@ -26,7 +26,7 @@ import logging
 import re
 from typing import Any
 
-from .llm import LlmClient
+from agentcore.llm import LlmClient
 
 _log = logging.getLogger(__name__)
 

@@ -34,8 +34,8 @@ class TestToolDrafting(unittest.TestCase):
 
     def test_drafting_events_during_argument_stream(self) -> None:
         from blagent.engine import AgentEngine
-        from blagent.llm import LlmChunk, LlmClient
-        from blagent.tools import ToolRegistry
+        from agentcore.llm import LlmChunk, LlmClient
+        from agentcore.tools import ToolRegistry
 
         events = []
 
@@ -87,8 +87,8 @@ class TestToolDrafting(unittest.TestCase):
         silence itself.
         """
         from blagent.engine import AgentEngine
-        from blagent.llm import LlmChunk, LlmClient
-        from blagent.tools import ToolRegistry
+        from agentcore.llm import LlmChunk, LlmClient
+        from agentcore.tools import ToolRegistry
 
         events = []
 

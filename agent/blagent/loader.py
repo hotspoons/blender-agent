@@ -19,7 +19,7 @@ import inspect
 import os
 from typing import Any
 
-from .backend import PythonToolBackend, ToolBackend
+from agentcore.backend import PythonToolBackend, ToolBackend
 from .permissions import ToolPermissions
 from .profile import AgentProfile
 from .runtime import AgentRuntime
@@ -108,7 +108,7 @@ async def _build_backend(block: dict[str, Any]) -> ToolBackend:
             raise TypeError("backend factory must return a ToolBackend, got {!r}".format(type(result)))
         return result
     if btype == "http":
-        from .http_backend import HttpToolBackend  # lands with the HTTP transport
+        from agentcore.http_backend import HttpToolBackend  # lands with the HTTP transport
         base_url = str(block.get("base_url", ""))
         api_key = os.environ.get(str(block.get("api_key_env", "")), "")
         return HttpToolBackend(base_url, api_key=api_key)

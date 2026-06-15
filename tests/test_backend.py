@@ -24,7 +24,7 @@ def _imp() -> Any:
         if p not in sys.path:
             sys.path.insert(0, p)
     import importlib
-    return importlib.import_module("blagent.backend")
+    return importlib.import_module("agentcore.backend")
 
 
 def _run(coro: Any) -> Any:
@@ -35,7 +35,7 @@ def _run(coro: Any) -> Any:
 class TestPythonToolBackend(unittest.TestCase):
 
     def _tools(self) -> Any:
-        from blagent.tools import Tool, ToolError, ToolResult
+        from agentcore.tools import Tool, ToolError, ToolResult
 
         class Build(Tool):
             name = "build_thing"
@@ -104,7 +104,7 @@ class TestPythonToolBackend(unittest.TestCase):
 
     def test_backend_tool_adapter_round_trips(self) -> None:
         b = _imp()
-        from blagent.tools import ToolContext, ToolError
+        from agentcore.tools import ToolContext, ToolError
         backend = b.PythonToolBackend(self._tools())
         reg = _run(b.registry_from_backend(backend))
         tool = reg.get("build_thing")
@@ -120,7 +120,7 @@ class TestPythonToolBackend(unittest.TestCase):
 
     def test_registry_includes_extra_core_tools(self) -> None:
         b = _imp()
-        from blagent.tools import Tool, ToolResult
+        from agentcore.tools import Tool, ToolResult
 
         class Core(Tool):
             name = "skills"
@@ -141,7 +141,7 @@ class TestPythonToolBackend(unittest.TestCase):
         # An HTTP-style backend that returns inline data-URL media -> the
         # adapter ingests it into the session library and yields a media id.
         b = _imp()
-        from blagent.tools import Tool, ToolContext, ToolResult
+        from agentcore.tools import Tool, ToolContext, ToolResult
 
         png = ("data:image/png;base64,"
                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
@@ -163,7 +163,7 @@ class TestPythonToolBackend(unittest.TestCase):
 
 
 def _media() -> Any:
-    from blagent.media import MediaLibrary
+    from agentcore.media import MediaLibrary
     return MediaLibrary(tempfile.mkdtemp(prefix="media_"))
 
 
@@ -178,7 +178,7 @@ class TestRuntimeBackendWiring(unittest.TestCase):
         return AgentRuntime(store, tools)
 
     def _probe_tool(self) -> Any:
-        from blagent.tools import Tool, ToolResult
+        from agentcore.tools import Tool, ToolResult
 
         class Probe(Tool):
             name = "scene"
@@ -255,7 +255,7 @@ class TestRuntimeBackendWiring(unittest.TestCase):
         self.assertEqual(rt.public_ui_profile()["title"], "Foo")
 
     def test_session_media_aggregates_worker_media(self) -> None:
-        from blagent.media import MediaLibrary
+        from agentcore.media import MediaLibrary
         rt = self._runtime([])
         sid = rt.new_session()
         rt._get_or_load_session(sid).media.register_bytes(b"OWN", mime="image/png", label="own")
@@ -277,7 +277,7 @@ class TestRuntimeBackendWiring(unittest.TestCase):
         # Orchestrator sessions must not reload empty: the objectives are
         # persisted to the transcript (synchronously, before the run task) and
         # drive a meaningful session title (not the synthetic autonomy notice).
-        from blagent.llm import LlmChunk, LlmClient
+        from agentcore.llm import LlmChunk, LlmClient
         rt = self._runtime([])
 
         class FakeLlm(LlmClient):
@@ -371,7 +371,7 @@ class TestRuntimeBackendWiring(unittest.TestCase):
         self.assertIn("ORCHESTRATOR", note["content"])
 
     def test_review_loop_replenishes_and_reruns_until_accepted(self) -> None:
-        from blagent.llm import LlmChunk, LlmClient
+        from agentcore.llm import LlmChunk, LlmClient
         rt = self._runtime([self._probe_tool()])
 
         class ReviewLlm(LlmClient):
@@ -406,7 +406,7 @@ class TestRuntimeBackendWiring(unittest.TestCase):
         self.assertEqual([r["passed"] for r in reviews], [False, True])
 
     def test_review_loop_does_not_rerun_a_stopped_worker(self) -> None:
-        from blagent.llm import LlmChunk, LlmClient
+        from agentcore.llm import LlmChunk, LlmClient
         rt = self._runtime([self._probe_tool()])
 
         class RejectLlm(LlmClient):
@@ -433,7 +433,7 @@ class TestRuntimeBackendWiring(unittest.TestCase):
         self.assertTrue(review["passed"])         # accepted as-is
 
     def test_worker_ask_orchestrator_answers_directly(self) -> None:
-        from blagent.llm import LlmChunk, LlmClient
+        from agentcore.llm import LlmChunk, LlmClient
         rt = self._runtime([self._probe_tool()])
 
         class FakeLlm(LlmClient):
@@ -458,7 +458,7 @@ class TestRuntimeBackendWiring(unittest.TestCase):
         self.assertEqual(ans["source"], "orchestrator")
 
     def test_worker_ask_orchestrator_escalates_to_user(self) -> None:
-        from blagent.llm import LlmChunk, LlmClient
+        from agentcore.llm import LlmChunk, LlmClient
         rt = self._runtime([self._probe_tool()])
 
         class FakeLlm(LlmClient):
