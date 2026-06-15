@@ -707,6 +707,37 @@ class AgentRuntime:
             "autonomy_objectives": [dataclasses.asdict(o) for o in objs],
         })
 
+        async def persist_emit(event: dict[str, Any]) -> None:
+            # Persist the run's substance to the transcript so an orchestrator
+            # session reloads with what actually happened (the live worker
+            # cards are event-only/ephemeral). A finished worker's proof + each
+            # round's verdicts become records; everything else just streams.
+            etype = event.get("type")
+            try:
+                if etype == "agent_done":
+                    proof = str(event.get("proof", "")).strip()
+                    if proof:
+                        role = str(event.get("role", "worker"))
+                        session.engine.push_record({
+                            "role": "assistant",
+                            "content": "**{:s}** · objective {:s}\n\n{:s}".format(
+                                role.title(), str(event.get("objective_id", "")), proof),
+                            "agent_id": event.get("agent_id", ""),
+                            "worker_result": True,
+                        })
+                elif etype == "autonomy_round_done":
+                    verdicts = event.get("verdicts") or []
+                    if verdicts:
+                        lines = ["**Round {:d} review**".format(int(event.get("round", 0)) + 1)]
+                        for v in verdicts:
+                            lines.append("- [{:s}] obj {:s}: {:s}".format(
+                                "met" if v.get("met") else "unmet",
+                                str(v.get("objective_id", "")), str(v.get("evidence", ""))))
+                        session.engine.push_record({"role": "review", "content": "\n".join(lines)})
+            except Exception as ex:  # pylint: disable=broad-except
+                _log.warning("persist autonomy event failed session=%s: %s", session_id, ex)
+            await self.emit(event)
+
         policy = (
             AutoPauseWhenBlockedPolicy()
             if config.autonomy_policy == "pause_when_blocked"
@@ -727,7 +758,7 @@ class AgentRuntime:
             exchange_dir = os.path.join(self.store.session_dir(session_id), "exchange")
             swarm_strategy: "Any" = RemoteWorkerStrategy(
                 endpoint=config.endpoint, model=model, exchange_dir=exchange_dir,
-                api_key=config.api_key, emit=self.emit, session_id=session_id,
+                api_key=config.api_key, emit=persist_emit, session_id=session_id,
                 register_stop=self._register_swarm_worker,
                 unregister_stop=self._unregister_swarm_worker)
             runner: "Callable[[Any], Awaitable[Any]]" = swarm_strategy
@@ -743,7 +774,7 @@ class AgentRuntime:
                 registry=self.registry_for_role("worker"),
                 make_llm=self._make_llm,
                 model=model,
-                emit=self.emit,
+                emit=persist_emit,
                 system_prompt=self._system_prompt,
                 media_factory=media_factory,
                 parent_session_id=session_id,
@@ -761,7 +792,7 @@ class AgentRuntime:
             evaluator=StateAwareEvaluator(llm, model, probe=probe),
             policy=policy,
             worker_runner=runner,
-            emit=self.emit,
+            emit=persist_emit,
             session_id=session_id,
             share_context=config.autonomy_share_context,
         )

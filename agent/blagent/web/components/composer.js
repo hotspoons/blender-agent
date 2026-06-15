@@ -27,10 +27,9 @@ export class BaComposer extends LitElement {
     _autoload: { state: true },      // loading a local model before send
     _level: { state: true },         // autonomy level: ask|yolo|orchestrator|swarm
     _autoOpen: { state: true },      // is the autonomy slider expanded?
-    _objRows: { state: true },       // guided-intake objective editor rows
+    _objRows: { state: true },       // drafted objectives (read-only list; agent-managed)
     _swarmPreflight: { state: true },// {ready, report} — swarm requirements
     _draftPending: { state: true },  // guided-intake draft request in flight
-    _objCollapsed: { state: true },  // objectives editor collapsed into an expando
     _queued: { state: true },        // {text, ready} queued to send when not busy
   };
 
@@ -46,7 +45,6 @@ export class BaComposer extends LitElement {
     this._objRows = [];
     this._swarmPreflight = store.state.swarmPreflight;
     this._draftPending = store.state.draftPending;
-    this._objCollapsed = false;
     this._queued = null;
     this._lastDraftGoal = null;
     this._onLlmChange = () => this._onLocalLlmState();
@@ -80,7 +78,6 @@ export class BaComposer extends LitElement {
         if (d && d.objectives?.length && d.goal !== this._lastDraftGoal) {
           this._lastDraftGoal = d.goal;
           this._objRows = d.objectives.map((o) => ({ text: o.text || "", acceptance: o.acceptance || "" }));
-          this._objCollapsed = false; // surface the fresh draft for editing
         }
       }
     });
@@ -293,31 +290,31 @@ export class BaComposer extends LitElement {
     .swarm-pf pre { margin: 0; font-family: var(--font-mono); font-size: 11px;
       color: var(--text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
     /* Guided-intake objectives editor. */
-    .obj-editor {
+    /* Read-only drafted-objectives list (the agent manages the contents;
+       the human drafts / begins / clears, but does not hand-edit cells). */
+    .obj-list {
       border: 1px solid var(--border); border-radius: var(--radius-md);
-      background: var(--surface-muted); padding: 8px; margin-bottom: 8px;
-      display: flex; flex-direction: column; gap: 6px;
+      background: var(--surface-muted); padding: 8px 10px; margin-bottom: 8px;
     }
-    .oe-head { display: flex; align-items: center; gap: 5px; cursor: pointer;
+    .ol-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px;
       font-size: 11px; font-weight: 700; text-transform: uppercase;
       letter-spacing: 0.04em; color: var(--text-muted); }
-    .oe-head svg { width: 13px; height: 13px; }
-    .oe-head .hint { font-weight: 500; text-transform: none; letter-spacing: 0; opacity: 0.8; }
-    .oe-cols { display: flex; gap: 6px; padding: 0 2px; font-size: 10px; font-weight: 700;
-      text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); opacity: 0.7; }
-    .oe-cols span:first-child { flex: 2; }
-    .oe-cols span:last-child { flex: 3; }
-    /* Collapsed objectives expando (after a run is launched). */
-    .obj-expando { display: flex; align-items: center; gap: 6px; margin-bottom: 8px;
-      width: 100%; text-align: left; padding: 7px 10px; cursor: pointer;
-      background: var(--surface-muted); border: 1px solid var(--border); border-radius: var(--radius-md);
-      color: var(--text-muted); font: inherit; font-size: 11px; font-weight: 700;
-      text-transform: uppercase; letter-spacing: 0.04em; }
-    .obj-expando:hover { color: var(--text); border-color: var(--accent); }
-    .obj-expando svg { width: 13px; height: 13px; }
-    .obj-expando .count { background: var(--accent); color: #0d0d0d; border-radius: 999px;
-      padding: 0 7px; font-size: 11px; }
-    .obj-expando .hint { font-weight: 500; text-transform: none; letter-spacing: 0; opacity: 0.7; }
+    .ol-head svg { width: 13px; height: 13px; }
+    .ol-head .spacer { flex: 1; }
+    .ol-head .count { background: var(--accent); color: #0d0d0d; border-radius: 999px; padding: 0 7px; }
+    .ol-head .hint { font-weight: 500; text-transform: none; letter-spacing: 0; opacity: 0.7; }
+    .ol-clear, .ol-begin { font: inherit; font-size: 12px; cursor: pointer;
+      border-radius: var(--radius-sm); padding: 4px 10px; border: 1px solid var(--border);
+      text-transform: none; letter-spacing: 0; }
+    .ol-clear { background: transparent; color: var(--text-muted); }
+    .ol-clear:hover { color: var(--text); }
+    .ol-begin { background: var(--accent); color: #0d0d0d; border-color: transparent; font-weight: 600; }
+    .ol-begin:disabled { opacity: 0.5; cursor: default; }
+    /* Full text, wrapping — never truncate or scroll horizontally. */
+    .ol-items { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+    .ol-items li { font-size: 12.5px; color: var(--text); }
+    .ol-goal { overflow-wrap: anywhere; }
+    .ol-ac { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; overflow-wrap: anywhere; }
     /* Queued-to-send indicator (shown while a turn runs). */
     .queued-chip { display: flex; align-items: center; gap: 6px; margin-bottom: 8px;
       padding: 5px 10px; font-size: 12px; color: var(--text-muted);
@@ -608,34 +605,16 @@ export class BaComposer extends LitElement {
     store.draftObjectives(text);
   }
 
-  _setRow(i, field, value) {
-    const rows = [...this._objRows];
-    rows[i] = { ...rows[i], [field]: value };
-    this._objRows = rows;
-  }
-
   _beginRun() {
     const rows = this._objRows
       .map((r) => ({ text: (r.text || "").trim(), acceptance: (r.acceptance || "").trim() }))
       .filter((r) => r.text);
     if (!rows.length) return;
     store.objectives(rows);
-    // Keep the objectives, collapsed into an expando, so they can be tweaked
-    // and re-run without re-drafting.
-    this._objCollapsed = true;
-  }
-
-  /**
-   * Mid-run: push edited objectives to the running orchestrator, which
-   * updates its goals and interjects the new instructions to its workers.
-   */
-  _updateObjectives() {
-    const rows = this._objRows
-      .map((r) => ({ text: (r.text || "").trim(), acceptance: (r.acceptance || "").trim() }))
-      .filter((r) => r.text);
-    if (!rows.length) return;
-    store.updateObjectives(rows);
-    this._objCollapsed = true;
+    // The run takes over: the live objectives card (in the transcript) is now
+    // the source of truth, so clear the composer's drafted list.
+    this._objRows = [];
+    this._lastDraftGoal = null;
   }
 
   /** Queue the current input to auto-send when the running turn finishes. */
@@ -657,45 +636,27 @@ export class BaComposer extends LitElement {
         @drop=${this._onDrop}>
         <div class="grip" title="Drag to resize" @pointerdown=${this._onGripDown}></div>
         ${this._renderAutonomyControl()}
-        ${this._autonomyMode() && this._objRows.length ? (
-          this._objCollapsed
-            ? html`
-              <button class="obj-expando" @click=${() => { this._objCollapsed = false; }}
-                title="Show / edit objectives">
-                ${icon("chevron-right")} Objectives <span class="count">${this._objRows.length}</span>
-                <span class="hint">tap to edit / re-run</span>
-              </button>`
-            : html`
-              <div class="obj-editor">
-                <div class="oe-head" @click=${() => { this._objCollapsed = true; }} title="Collapse">
-                  ${icon("chevron-down")} Objectives
-                  <span class="hint">${this._busy ? "edit, then update the running orchestrator" : "edit, then begin the run"}</span></div>
-                <div class="oe-cols"><span>Goal</span><span>Acceptance criteria</span></div>
-                ${this._objRows.map((r, i) => html`
-                  <div class="oe-row">
-                    <input class="oe-text" .value=${r.text} placeholder="what to build"
-                      @input=${(e) => this._setRow(i, "text", e.target.value)}>
-                    <input class="oe-acc" .value=${r.acceptance} placeholder="done when…"
-                      @input=${(e) => this._setRow(i, "acceptance", e.target.value)}>
-                    <button class="oe-x" title="Remove"
-                      @click=${() => { this._objRows = this._objRows.filter((_, j) => j !== i); }}>
-                      ${icon("x-mark")}</button>
-                  </div>`)}
-                <div class="oe-actions">
-                  <button class="oe-add"
-                    @click=${() => { this._objRows = [...this._objRows, { text: "", acceptance: "" }]; }}>+ objective</button>
-                  <span class="spacer"></span>
-                  <button class="oe-discard"
-                    @click=${() => { this._objRows = []; this._lastDraftGoal = null; this._objCollapsed = false; }}>discard</button>
-                  ${this._busy
-                    ? html`<button class="oe-begin" ?disabled=${!this._connected}
-                        title="Send the edited objectives to the running orchestrator, which interjects updated instructions to its workers"
-                        @click=${() => this._updateObjectives()}>Update objectives</button>`
-                    : html`<button class="oe-begin" ?disabled=${!this._connected}
-                        @click=${() => this._beginRun()}>Begin run</button>`}
-                </div>
-              </div>`
-        ) : nothing}
+        ${this._autonomyMode() && this._objRows.length ? html`
+          <div class="obj-list">
+            <div class="ol-head">
+              ${icon("clipboard")} <span>Objectives</span>
+              <span class="count">${this._objRows.length}</span>
+              <span class="hint">drafted — the agent manages this list</span>
+              <span class="spacer"></span>
+              <button class="ol-clear" title="Discard these objectives"
+                @click=${() => { this._objRows = []; this._lastDraftGoal = null; }}>clear</button>
+              ${this._busy ? nothing : html`
+                <button class="ol-begin" ?disabled=${!this._connected}
+                  @click=${() => this._beginRun()}>Begin run</button>`}
+            </div>
+            <ol class="ol-items">
+              ${this._objRows.map((r) => html`
+                <li>
+                  <div class="ol-goal">${r.text}</div>
+                  ${r.acceptance ? html`<div class="ol-ac">done when: ${r.acceptance}</div>` : nothing}
+                </li>`)}
+            </ol>
+          </div>` : nothing}
         ${this._queued ? html`
           <div class="queued-chip">
             ${icon("arrow-path")} <span title=${this._queued.text}>queued: ${this._queued.text || "(attachment)"}</span>

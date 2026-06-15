@@ -175,6 +175,9 @@ class Store extends EventTarget {
         if (msg.profile) applyProfile(msg.profile);
         this._set({
           config: msg.config,
+          // Restore the persisted autonomy level (else it resets to yolo on
+          // every page refresh).
+          autonomyLevel: msg.config?.autonomy_level || this.state.autonomyLevel,
           sessions: msg.sessions,
           localLlm: msg.local_llm,
           instance: msg.instance || this.state.instance,
