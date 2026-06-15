@@ -150,6 +150,10 @@ async def run_server(
     logging.getLogger("blagent").setLevel(logging.INFO)
     logging.getLogger("blagent").addHandler(handler)
     runtime = AgentRuntime(store, blender_tools, profile=blender_profile())
+    # A swarm worker subprocess runs as the "worker" RBAC role, so it gets the
+    # filtered surface (no set_autonomy/ask_user) — a leaf executor can't change
+    # its own autonomy or ask a user that isn't there.
+    runtime.session_role = os.environ.get("BLENDER_AGENT_ROLE") or None
     # Swarm surface: subprocess workers, each its own headless Blender, merged
     # via .blend in a shared exchange dir (the generic runtime is surface-agnostic).
     from .swarm import BlenderSwarmProvider

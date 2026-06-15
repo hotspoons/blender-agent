@@ -296,6 +296,12 @@ class AgentRuntime:
     this object.
     """
 
+    # When set (e.g. "worker" for a swarm sub-agent process), every session
+    # engine uses the RBAC-filtered registry for that role instead of the full
+    # surface — so a worker process can't reach set_autonomy/ask_user. Class
+    # default keeps it defined across both constructors (__init__ and create()).
+    session_role: "str | None" = None
+
     def __init__(self, store: AgentStore, backend: "ToolBackend | list[Tool]",
                  profile: "AgentProfile | None" = None,
                  permissions: "ToolPermissions | None" = None) -> None:
@@ -453,8 +459,12 @@ class AgentRuntime:
             # Adopting it after every write folds in foreign appends.
             engine.records[:] = self.store.append_record(_sid, record)
 
+        # A worker sub-agent process (session_role="worker") gets the
+        # RBAC-filtered surface — no set_autonomy/ask_user — matching the
+        # in-process orchestrator workers. Default: the full registry.
+        registry = self.registry if not self.session_role else self.registry_for_role(self.session_role)
         engine = AgentEngine(
-            registry=self.registry,
+            registry=registry,
             media=media,
             system_prompt=self._system_prompt,
             emit=self.emit,

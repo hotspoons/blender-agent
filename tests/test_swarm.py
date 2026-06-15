@@ -290,6 +290,23 @@ class TestWorkerControls(unittest.TestCase):
         from agentcore.store import AgentStore
         return AgentRuntime(AgentStore(tempfile.mkdtemp(prefix="agentdata_")), [])
 
+    def test_worker_session_role_hides_self_management_tools(self) -> None:
+        # A swarm worker subprocess runs as the "worker" RBAC role, so its
+        # sessions must NOT expose set_autonomy / ask_user (a leaf executor
+        # has no user and no authority over its own autonomy). This is the fix
+        # for the swarm worker that derailed by calling set_autonomy on itself.
+        rt = self._runtime()
+        full = rt._get_or_load_session(rt.new_session()).engine._registry
+        self.assertIsNotNone(full.get("set_autonomy"), "full surface has set_autonomy")
+        self.assertIsNotNone(full.get("ask_user"), "full surface has ask_user")
+
+        rt.session_role = "worker"
+        weng = rt._get_or_load_session(rt.new_session()).engine._registry
+        self.assertIsNone(weng.get("set_autonomy"), "worker must not reach set_autonomy")
+        self.assertIsNone(weng.get("ask_user"), "worker must not reach ask_user")
+        self.assertIsNotNone(weng.get("skills"), "worker keeps its real work tools")
+        self.assertIsNotNone(weng.get("continue_working"), "worker keeps its real work tools")
+
     def test_inprocess_worker_inject_interrupt_stop(self) -> None:
         rt = self._runtime()
 

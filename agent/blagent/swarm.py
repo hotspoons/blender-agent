@@ -101,6 +101,9 @@ def blender_worker(
         "BLENDER_AGENT_CHAT_API": "1",
         "BLENDER_AGENT_ENDPOINT": endpoint,
         "BLENDER_AGENT_MODEL": model,
+        # Run as the "worker" RBAC role: a leaf executor with no set_autonomy /
+        # ask_user (it has no user and no authority over its own autonomy).
+        "BLENDER_AGENT_ROLE": "worker",
         # Pin the bridge port so the spawned Blender lands exactly here.
         "BLENDER_MCP_PORT": str(bridge_port),
     }
