@@ -291,7 +291,8 @@ class AgentRuntime:
 
     @classmethod
     async def create(cls, store: AgentStore, backend: ToolBackend,
-                     profile: "AgentProfile | None" = None) -> "AgentRuntime":
+                     profile: "AgentProfile | None" = None,
+                     permissions: "ToolPermissions | None" = None) -> "AgentRuntime":
         """
         Async constructor for a generic ``ToolBackend`` (e.g. an HTTP backend):
         the tool list is discovered via ``backend.list_tools()`` and adapted
@@ -305,6 +306,7 @@ class AgentRuntime:
         self = cls.__new__(cls)
         self.store = store
         self.profile = profile or AgentProfile()
+        self.permissions = permissions or ToolPermissions.load()
         self.local_llm = LocalLlmBridge()
         self.instance_title = ""
         self.instance_port = 0

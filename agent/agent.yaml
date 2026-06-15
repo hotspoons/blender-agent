@@ -1,0 +1,44 @@
+# Example agent definition — the Blender build expressed as data.
+# `blagent.loader.load_agent("agent.yaml")` assembles a wired AgentRuntime:
+# profile + LLM + autonomy + RBAC + the domain ToolBackend. Swap the backend
+# factory (or point it at an HTTP base_url) to build a different agent without
+# forking the core. See docs/AGENT_CORE.md.
+
+profile:
+  name: "Blender Agent"
+  noun: "scene"
+  chat_field_prefix: "blender"      # keeps blender_tool_calls / blender_media
+  ui:
+    title: "Blender Agent"
+    brand: { word: "Blender", rest: " Agent" }
+    welcome:
+      word: "Blender"
+      rest: " Agent"
+      body: "Connected to your Blender session through the MCP tool surface."
+      hint: 'Try: "what''s in my scene?" or "make the selected mesh manifold".'
+    composer_placeholder: "Ask the Blender agent…"
+    swarm_blurb: "Parallel workers, each its own headless Blender, merged at the end."
+    media_viewers: ["stl"]          # registered by web/extensions/blender.js
+  # prompts: {}                     # optional per-key overrides (compaction, planner, …)
+
+llm:
+  endpoint: "http://172.16.10.252:8000/v1"
+  model: "moonshot/kimi-k2.7-Code"
+  api_key_env: "BLENDER_AGENT_API_KEY"   # read from env, never inline secrets
+
+autonomy:
+  policy: "auto_until_done"          # | pause_when_blocked
+  max_rounds: 4
+  audit: false
+  workers: "in_process"              # | swarm
+  level: "orchestrator"
+
+permissions: "blagent/data/permissions.yaml"   # tool RBAC matrix (optional)
+
+backend:
+  type: "python"                     # | http
+  factory: "blagent.blender_tools:make_backend"
+  options: {}
+  # --- type: http ---
+  # base_url: "http://localhost:8800"
+  # api_key_env: "BLENDER_TOOLS_KEY"

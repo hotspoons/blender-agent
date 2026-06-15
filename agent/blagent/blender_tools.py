@@ -18,6 +18,7 @@ __all__ = (
     "BlenderTool",
     "build_blender_registry",
     "load_initial_instructions",
+    "make_backend",
 )
 
 import json
@@ -188,3 +189,37 @@ async def build_blender_registry() -> tuple[FastMCP, list[Tool]]:
             read_only=read_only,
         ))
     return mcp, tools
+
+
+async def make_backend(**_options: Any) -> "Any":
+    """
+    The Blender build's ``ToolBackend`` factory, referenced from ``agent.yaml``
+    (``backend.factory: blagent.blender_tools:make_backend``). Wraps the blmcp
+    tool surface in a ``PythonToolBackend`` and wires the ground-truth scene
+    probe (``get_objects_summary``) used by the autonomy evaluator/auditor.
+
+    Assumes a Blender bridge is reachable (tool *calls* need it); spawning the
+    headless surface remains the launcher's job. Extra YAML ``options`` are
+    accepted and ignored here for forward-compatibility.
+    """
+    import tempfile
+    from .backend import PythonToolBackend
+    from .media import MediaLibrary
+
+    _mcp, tools = await build_blender_registry()
+    by_name = {t.name: t for t in tools}
+
+    async def _probe(session_id: str) -> str:
+        tool = by_name.get("get_objects_summary")
+        if tool is None:
+            return "(get_objects_summary unavailable)"
+        media = MediaLibrary(tempfile.mkdtemp(prefix="probe_"))
+        try:
+            result = await tool.call(ToolContext(media=media, session_id=session_id), {})
+        except Exception as ex:  # pylint: disable=broad-except
+            return "(scene probe failed: {:s})".format(str(ex))
+        data = result.data if result.data is not None else result.summary
+        text = data if isinstance(data, str) else json.dumps(data, default=str)
+        return text[:6000]
+
+    return PythonToolBackend(tools, probe=_probe)
