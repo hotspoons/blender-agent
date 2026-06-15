@@ -66,7 +66,7 @@ class TestPortAllocator(unittest.TestCase):
 
     def test_base_url_shape(self) -> None:
         swarm = _import_swarm()
-        w = swarm.WorkerInstance(
+        w = swarm.blender_worker(
             worker_id="w0", api_port=12345, bridge_port=23456,
             data_dir=tempfile.mkdtemp(prefix="swarm_t_"),
             endpoint="http://x/v1", model="m")
@@ -78,7 +78,7 @@ class TestRemoteWorkerStrategy(unittest.TestCase):
 
     def _strategy(self, exchange: str) -> Any:
         swarm = _import_swarm()
-        return swarm.RemoteWorkerStrategy(
+        return swarm.BlenderWorkerStrategy(
             endpoint="http://x/v1", model="m", exchange_dir=exchange)
 
     def test_build_prompt_demands_blend_export_and_proof(self) -> None:
@@ -105,14 +105,14 @@ class TestRemoteWorkerStrategy(unittest.TestCase):
         body = b"BLENDER-v500RENDH" + b"\x00" * 2048  # magic + realistic size
         with open(blend, "wb") as fh:
             fh.write(body)
-        dest = strat._collect_blend(wdir, "component_x")
+        dest = strat._collect_artifact(wdir, "component_x")
         self.assertIsNotNone(dest)
         self.assertEqual(os.path.basename(dest), "component_x.blend")
         self.assertTrue(os.path.isfile(dest))
         with open(dest, "rb") as fh:
             self.assertEqual(fh.read(), body)
         # no .blend -> None
-        self.assertIsNone(strat._collect_blend(tempfile.mkdtemp(prefix="empty_"), "c2"))
+        self.assertIsNone(strat._collect_artifact(tempfile.mkdtemp(prefix="empty_"), "c2"))
 
     def test_collect_blend_rejects_truncated_export(self) -> None:
         exch = tempfile.mkdtemp(prefix="exch_")
@@ -121,18 +121,18 @@ class TestRemoteWorkerStrategy(unittest.TestCase):
         # A tiny/garbage .blend (failed export) must NOT be collected.
         with open(os.path.join(wdir, "broken.blend"), "wb") as fh:
             fh.write(b"oops")
-        self.assertIsNone(strat._collect_blend(wdir, "component_bad"))
+        self.assertIsNone(strat._collect_artifact(wdir, "component_bad"))
 
     def test_list_components_and_gather_noop(self) -> None:
         exch = tempfile.mkdtemp(prefix="exch_")
         strat = self._strategy(exch)
-        self.assertEqual(strat.list_components(), [])
+        self.assertEqual(strat.list_artifacts(), [])
         # gather with nothing to merge spawns no worker and returns None.
         self.assertIsNone(asyncio.new_event_loop().run_until_complete(strat.gather()))
         for name in ("component_b", "component_a"):
             with open(os.path.join(exch, name + ".blend"), "wb") as fh:
                 fh.write(b"x")
-        comps = strat.list_components()
+        comps = strat.list_artifacts()
         self.assertEqual([os.path.basename(c) for c in comps],
                          ["component_a.blend", "component_b.blend"])  # sorted
 
@@ -143,7 +143,7 @@ class TestSwarmStreaming(unittest.TestCase):
 
     def _strategy(self, emit) -> Any:
         swarm = _import_swarm()
-        return swarm.RemoteWorkerStrategy(
+        return swarm.BlenderWorkerStrategy(
             endpoint="http://x/v1", model="m",
             exchange_dir=tempfile.mkdtemp(prefix="exch_"),
             emit=emit, session_id="s1")
@@ -260,7 +260,10 @@ class TestSwarmRequirements(unittest.TestCase):
                 sys.path.insert(0, path)
         from agentcore.runtime import AgentRuntime
         from agentcore.store import AgentStore
+        from blagent.swarm import BlenderSwarmProvider
         rt = AgentRuntime(AgentStore(tempfile.mkdtemp(prefix="agentdata_")), [])
+        # The swarm surface (and thus its preflight) is the domain's to supply.
+        rt.swarm_provider = BlenderSwarmProvider()
         sid = rt.new_session()
         pub = rt.set_autonomy_level(sid, "swarm")
         self.assertIn("swarm_preflight", pub)
@@ -434,7 +437,7 @@ class TestWorkerSpawn(unittest.TestCase):
         async def run() -> bool:
             alloc = swarm.PortAllocator()
             api, bridge = alloc.allocate(), alloc.allocate()
-            worker = swarm.WorkerInstance(
+            worker = swarm.blender_worker(
                 worker_id="w0", api_port=api, bridge_port=bridge,
                 data_dir=tempfile.mkdtemp(prefix="swarm_e2e_"),
                 endpoint=endpoint, model=model)

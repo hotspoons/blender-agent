@@ -52,10 +52,10 @@ _TASKS = [
 
 
 def _make_strategy(exchange_dir):
-    from blagent.swarm import RemoteWorkerStrategy
+    from blagent.swarm import BlenderWorkerStrategy
     endpoint = os.environ["BLENDER_AGENT_ENDPOINT"]
     model = os.environ["BLENDER_AGENT_MODEL"]
-    return RemoteWorkerStrategy(
+    return BlenderWorkerStrategy(
         endpoint=endpoint, model=model, exchange_dir=exchange_dir,
         api_key=os.environ.get("BLENDER_AGENT_API_KEY", ""),
         session_id="assembly")
@@ -67,7 +67,7 @@ async def _run(strategy):
     tasks = [types.SimpleNamespace(id=tid, objective_id=tid, instruction=instr, context="")
              for tid, instr in _TASKS]
     results = await ParallelScheduler(max_concurrency=4).run(tasks, strategy)
-    components = strategy.list_components()
+    components = strategy.list_artifacts()
     master = await strategy.gather()
     return results, components, master
 

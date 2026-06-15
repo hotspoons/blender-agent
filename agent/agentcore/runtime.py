@@ -38,10 +38,6 @@ from .local_llm import LocalLlmBridge
 
 _log = logging.getLogger("blagent.runtime")
 
-# A real .blend (even an empty scene) is comfortably larger than this; a file
-# below it is almost certainly a failed/partial export, surfaced as suspect.
-_MIN_BLEND_BYTES = 1024
-
 # Defense-in-depth floor for the worker surface: even if the RBAC matrix is
 # misconfigured, a worker engine must never reach these orchestrator/user-only
 # meta-tools. Mirrors the `worker` role's deny list in permissions.yaml.
@@ -338,6 +334,10 @@ class AgentRuntime:
         # Swarm (subprocess) workers by agent id -> stop hook. No live engine
         # here, so these support stop/cancel but not injection.
         self._swarm_stoppers: dict[str, "Callable[[], None]"] = {}
+        # Domain swarm surface (subprocess workers + their ground-truth probe).
+        # None on a generic build -> swarm mode falls back to in-process workers.
+        # The Blender build sets this to a BlenderSwarmProvider.
+        self.swarm_provider: "Any" = None
         # Live autonomy objective lists by session id, for mid-run updates.
         self._autonomy_objs: dict[str, list[Any]] = {}
         self._stopped_workers: set[str] = set()
@@ -930,56 +930,6 @@ class AgentRuntime:
         text = data if isinstance(data, str) else json.dumps(data, default=str)
         return text[:6000]
 
-    async def _read_blend_objects(self, path: str) -> list[str]:
-        """Open a .blend headless and return its object names (best-effort)."""
-        blender = os.environ.get("BLENDER_PATH", "blender")
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                blender, "-b", "--online-mode", path, "--python-expr",
-                "import bpy;print('OBJ:'+'|'.join(sorted(o.name for o in bpy.data.objects)))",
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-            out, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
-        except Exception:  # pylint: disable=broad-except
-            return []
-        for line in out.decode("utf-8", "replace").splitlines():
-            if line.startswith("OBJ:"):
-                return [x for x in line[4:].split("|") if x]
-        return []
-
-    def _make_swarm_probe(self, exchange_dir: str) -> "Callable[[], Awaitable[str]]":
-        """
-        Ground truth for the evaluator in swarm mode (the orchestrator has no
-        Blender of its own): read the object lists of the component .blend
-        files workers have written to the exchange dir.
-        """
-        import glob
-
-        async def probe() -> str:
-            comps = sorted(glob.glob(os.path.join(exchange_dir, "component_*.blend")))
-            if not comps:
-                return "(no component .blend files produced yet)"
-            lines = ["Components produced so far (objects per file):"]
-            total = 0
-            for path in comps:
-                size = os.path.getsize(path) if os.path.isfile(path) else 0
-                objs = await self._read_blend_objects(path)
-                total += len(objs)
-                if not os.path.isfile(path):
-                    detail = "(missing on disk)"
-                elif size < _MIN_BLEND_BYTES:
-                    detail = "(suspect: only {:d} bytes — export may have failed)".format(size)
-                elif objs:
-                    detail = "{:d} object(s): {:s}".format(len(objs), ", ".join(objs))
-                else:
-                    detail = "0 objects (empty or unreadable scene)"
-                lines.append("- {:s} [{:d} B]: {:s}".format(
-                    os.path.basename(path), size, detail))
-            lines.append("Total: {:d} component file(s), {:d} object(s) across them.".format(
-                len(comps), total))
-            return "\n".join(lines)
-
-        return probe
-
     def draft_objectives(self, session_id: str, goal: str) -> str:
         """
         Guided intake: draft objectives from a one-line *goal* (LLM). Surfaces a
@@ -1118,23 +1068,24 @@ class AgentRuntime:
             return MediaLibrary(os.path.join(self.store.session_dir(session_id), "workers", safe))
 
         # Worker strategy + scheduler by mode. Default in-process (local child
-        # sessions, sequential); swarm = real subprocess workers (own Blender
-        # each), fanned out in parallel, exchanging .blend via a shared dir.
-        if config.autonomy_workers == "swarm" and config.endpoint:
+        # sessions, sequential); swarm = real subprocess workers (own compute
+        # surface each), fanned out in parallel, exchanging artifacts via a
+        # shared dir. Swarm needs a domain swarm_provider (the Blender build
+        # supplies one); without it, fall back to in-process workers.
+        if config.autonomy_workers == "swarm" and config.endpoint and self.swarm_provider is not None:
             from .autonomy import ParallelScheduler
-            from blagent.swarm import RemoteWorkerStrategy
 
             exchange_dir = os.path.join(self.store.session_dir(session_id), "exchange")
-            swarm_strategy: "Any" = RemoteWorkerStrategy(
+            swarm_strategy: "Any" = self.swarm_provider.make_strategy(
                 endpoint=config.endpoint, model=model, exchange_dir=exchange_dir,
                 api_key=config.api_key, emit=persist_emit, session_id=session_id,
                 register_stop=self._register_swarm_worker,
                 unregister_stop=self._unregister_swarm_worker)
             runner: "Callable[[Any], Awaitable[Any]]" = swarm_strategy
             scheduler: "Any" = ParallelScheduler(max_concurrency=4)
-            # No local Blender in swarm mode: ground the evaluator on the
-            # component .blends the workers wrote to the exchange dir.
-            probe: "Callable[[], Awaitable[str]]" = self._make_swarm_probe(exchange_dir)
+            # No local compute surface in swarm mode: ground the evaluator on
+            # the artifacts the workers wrote to the exchange dir.
+            probe: "Callable[[], Awaitable[str]]" = self.swarm_provider.make_probe(exchange_dir)
         else:
             swarm_strategy = None
             probe = self._make_probe(session_id)
@@ -1200,14 +1151,15 @@ class AgentRuntime:
                         " — {:s}".format(o.evidence) if getattr(o, "evidence", "") else ""))
                 _persist("assistant", "\n".join(lines))
                 # Swarm: after workers finish, the gather agent merges their
-                # component .blends into one master scene.
+                # component artifacts into one master result.
                 if swarm_strategy is not None:
                     master = await swarm_strategy.gather()
-                    objects = await self._read_blend_objects(master) if master else []
+                    objects = (await self.swarm_provider.read_result_objects(master)
+                               if master else [])
                     await self.emit({
                         "type": "swarm_gathered", "session_id": session_id,
                         "master": master,
-                        "components": swarm_strategy.list_components(),
+                        "components": swarm_strategy.list_artifacts(),
                         "objects": objects,
                     })
                 # Opt-in independent audit: a FRESH LLM context (no shared
@@ -1488,12 +1440,17 @@ class AgentRuntime:
         config.autonomy = "ask" if level == "ask" else "auto"
         config.autonomy_workers = "swarm" if level == "swarm" else "in_process"
         self.store.save_config()
-        # Swarm spawns a Blender per worker on the host — surface its
-        # cross-platform requirements (and any missing ones) up front.
+        # Swarm spawns a worker surface per worker on the host — surface its
+        # cross-platform requirements (and any missing ones) up front. The
+        # domain swarm_provider knows what those are; a build without one has
+        # no swarm surface to offer.
         swarm_ready, swarm_report = True, ""
         if level == "swarm":
-            from blagent.blender_surface import swarm_preflight
-            swarm_ready, swarm_report = swarm_preflight()
+            if self.swarm_provider is not None:
+                swarm_ready, swarm_report = self.swarm_provider.preflight()
+            else:
+                swarm_ready, swarm_report = False, (
+                    "Swarm mode is unavailable in this build (no swarm surface configured).")
         if session_id:
             session = self._get_or_load_session(session_id)
             notice = self._autonomy_change_notice(prev, level)

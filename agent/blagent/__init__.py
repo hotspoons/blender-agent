@@ -147,6 +147,10 @@ async def run_server(
     logging.getLogger("blagent").setLevel(logging.INFO)
     logging.getLogger("blagent").addHandler(handler)
     runtime = AgentRuntime(store, blender_tools, profile=blender_profile())
+    # Swarm surface: subprocess workers, each its own headless Blender, merged
+    # via .blend in a shared exchange dir (the generic runtime is surface-agnostic).
+    from .swarm import BlenderSwarmProvider
+    runtime.swarm_provider = BlenderSwarmProvider()
     runtime.instance_title = title if title is not None else os.environ.get("BLENDER_AGENT_TITLE", "")
     runtime.instance_port = port or 0
     app = create_app(runtime)
