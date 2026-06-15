@@ -720,7 +720,7 @@ class AgentRuntime:
         from .autonomy import (
             AutonomyOrchestrator, AutoPauseWhenBlockedPolicy, AutoUntilDonePolicy,
             IndependentAuditor, LlmPlanner, Objective, SequentialScheduler,
-            StateAwareEvaluator,
+            StateAwareEvaluator, WorkerReviewer,
         )
 
         if not session_id:
@@ -833,6 +833,12 @@ class AgentRuntime:
                 unregister=self._unregister_worker,
             )
             scheduler = SequentialScheduler()
+        # Opt-in dedicated QA reviewer (a fresh LLM context + read-only probe),
+        # reviewing each worker's proof before the next worker runs.
+        reviewer = (
+            WorkerReviewer(self._make_llm(), model, probe=probe)
+            if config.autonomy_qa else None
+        )
         orchestrator = AutonomyOrchestrator(
             planner=LlmPlanner(llm, model),
             scheduler=scheduler,
@@ -842,6 +848,7 @@ class AgentRuntime:
             emit=persist_emit,
             session_id=session_id,
             share_context=config.autonomy_share_context,
+            reviewer=reviewer,
         )
         rounds = rounds_cap
 
@@ -1092,6 +1099,8 @@ class AgentRuntime:
             config.autonomy_share_context = bool(updates["autonomy_share_context"])
         if "autonomy_audit" in updates:
             config.autonomy_audit = bool(updates["autonomy_audit"])
+        if "autonomy_qa" in updates:
+            config.autonomy_qa = bool(updates["autonomy_qa"])
         if "autonomy_workers" in updates:
             config.autonomy_workers = str(updates["autonomy_workers"])
         if "autonomy_level" in updates:

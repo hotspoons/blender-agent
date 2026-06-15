@@ -66,6 +66,36 @@ class TestOrchestratorView(unittest.TestCase):
         self.assertEqual(len(snap["rounds"]), 1)
         self.assertEqual(snap["done"], {"paused": False, "allMet": True, "rounds": 1})
 
+    def test_qa_review_spawns_agent_and_annotates_worker(self):
+        V = _mod().OrchestratorView
+        v = V()
+        v.apply({"type": "agent_spawned", "session_id": "run", "agent_id": "run:w:t0",
+                 "role": "worker", "task": "do A", "objective_id": "o0"})
+        v.apply({"type": "agent_done", "session_id": "run", "agent_id": "run:w:t0",
+                 "role": "worker", "ok": True, "proof": "PROOF"})
+        # The dedicated QA agent is a first-class spawned/done agent...
+        v.apply({"type": "agent_spawned", "session_id": "run", "agent_id": "run:qa:t0",
+                 "role": "qa", "task": "QA review — do A", "objective_id": "o0",
+                 "reviews": "run:w:t0"})
+        v.apply({"type": "agent_done", "session_id": "run", "agent_id": "run:qa:t0",
+                 "role": "qa", "ok": False, "proof": "missing X"})
+        # ...and its verdict is annotated onto the worker it reviewed.
+        self.assertTrue(v.apply({"type": "worker_review", "session_id": "run",
+                                 "agent_id": "run:w:t0", "passed": False,
+                                 "note": "missing X", "by": "run:qa:t0"}))
+        snap = v.snapshot()
+        self.assertIn("run:qa:t0", snap["agentOrder"])
+        self.assertEqual(snap["agents"]["run:qa:t0"]["role"], "qa")
+        self.assertEqual(snap["agents"]["run:qa:t0"]["reviews"], "run:w:t0")
+        review = snap["agents"]["run:w:t0"]["review"]
+        self.assertEqual(review, {"passed": False, "note": "missing X", "by": "run:qa:t0"})
+
+    def test_worker_review_for_unknown_worker_is_ignored(self):
+        V = _mod().OrchestratorView
+        v = V()
+        self.assertFalse(v.apply({"type": "worker_review", "session_id": "run",
+                                  "agent_id": "nope", "passed": True, "note": "x"}))
+
     def test_worker_event_for_unknown_agent_is_ignored(self):
         V = _mod().OrchestratorView
         v = V()

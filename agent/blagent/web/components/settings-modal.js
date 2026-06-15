@@ -25,6 +25,7 @@ export class BaSettingsModal extends LitElement {
     _maxAutoRounds: { state: true },
     _shareContext: { state: true },
     _audit: { state: true },
+    _qa: { state: true },
     _workers: { state: true },
   };
 
@@ -42,6 +43,7 @@ export class BaSettingsModal extends LitElement {
     this._maxAutoRounds = config.max_autonomy_rounds || 6;
     this._shareContext = !!config.autonomy_share_context;
     this._audit = !!config.autonomy_audit;
+    this._qa = !!config.autonomy_qa;
     this._workers = config.autonomy_workers || "in_process";
     this._fetchTimer = null;
   }
@@ -154,6 +156,7 @@ export class BaSettingsModal extends LitElement {
       max_autonomy_rounds: Math.max(1, parseInt(this._maxAutoRounds, 10) || 6),
       autonomy_share_context: this._shareContext,
       autonomy_audit: this._audit,
+      autonomy_qa: this._qa,
       autonomy_workers: this._workers,
     };
     if (this._apiKey) updates.api_key = this._apiKey;
@@ -269,6 +272,17 @@ export class BaSettingsModal extends LitElement {
           <span>Share orchestrator context with workers
             <div class="sub">Off (default): workers run blind on just their task. On: each worker is
               seeded with the objective list - so blind vs informed can be compared.</div>
+          </span>
+        </div>
+
+        <div class="switchrow">
+          <ba-switch .on=${this._qa}
+            @input=${(e) => { this._qa = e.detail.value; }}></ba-switch>
+          <span>Per-worker QA review
+            <div class="sub">Off (default): the orchestrator only evaluates objectives once per round.
+              On: a dedicated QA reviewer (its own role, not the orchestrator) checks each worker's
+              proof against the real scene before the next worker runs, posting a QA note on the
+              worker card. Costs one extra LLM pass per worker.</div>
           </span>
         </div>
 

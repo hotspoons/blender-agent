@@ -164,6 +164,11 @@ class AgentConfig:
     # project state and calls out reward-hacking / overclaims. Off by default
     # (an extra LLM pass per run).
     autonomy_audit: bool = False
+    # Opt-in per-worker QA: a dedicated QA reviewer agent (its own `qa` role,
+    # not the orchestrator) reviews each worker's proof against project state
+    # before the next worker runs, annotating the worker card with a QA note.
+    # Off by default (an extra LLM pass per worker).
+    autonomy_qa: bool = False
     # Where worker sub-agents run. "in_process" (default) = ChildSessionRunner
     # in this process; "swarm" = each worker a real subprocess with its own
     # headless Blender (RemoteWorkerStrategy). Default keeps everything local.
@@ -217,6 +222,7 @@ class AgentConfig:
             "max_autonomy_rounds": self.max_autonomy_rounds,
             "autonomy_share_context": self.autonomy_share_context,
             "autonomy_audit": self.autonomy_audit,
+            "autonomy_qa": self.autonomy_qa,
             "autonomy_workers": self.autonomy_workers,
             "autonomy_level": self.autonomy_level,
         }

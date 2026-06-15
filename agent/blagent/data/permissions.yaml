@@ -41,6 +41,18 @@ roles:
   reviewer:
     default: disabled
 
+  # Dedicated per-worker QA reviewer (opt-in): reviews each worker's proof
+  # against the actual scene before the next worker runs. Read-only probes
+  # only — judges evidence, not the worker's narrative.
+  qa:
+    default: disabled
+    tools:
+      "get_*": allow
+      "*summary*": allow
+      "*diagnostics*": allow
+      skills: allow
+      media_io: allow
+
   # Independent verifier (no shared context): read-only state probes only.
   # `default: disabled` with an allow-list means everything else is hidden.
   auditor:

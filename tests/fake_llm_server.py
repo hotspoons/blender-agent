@@ -94,6 +94,10 @@ def _classify(messages: list[dict[str, Any]]) -> str:
         return "auditor"
     if "evaluator" in system:
         return "evaluator"
+    # Dedicated per-worker QA reviewer (also mentions blender/acceptance, so it
+    # must be classified before the worker/draft branches).
+    if "qa reviewer" in system:
+        return "qa"
     # The draft/intake prompt: turns a goal into OBJECTIVES with ACCEPTANCE.
     if "objectives" in system and "acceptance" in system:
         return "draft"
@@ -114,6 +118,9 @@ async def completions(request: Request) -> StreamingResponse:
         gen = _stream_text("Checking the scene state.", json.dumps(_VERDICTS))
     elif kind == "auditor":
         gen = _stream_text("", json.dumps({"verdicts": _VERDICTS["verdicts"], "summary": "verified"}))
+    elif kind == "qa":
+        gen = _stream_text("Reviewing the worker's proof against the scene.",
+                           json.dumps({"passed": True, "note": "Work matches the acceptance criteria."}))
     elif kind == "worker_tool":
         gen = _stream_tool_call("get_objects_summary", {})
     elif kind == "worker_proof":

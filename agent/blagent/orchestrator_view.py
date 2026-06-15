@@ -77,6 +77,7 @@ class OrchestratorView:
                 "objectiveId": ev.get("objective_id", ""), "state": "running",
                 "proof": "", "ok": None, "timeline": [], "calls": {}, "stream": "",
                 "media": [], "queued": None, "stopping": False,
+                "reviews": ev.get("reviews"),   # qa agent -> worker id it reviews
                 "round": None if ev.get("role") == "gather" else self.current_round,
             }
             if aid not in self.agent_order:
@@ -95,6 +96,15 @@ class OrchestratorView:
             if aid not in self.agent_order:
                 self.agent_order.append(aid)
             return True
+        if t == "worker_review":
+            # A dedicated QA agent's verdict, annotated onto the worker it
+            # reviewed (the QA agent itself is a normal spawned/done agent).
+            ag = self.agents.get(str(ev.get("agent_id", "")))
+            if ag is not None:
+                ag["review"] = {"passed": bool(ev.get("passed")),
+                                "note": ev.get("note", ""), "by": ev.get("by", "")}
+                return True
+            return False
         if t == "swarm_gathered":
             self.gathered = {"master": ev.get("master"),
                              "components": ev.get("components") or [],

@@ -69,6 +69,7 @@ def main():
             "model": "fake/test-model", "use_local_llm": False,
             "autonomy": "auto", "autonomy_level": "orchestrator",
             "autonomy_workers": "in_process", "autonomy_policy": "auto_until_done",
+            "autonomy_qa": True,  # dedicated per-worker QA reviewer
             "max_rounds": 3, "max_autonomy_rounds": 1, "budget_review": False,
             "context_tokens": 16384,
         }, fh)
@@ -146,6 +147,14 @@ def main():
             txt = page.evaluate("() => (function dt(r){let s=r.textContent||'';r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)s+=dt(e.shadowRoot)});return s})(document)")
             check("worker proof rendered (no raw <think>)",
                   ("PROOF OF WORK" in txt) and ("<think>" not in txt))
+
+            # dedicated QA reviewer ran per worker and annotated the work
+            qa_seen = _drive(page, "return Object.values(store.state.autonomy.agents||{})"
+                                   ".some(a => a.role === 'qa') && "
+                                   "Object.values(store.state.autonomy.agents||{})"
+                                   ".some(a => a.review);")
+            check("dedicated QA reviewer spawned + annotated the worker", qa_seen)
+            check("QA verdict rendered in the UI", "QA review" in txt)
 
             # persistence: reload the session, history survives
             sid = _drive(page, "return store.state.sessionId;")

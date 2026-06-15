@@ -77,7 +77,7 @@ def _apply_llm_config(store: AgentStore, block: dict[str, Any]) -> None:
 def _apply_autonomy_config(store: AgentStore, block: dict[str, Any]) -> None:
     mapping = {
         "policy": "autonomy_policy", "max_rounds": "max_autonomy_rounds",
-        "audit": "autonomy_audit", "workers": "autonomy_workers",
+        "audit": "autonomy_audit", "qa": "autonomy_qa", "workers": "autonomy_workers",
         "share_context": "autonomy_share_context", "level": "autonomy_level",
     }
     for key, attr in mapping.items():

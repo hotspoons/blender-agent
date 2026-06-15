@@ -34,6 +34,8 @@ __all__ = (
     "draft_objectives",
     "LlmPlanner",
     "StateAwareEvaluator",
+    "QaNote",
+    "WorkerReviewer",
     "SequentialScheduler",
     "ParallelScheduler",
     "AutoUntilDonePolicy",
@@ -351,6 +353,79 @@ class StateAwareEvaluator:
 
 
 # --------------------------------------------------------------------------
+# Per-worker QA reviewer (opt-in) — a dedicated reviewer agent that checks
+# each worker's proof against project state, before the next worker runs
+# --------------------------------------------------------------------------
+
+@dataclasses.dataclass
+class QaNote:
+    """A QA reviewer's ruling on ONE worker's proof-of-work."""
+
+    task_id: str
+    objective_id: str
+    passed: bool          # the work holds up against acceptance criteria + state
+    note: str             # concise QA feedback (what's good / what's missing)
+
+
+_QA_SYSTEM = (
+    "You are a dedicated QA REVIEWER embedded in a Blender autonomy run. A "
+    "worker sub-agent just finished ONE task and submitted its proof-of-work. "
+    "Give a concise quality-assurance verdict on THAT task: judge the EVIDENCE "
+    "against the task's acceptance criteria and the actual PROJECT STATE, never "
+    "the worker's narrative. You are NOT the orchestrator — you do not re-plan; "
+    "you rule on whether this single piece of work holds up and flag concrete "
+    "gaps for the orchestrator to act on. Be brief and specific. Reply with "
+    'ONLY a JSON object:\n{"passed": true|false, "note": "<one or two sentences '
+    'of QA feedback>"}'
+)
+
+
+class WorkerReviewer:
+    """
+    Opt-in per-worker QA: a dedicated reviewer (its OWN role/agent, not the
+    orchestrator) that checks each worker's proof against project state before
+    the next worker runs. Advisory — it annotates the work with a QA note; the
+    ``StateAwareEvaluator`` remains the authority on objective status.
+
+    Like the auditor, it judges evidence not narrative: it is given a read-only
+    ground-truth ``probe`` and rules on the single task in front of it.
+    """
+
+    def __init__(
+            self,
+            llm: LlmClient,
+            model: str,
+            probe: Callable[[], Awaitable[str]] | None = None,
+    ) -> None:
+        self._llm = llm
+        self._model = model
+        self._probe = probe
+
+    async def review(self, task: WorkerTask, result: WorkerResult) -> QaNote:
+        state = "(no project-state probe configured)"
+        if self._probe is not None:
+            try:
+                state = await self._probe()
+            except Exception as ex:  # pylint: disable=broad-except
+                state = "(project-state probe failed: {:s})".format(ex)
+        user = (
+            "TASK: {:s}\nOBJECTIVE: {:s}\nACCEPTANCE: {:s}\n\n"
+            "WORKER PROOF (claim):\n{:s}\n\n"
+            "PROJECT STATE (ground truth):\n{:s}".format(
+                task.instruction, task.goal or "(n/a)", task.acceptance or "(n/a)",
+                result.proof or "(worker returned no proof)", state)
+        )
+        text = await _complete(self._llm, self._model, _QA_SYSTEM, user)
+        data = _extract_json_object(text)
+        note = str(data.get("note", "")).strip()
+        if not note:
+            # Fail closed: no usable verdict means the work is unverified.
+            return QaNote(task.id, task.objective_id, False,
+                          "QA reviewer returned no usable verdict; treat as unverified.")
+        return QaNote(task.id, task.objective_id, bool(data.get("passed", False)), note)
+
+
+# --------------------------------------------------------------------------
 # Independent auditor (opt-in) — adversarial final check for reward-hacking
 # --------------------------------------------------------------------------
 
@@ -560,6 +635,7 @@ class AutonomyOrchestrator:
             emit: Callable[[dict[str, Any]], Awaitable[None]],
             session_id: str = "",
             share_context: bool = False,
+            reviewer: "WorkerReviewer | None" = None,
     ) -> None:
         self._planner = planner
         self._scheduler = scheduler
@@ -569,6 +645,9 @@ class AutonomyOrchestrator:
         self._emit = emit
         self._session_id = session_id
         self._share_context = share_context
+        # Opt-in per-worker QA: a dedicated reviewer agent (not the
+        # orchestrator) that reviews each worker's proof before the next runs.
+        self._reviewer = reviewer
 
     def _shared_context(self, objectives: list[Objective]) -> str:
         """The orchestrator's objective view, shared with informed workers."""
@@ -619,7 +698,51 @@ class AutonomyOrchestrator:
             "proof": result.proof,
             "artifacts": result.artifacts,
         })
+        if self._reviewer is not None:
+            await self._qa_review(task, result, worker_id=agent_id)
         return result
+
+    async def _qa_review(
+            self, task: WorkerTask, result: WorkerResult, worker_id: str) -> "QaNote":
+        """Spawn a dedicated QA agent that reviews one worker's proof against
+        project state, before the next worker runs. Emits its own spawn/done
+        (it is a first-class agent with the ``qa`` role) and a ``worker_review``
+        event that annotates the worker card it reviewed."""
+        qa_id = "{:s}:qa:{:s}".format(self._session_id, task.id)
+        await self._emit({
+            "type": "agent_spawned",
+            "session_id": self._session_id,
+            "agent_id": qa_id,
+            "role": "qa",
+            "objective_id": task.objective_id,
+            "task": "QA review — {:s}".format(task.instruction),
+            "reviews": worker_id,
+        })
+        try:
+            note = await self._reviewer.review(task, result)
+        except Exception as ex:  # pylint: disable=broad-except
+            _log.warning("qa review for %s failed: %s", task.id, ex)
+            note = QaNote(task.id, task.objective_id, False,
+                          "QA review errored: {:s}".format(ex))
+        await self._emit({
+            "type": "agent_done",
+            "session_id": self._session_id,
+            "agent_id": qa_id,
+            "role": "qa",
+            "objective_id": task.objective_id,
+            "ok": note.passed,
+            "proof": note.note,
+        })
+        # Annotate the worker card it reviewed (compact QA badge inline).
+        await self._emit({
+            "type": "worker_review",
+            "session_id": self._session_id,
+            "agent_id": worker_id,
+            "passed": note.passed,
+            "note": note.note,
+            "by": qa_id,
+        })
+        return note
 
     async def run(self, objectives: list[Objective], max_rounds: int = 6) -> dict[str, Any]:
         """

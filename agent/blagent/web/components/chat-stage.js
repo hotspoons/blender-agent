@@ -395,7 +395,20 @@ export class BaChatStage extends LitElement {
     .agent.worker { border-left-color: var(--accent); }
     .agent.eval { border-left-color: var(--warning); }
     .agent.gather { border-left-color: var(--accent-2); }
+    .agent.qa { border-left-color: var(--success); }
     .agent.done { opacity: 0.92; }
+    /* Dedicated QA reviewer's verdict, pinned on the worker card it reviewed. */
+    .qa-note { display: flex; align-items: baseline; gap: 7px; margin: 0 12px 10px 12px;
+      padding: 7px 10px; font-size: 12.5px; border-radius: var(--radius-sm);
+      border: 1px solid var(--border); }
+    .qa-note svg { width: 13px; height: 13px; flex-shrink: 0; align-self: center; }
+    .qa-note.ok { border-left: 3px solid var(--success); color: var(--text); }
+    .qa-note.ok svg { color: var(--success); }
+    .qa-note.warn { border-left: 3px solid var(--warning); color: var(--text); }
+    .qa-note.warn svg { color: var(--warning); }
+    .qa-note .qa-label { font-weight: 700; text-transform: uppercase; font-size: 10px;
+      letter-spacing: 0.05em; color: var(--text-muted); flex-shrink: 0; }
+    .qa-note .qa-text { flex: 1; overflow-wrap: anywhere; }
     .agent-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; }
     .agent-head:hover { background: var(--surface-muted); }
     .agent .role { font-size: 11px; font-weight: 700; text-transform: uppercase;
@@ -782,16 +795,27 @@ export class BaChatStage extends LitElement {
 
     const result = html`<div class="proof">${unsafeHtml(renderMarkdown(String(agent.proof || "")))}</div>`;
 
+    // A dedicated QA reviewer's verdict on this worker's proof (opt-in), shown
+    // inline regardless of the active tab so the QA signal is never buried.
+    const review = agent.review ? html`
+      <div class="qa-note ${agent.review.passed ? "ok" : "warn"}"
+        title="QA reviewer verdict">
+        ${icon(agent.review.passed ? "check" : "exclamation-triangle")}
+        <span class="qa-label">QA ${agent.review.passed ? "pass" : "flag"}</span>
+        <span class="qa-text">${agent.review.note}</span>
+      </div>` : nothing;
+
     if (!showTabs) {
       // Running (or no proof): just the work + (if somehow present) the proof.
-      return html`${work}${hasProof ? result : nothing}`;
+      return html`${work}${hasProof ? result : nothing}${review}`;
     }
     return html`
       <div class="agent-tabs">
         <button class="${tab === "result" ? "on" : ""}" @click=${() => this._setAgentTab(agent.id, "result")}>Result</button>
         <button class="${tab === "work" ? "on" : ""}" @click=${() => this._setAgentTab(agent.id, "work")}>Work</button>
       </div>
-      ${tab === "result" ? result : work}`;
+      ${tab === "result" ? result : work}
+      ${review}`;
   }
 
   _renderAgentCard(agent) {
@@ -799,7 +823,9 @@ export class BaChatStage extends LitElement {
     // Running + finished workers are expanded by default (finished ones show
     // the Result|Work tab set); only not-yet-active cards need an explicit open.
     const open = this._openAgents.has(agent.id) || agent.state === "running" || agent.state === "done";
-    const roleClass = agent.role === "gather" ? "gather" : agent.role === "evaluator" ? "eval" : "worker";
+    const roleClass = agent.role === "gather" ? "gather"
+      : agent.role === "evaluator" ? "eval"
+      : agent.role === "qa" ? "qa" : "worker";
     const badge = agent.state === "running"
       ? html`<span class="spin">${icon("arrow-path")}</span>`
       : (agent.ok === false ? "✗" : "✓");

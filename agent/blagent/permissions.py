@@ -60,6 +60,11 @@ _DEFAULT_MATRIX: dict[str, dict[str, Any]] = {
     "planner": {"default": DISABLED},
     # Context-blind budget judge (reviewer.py): a pure adjudicator — no tools.
     "reviewer": {"default": DISABLED},
+    # Dedicated per-worker QA reviewer: read-only state probes to judge a
+    # worker's proof against the actual scene (evidence, not narrative).
+    "qa": {"default": DISABLED, "tools": {
+        "get_*": ALLOW, "*summary*": ALLOW, "*diagnostics*": ALLOW,
+        "skills": ALLOW, "media_io": ALLOW}},
     # Independent verifier: read-only state probes only.
     "auditor": {"default": DISABLED, "tools": {
         "get_*": ALLOW, "*summary*": ALLOW, "*diagnostics*": ALLOW,
