@@ -124,7 +124,13 @@ def main():
             push_view(view(done_worker, ["orch-1:w:t1"]))
             page.wait_for_timeout(300)
             text = page.evaluate(_DOM_TEXT)
-            _check("worker: proof shown on done", "PROOF_DONE_42" in text)
+            _check("worker: proof shown on done (Result tab default)", "PROOF_DONE_42" in text)
+            _check("done worker: Result tab hides the work timeline", "execute_blender_code" not in text)
+            # switch to the Work tab -> timeline (tool calls) appears
+            page.evaluate("""() => { const find=(r)=>{for(const b of r.querySelectorAll('button')){if((b.textContent||'').trim()==='Work')return b; const s=b.shadowRoot&&find(b.shadowRoot); } for(const e of r.querySelectorAll('*')){if(e.shadowRoot){const f=find(e.shadowRoot); if(f)return f;}} return null;}; const b=find(document); if(b)b.click(); }""")
+            page.wait_for_timeout(300)
+            text = page.evaluate(_DOM_TEXT)
+            _check("done worker: Work tab shows the activity timeline", "execute_blender_code" in text)
 
             # --- session switch clears the autonomy view (no jumble) + busy ---
             _drive(page, "store._handle({type:'session_loaded', session_id:'plain-1', records:[], media:[]});")

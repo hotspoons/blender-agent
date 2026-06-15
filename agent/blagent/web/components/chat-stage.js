@@ -65,6 +65,7 @@ export class BaChatStage extends LitElement {
     _approvals: { state: true },
     _autonomy: { state: true },
     _openAgents: { state: true },
+    _agentTab: { state: true },     // agent id -> "result" | "work"
   };
 
   constructor() {
@@ -89,6 +90,7 @@ export class BaChatStage extends LitElement {
     this._lightbox = null;
     this._autonomy = store.state.autonomy;
     this._openAgents = new Set();   // agent ids the user expanded
+    this._agentTab = {};            // agent id -> active result/work tab
   }
 
   connectedCallback() {
@@ -406,6 +408,13 @@ export class BaChatStage extends LitElement {
       background: var(--surface-muted); border: 1px solid var(--border);
       border-radius: var(--radius-sm); overflow-wrap: anywhere; }
     .agent-task-full svg { width: 13px; height: 13px; flex-shrink: 0; margin-top: 2px; color: var(--text-muted); }
+    /* Result | Work tab set for a finished worker. */
+    .agent-tabs { display: flex; gap: 4px; margin: 0 12px 8px 12px; border-bottom: 1px solid var(--border); }
+    .agent-tabs button { background: transparent; border: none; border-bottom: 2px solid transparent;
+      color: var(--text-muted); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+      padding: 6px 12px; margin-bottom: -1px; }
+    .agent-tabs button:hover { color: var(--text); }
+    .agent-tabs button.on { color: var(--accent); border-bottom-color: var(--accent); }
     .agent .state { display: inline-flex; }
     .agent .state .spin { animation: spin 1.4s linear infinite; }
     .agent .state.ok { color: var(--success); }
@@ -597,7 +606,8 @@ export class BaChatStage extends LitElement {
     return splitThinking(text).map((part, index) => {
       if (part.type === "text") {
         if (!part.body.trim()) return nothing;
-        return html`<div class="wtext ${streaming ? "stream" : ""}">${part.body}</div>`;
+        // Worker prose is markdown (tables, headings, lists) like the main view.
+        return html`<div class="wtext ${streaming ? "stream" : ""}">${unsafeHtml(renderMarkdown(part.body))}</div>`;
       }
       const key = `${keyPrefix}:${index}`;
       const live = part.open;
@@ -734,9 +744,61 @@ export class BaChatStage extends LitElement {
       </div>`;
   }
 
+  _setAgentTab(id, tab) {
+    this._agentTab = { ...this._agentTab, [id]: tab };
+  }
+
+  /** The expanded worker card body. A finished worker with a proof gets a
+   *  Result | Work tab set (Result = the proof, Work = the activity timeline)
+   *  so the two aren't stacked/duplicated; a running worker shows the live
+   *  Work directly. */
+  _renderAgentBody(agent) {
+    const hasProof = !!(agent.proof && String(agent.proof).trim());
+    const showTabs = agent.state !== "running" && hasProof;
+    const tab = showTabs ? (this._agentTab[agent.id] || "result") : "work";
+
+    const work = html`
+      <div class="agent-task-full" title="The task delegated to this worker">
+        ${icon("clipboard")} ${agent.task || agent.id}</div>
+      ${agent.timeline?.length ? html`
+        <div class="agent-activity">
+          ${agent.timeline.map((e, i) => {
+            if (e.kind === "text") return this._renderWorkerText(e.content, `${agent.id}:t${i}`);
+            if (e.kind === "injected") return html`<div class="winject">⟶ ${e.content}</div>`;
+            return this._renderWorkerCall(agent.id, e.call_id, agent.calls[e.call_id]);
+          })}
+          ${agent.stream ? this._renderWorkerText(agent.stream, `${agent.id}:stream`, true) : nothing}
+          ${agent.drafting ? html`<div class="wdraft">${icon("arrow-path")} drafting ${agent.drafting.name || ""}…</div>` : nothing}
+        </div>` : nothing}
+      ${agent.media?.length ? html`
+        <div class="agent-activity media-strip">
+          ${agent.media.map((mm) => html`<img src=${mm.data_url} alt=${mm.id} title=${mm.id}
+            @click=${() => { this._lightbox = { src: mm.data_url, alt: mm.id }; }}>`)}
+        </div>` : nothing}
+      ${agent.artifacts?.length ? html`
+        <div class="agent-events">
+          ${agent.artifacts.map((p) => html`<span class="ev-chip art">${p.split("/").pop()}</span>`)}
+        </div>` : nothing}`;
+
+    const result = html`<div class="proof">${unsafeHtml(renderMarkdown(String(agent.proof || "")))}</div>`;
+
+    if (!showTabs) {
+      // Running (or no proof): just the work + (if somehow present) the proof.
+      return html`${work}${hasProof ? result : nothing}`;
+    }
+    return html`
+      <div class="agent-tabs">
+        <button class="${tab === "result" ? "on" : ""}" @click=${() => this._setAgentTab(agent.id, "result")}>Result</button>
+        <button class="${tab === "work" ? "on" : ""}" @click=${() => this._setAgentTab(agent.id, "work")}>Work</button>
+      </div>
+      ${tab === "result" ? result : work}`;
+  }
+
   _renderAgentCard(agent) {
     if (!agent) return nothing;
-    const open = this._openAgents.has(agent.id) || agent.state === "running";
+    // Running + finished workers are expanded by default (finished ones show
+    // the Result|Work tab set); only not-yet-active cards need an explicit open.
+    const open = this._openAgents.has(agent.id) || agent.state === "running" || agent.state === "done";
     const roleClass = agent.role === "gather" ? "gather" : agent.role === "evaluator" ? "eval" : "worker";
     const badge = agent.state === "running"
       ? html`<span class="spin">${icon("arrow-path")}</span>`
@@ -749,29 +811,7 @@ export class BaChatStage extends LitElement {
           <span class="task">${agent.task || agent.id}</span>
           <span class="state ${agent.ok === false ? "fail" : agent.state === "done" ? "ok" : ""}">${badge}</span>
         </div>
-        ${open ? html`
-          <div class="agent-task-full" title="The task delegated to this worker">
-            ${icon("clipboard")} ${agent.task || agent.id}</div>` : nothing}
-        ${open && agent.timeline?.length ? html`
-          <div class="agent-activity">
-            ${agent.timeline.map((e, i) => {
-              if (e.kind === "text") return this._renderWorkerText(e.content, `${agent.id}:t${i}`);
-              if (e.kind === "injected") return html`<div class="winject">⟶ ${e.content}</div>`;
-              return this._renderWorkerCall(agent.id, e.call_id, agent.calls[e.call_id]);
-            })}
-            ${agent.stream ? this._renderWorkerText(agent.stream, `${agent.id}:stream`, true) : nothing}
-            ${agent.drafting ? html`<div class="wdraft">${icon("arrow-path")} drafting ${agent.drafting.name || ""}…</div>` : nothing}
-          </div>` : nothing}
-        ${open && agent.media?.length ? html`
-          <div class="agent-activity media-strip">
-            ${agent.media.map((mm) => html`<img src=${mm.data_url} alt=${mm.id} title=${mm.id}
-              @click=${() => { this._lightbox = { src: mm.data_url, alt: mm.id }; }}>`)}
-          </div>` : nothing}
-        ${agent.proof ? html`<div class="proof">${agent.proof}</div>` : nothing}
-        ${open && agent.artifacts?.length ? html`
-          <div class="agent-events">
-            ${agent.artifacts.map((p) => html`<span class="ev-chip art">${p.split("/").pop()}</span>`)}
-          </div>` : nothing}
+        ${open ? this._renderAgentBody(agent) : nothing}
         ${agent.state === "running" ? html`
           <div class="worker-controls">
             ${canInject ? html`
