@@ -87,14 +87,16 @@ def _classify(messages: list[dict[str, Any]]) -> str:
             system = str(m.get("content", "")).lower()
             break
     has_tool_result = any(m.get("role") == "tool" for m in messages)
-    if "decompose" in system and "objective" in system:
-        return "draft"
-    if "planning half" in system or '"tasks"' in system:
+    # Specific orchestration roles first (they also mention objectives/acceptance).
+    if "planning half" in system:
         return "planner"
-    if "evaluator" in system:
-        return "evaluator"
     if "independent" in system and "audit" in system:
         return "auditor"
+    if "evaluator" in system:
+        return "evaluator"
+    # The draft/intake prompt: turns a goal into OBJECTIVES with ACCEPTANCE.
+    if "objectives" in system and "acceptance" in system:
+        return "draft"
     # A worker turn: the Blender working instructions / autonomous-worker mission.
     if "autonomous worker" in system or "blender" in system:
         return "worker_proof" if has_tool_result else "worker_tool"
