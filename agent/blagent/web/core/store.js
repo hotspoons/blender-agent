@@ -204,6 +204,11 @@ class Store extends EventTarget {
             toolOrder: [],
             pendingConfirm: null,
             error: "",
+            // Switching sessions: clear the orchestrator/swarm view so a prior
+            // run's objectives + worker cards don't bleed into the new session.
+            autonomy: this._freshAutonomy(),
+            draftPending: false,
+            busy: false,
           });
         }
         this._set(patch);
@@ -316,10 +321,12 @@ class Store extends EventTarget {
         break;
       }
       case "autonomy_accepted":
-        // Fresh objectives run: reset the live autonomy view (keep no draft).
+        // Fresh objectives run: adopt the run's session id (so abort/stop and
+        // updates target the right session) and reset the live autonomy view.
         this._set({
+          sessionId: msg.session_id || this.state.sessionId,
           busy: true, error: "",
-          autonomy: { objectives: [], agents: {}, agentOrder: [], rounds: [], gathered: null, done: null, draft: null, audit: null },
+          autonomy: this._freshAutonomy(),
         });
         break;
       case "objectives_draft": {
@@ -467,6 +474,14 @@ class Store extends EventTarget {
       this.send({ type: "list_sessions" });
     }
     return result;
+  }
+
+  /** The empty live-autonomy view (used on a fresh run and on session switch). */
+  _freshAutonomy() {
+    return {
+      objectives: [], agents: {}, agentOrder: [], rounds: [],
+      gathered: null, done: null, draft: null, audit: null, currentRound: 0,
+    };
   }
 
   newSession() {

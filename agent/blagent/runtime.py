@@ -24,7 +24,7 @@ from typing import Any, Awaitable, Callable
 
 from .agent_tools import AskUserTool, ContinueWorkingTool, MediaTool, SetAutonomyTool, SkillsTool
 from .backend import PythonToolBackend, ToolBackend
-from .engine import AgentEngine
+from .engine import AgentEngine, _strip_thinking
 from .permissions import ToolPermissions, WORKER_DENY
 from .profile import AgentProfile, blender_profile
 from .llm import LlmClient, LlmError, LocalLlmBridgeClient, OpenAiHttpClient
@@ -187,7 +187,10 @@ class ChildSessionRunner:
         proof = ""
         for record in reversed(records):
             if record.get("role") == "assistant":
-                content = str(record.get("content", "")).strip()
+                # Strip the reasoning trace: the proof is the worker's CLAIM,
+                # shown in the card and judged by the evaluator — not its
+                # chain-of-thought. (A think-only round strips to empty -> skip.)
+                content = _strip_thinking(str(record.get("content", ""))).strip()
                 if content:
                     proof = content
                     break
