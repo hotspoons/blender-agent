@@ -489,24 +489,24 @@ class _TestServerMixin:
         self.assertEqual(data["value"], 2)
 
     def test_get_blendfile_summary_datablocks(self) -> None:
-        data = self._test_tool("get_blendfile_summary_datablocks")
+        data = self._test_tool("blendfile", {"verb": "datablocks", "args": {}})
         self.assertEqual(data["scene_name"], "Scene")
         self.assertIn("Layout", data["workspaces"])
         self.assertIsInstance(data["datablock_counts"], dict)
 
     def test_get_blendfile_summary_missing_files(self) -> None:
-        data = self._test_tool("get_blendfile_summary_missing_files")
+        data = self._test_tool("blendfile", {"verb": "missing", "args": {}})
         self.assertIsInstance(data["missing_files"], list)
         self.assertEqual(data["missing_files"], [])
 
     def test_get_blendfile_summary_of_linked_libraries(self) -> None:
-        data = self._test_tool("get_blendfile_summary_of_linked_libraries")
+        data = self._test_tool("blendfile", {"verb": "libraries", "args": {}})
         self.assertEqual(data["total_library_count"], 0)
         self.assertEqual(data["direct_libraries"], [])
         self.assertEqual(data["indirect_libraries"], [])
 
     def test_get_blendfile_summary_path_info(self) -> None:
-        data = self._test_tool("get_blendfile_summary_path_info")
+        data = self._test_tool("blendfile", {"verb": "path", "args": {}})
         self.assertEqual(data["filepath"], "")
         self.assertFalse(data["is_saved"])
         self.assertIsNone(data["age_seconds"])
@@ -514,7 +514,7 @@ class _TestServerMixin:
         self.assertIsNone(data["backups"])
 
     def test_get_blendfile_summary_usage_guess(self) -> None:
-        data = self._test_tool("get_blendfile_summary_usage_guess")
+        data = self._test_tool("blendfile", {"verb": "usage", "args": {}})
         guesses = data["usage_guesses"]
         self.assertIn("Animation", guesses)
         self.assertIn("Modeling", guesses)
@@ -562,23 +562,17 @@ class _TestServerMixin:
         return (width, height)
 
     def test_get_screenshot_of_area_as_image(self) -> None:
-        self._call_tool_screenshot("get_screenshot_of_area_as_image", {
-            "area_ui_type": "VIEW_3D",
-        })
+        self._call_tool_screenshot("capture", {"verb": "screenshot", "args": {"scope": "area", "area_ui_type": "VIEW_3D"}})
 
     def test_get_screenshot_of_area_as_image_error(self) -> None:
-        self._call_tool_expect_error("get_screenshot_of_area_as_image", {
-            "area_ui_type": "NONEXISTENT",
-        })
+        self._call_tool_expect_error("capture", {"verb": "screenshot", "args": {"scope": "area", "area_ui_type": "NONEXISTENT"}})
 
     def test_get_screenshot_of_window_as_image(self) -> None:
-        self._call_tool_screenshot("get_screenshot_of_window_as_image")
+        self._call_tool_screenshot("capture", {"verb": "screenshot", "args": {}})
 
     def test_get_screenshot_of_window_as_image_size_limit(self) -> None:
         size_limit = 16 * 1024  # 16 KB.
-        content = self._call_tool_screenshot("get_screenshot_of_window_as_image", {
-            "size_limit_in_bytes": size_limit,
-        })
+        content = self._call_tool_screenshot("capture", {"verb": "screenshot", "args": {"size_limit": size_limit}})
         if self._interactive:
             image_data = content[0].get("data", "")
             raw_bytes = base64.b64decode(image_data)
@@ -588,7 +582,7 @@ class _TestServerMixin:
             )
 
     def test_get_screenshot_of_window_as_json(self) -> None:
-        data = self._test_tool("get_screenshot_of_window_as_json")
+        data = self._test_tool("scene", {"verb": "layout", "args": {}})
         if not self._interactive:
             self.assertEqual(data["status"], "error")
         else:
@@ -602,42 +596,29 @@ class _TestServerMixin:
     # CLI tools.
 
     def test_execute_blender_code_for_cli(self) -> None:
-        data = self._test_tool("execute_blender_code_for_cli", {
-            "blend_file": self._blend_path,
-            "code": "result = {'version': 1}",
-        })
+        data = self._test_tool("execute_blender_code", {"blend_file": self._blend_path, "code": "result = {'version': 1}"})
         self.assertEqual(data["version"], 1)
 
     def test_get_blendfile_summary_datablocks_for_cli(self) -> None:
-        data = self._test_tool("get_blendfile_summary_datablocks_for_cli", {
-            "blend_file": self._blend_path,
-        })
+        data = self._test_tool("blendfile", {"verb": "datablocks", "args": {"blend_file": self._blend_path}})
         self.assertEqual(data["scene_name"], "Scene")
         self.assertIsInstance(data["datablock_counts"], dict)
 
     def test_get_blendfile_summary_missing_files_for_cli(self) -> None:
-        data = self._test_tool("get_blendfile_summary_missing_files_for_cli", {
-            "blend_file": self._blend_path,
-        })
+        data = self._test_tool("blendfile", {"verb": "missing", "args": {"blend_file": self._blend_path}})
         self.assertEqual(data["missing_files"], [])
 
     def test_get_blendfile_summary_of_linked_libraries_for_cli(self) -> None:
-        data = self._test_tool("get_blendfile_summary_of_linked_libraries_for_cli", {
-            "blend_file": self._blend_path,
-        })
+        data = self._test_tool("blendfile", {"verb": "libraries", "args": {"blend_file": self._blend_path}})
         self.assertEqual(data["total_library_count"], 0)
 
     def test_get_blendfile_summary_path_info_for_cli(self) -> None:
-        data = self._test_tool("get_blendfile_summary_path_info_for_cli", {
-            "blend_file": self._blend_path,
-        })
+        data = self._test_tool("blendfile", {"verb": "path", "args": {"blend_file": self._blend_path}})
         self.assertTrue(data["is_saved"])
         self.assertTrue(data["filepath"].endswith(".blend"))
 
     def test_get_blendfile_summary_usage_guess_for_cli(self) -> None:
-        data = self._test_tool("get_blendfile_summary_usage_guess_for_cli", {
-            "blend_file": self._blend_path,
-        })
+        data = self._test_tool("blendfile", {"verb": "usage", "args": {"blend_file": self._blend_path}})
         guesses = data["usage_guesses"]
         self.assertIn("Animation", guesses)
         self.assertIn("Modeling", guesses)
@@ -646,7 +627,7 @@ class _TestServerMixin:
     # Object inspection tools.
 
     def test_get_object_detail_summary(self) -> None:
-        data = self._test_tool("get_object_detail_summary", {"name": "Cube"})
+        data = self._test_tool("scene", {"verb": "object", "args": {"name": "Cube"}})
         self.assertEqual(data["status"], "ok")
         self.assertEqual(data["name"], "Cube")
         self.assertEqual(data["type"], "MESH")
@@ -668,13 +649,13 @@ class _TestServerMixin:
         self.assertIn("Collection", data["collections"])
 
     def test_get_object_detail_summary_error(self) -> None:
-        data = self._test_tool("get_object_detail_summary", {"name": "NonExistent"})
+        data = self._test_tool("scene", {"verb": "object", "args": {"name": "NonExistent"}})
         self.assertEqual(data["status"], "error")
         self.assertIn("'NonExistent' not found", data["message"])
         self.assertIn("Cube", data["message"])
 
     def test_get_objects_summary(self) -> None:
-        data = self._test_tool("get_objects_summary")
+        data = self._test_tool("scene", {"verb": "objects", "args": {}})
         self.assertEqual(data, {
             "status": "ok",
             "scene_name": "Scene",
@@ -733,7 +714,7 @@ class _TestServerMixin:
     # Navigation tools.
 
     def test_jump_to_tab_by_name(self) -> None:
-        data = self._test_tool("jump_to_tab_by_name", {"name": "Layout"})
+        data = self._test_tool("viewport", {"verb": "tab", "args": {"name": "Layout"}})
         if not self._interactive:
             self.assertEqual(data["status"], "error")
             return
@@ -741,7 +722,7 @@ class _TestServerMixin:
         self.assertEqual(data["workspace"], "Layout")
 
     def test_jump_to_tab_by_space_type(self) -> None:
-        data = self._test_tool("jump_to_tab_by_space_type", {"space_type": "VIEW_3D"})
+        data = self._test_tool("viewport", {"verb": "tab", "args": {"space_type": "VIEW_3D"}})
         if not self._interactive:
             self.assertEqual(data["status"], "error")
             return
@@ -749,7 +730,7 @@ class _TestServerMixin:
         self.assertEqual(data["space_type"], "VIEW_3D")
 
     def test_jump_to_view3d_object_by_name(self) -> None:
-        data = self._test_tool("jump_to_view3d_object_by_name", {"name": "Cube"})
+        data = self._test_tool("viewport", {"verb": "focus", "args": {"name": "Cube"}})
         if not self._interactive:
             self.assertEqual(data["status"], "error")
             return
@@ -758,7 +739,7 @@ class _TestServerMixin:
         self.assertEqual(data["type"], "MESH")
 
     def test_jump_to_view3d_object_data_by_name(self) -> None:
-        data = self._test_tool("jump_to_view3d_object_data_by_name", {"name": "Cube"})
+        data = self._test_tool("viewport", {"verb": "focus", "args": {"target": "data", "name": "Cube"}})
         if not self._interactive:
             self.assertEqual(data["status"], "error")
             return
@@ -800,18 +781,14 @@ class _TestServerMixin:
 
     def test_render_thumbnail_to_path(self) -> None:
         self._set_cycles_cpu()
-        data = self._test_tool("render_thumbnail_to_path", {
-            "output_path": "thumb.png",
-        })
+        data = self._test_tool("capture", {"verb": "render", "args": {"quality": "thumbnail", "path": "thumb.png"}})
         self.assertEqual(data["status"], "ok")
         self.assertTrue(data["filepath"].endswith("thumb.png"))
         self._assert_valid_png(data["filepath"])
 
     def test_render_viewport_to_path(self) -> None:
         self._set_cycles_cpu()
-        data = self._test_tool("render_viewport_to_path", {
-            "output_path": "render.png",
-        })
+        data = self._test_tool("capture", {"verb": "render", "args": {"path": "render.png"}})
         self.assertEqual(data["status"], "ok")
         self.assertTrue(data["filepath"].endswith("render.png"))
         self._assert_valid_png(data["filepath"])
@@ -824,9 +801,7 @@ class _TestServerMixin:
         import base64
 
         self._set_cycles_cpu()
-        content = self._call_tool("render_viewport_to_path", {
-            "output_path": "render_attach.png",
-        })
+        content = self._call_tool("capture", {"verb": "render", "args": {"path": "render_attach.png"}})
         kinds = [item.get("type") for item in content]
         self.assertEqual(kinds[0], "text")
         self.assertIn(
@@ -931,9 +906,7 @@ class _TestServerMixin:
             "code": _python_fn_body_as_string(_setup_render_scene),
         })
 
-        data = self._test_tool("render_viewport_to_path", {
-            "output_path": "deferred_render.png",
-        })
+        data = self._test_tool("capture", {"verb": "render", "args": {"path": "deferred_render.png"}})
         self.assertEqual(data["status"], "ok")
         self.assertTrue(data["filepath"].endswith("deferred_render.png"))
         self._assert_valid_png(data["filepath"])
@@ -991,27 +964,24 @@ class _TestServerMixin:
     def test_jump_to_tab_by_name_error(self) -> None:
         if not self._interactive:
             return
-        data = self._test_tool("jump_to_tab_by_name", {"name": "NonExistent"})
+        data = self._test_tool("viewport", {"verb": "tab", "args": {"name": "NonExistent"}})
         self.assertEqual(data["status"], "error")
         self.assertIsInstance(data["available_workspaces"], list)
 
     def test_execute_blender_code_for_cli_error(self) -> None:
-        self._call_tool_expect_error("execute_blender_code_for_cli", {
-            "blend_file": self._blend_path,
-            "code": "raise ValueError('cli test error')",
-        })
+        self._call_tool_expect_error("execute_blender_code", {"blend_file": self._blend_path, "code": "raise ValueError('cli test error')"})
 
     def test_jump_to_view3d_object_by_name_error(self) -> None:
         if not self._interactive:
             return
-        data = self._test_tool("jump_to_view3d_object_by_name", {"name": "NonExistent"})
+        data = self._test_tool("viewport", {"verb": "focus", "args": {"name": "NonExistent"}})
         self.assertEqual(data["status"], "error")
         self.assertEqual(data["message"], "Object 'NonExistent' not found")
 
     def test_jump_to_view3d_object_data_by_name_error(self) -> None:
         if not self._interactive:
             return
-        data = self._test_tool("jump_to_view3d_object_data_by_name", {"name": "NonExistent"})
+        data = self._test_tool("viewport", {"verb": "focus", "args": {"target": "data", "name": "NonExistent"}})
         self.assertEqual(data["status"], "error")
         self.assertEqual(data["message"], "No object found with data named 'NonExistent'")
 
@@ -1033,9 +1003,7 @@ class _TestServerMixin:
             ),
         })
         # Jump to it with allow_edits enabled.
-        data = self._test_tool("jump_to_view3d_object_by_name", {
-            "name": "Cube", "allow_edits": True,
-        })
+        data = self._test_tool("viewport", {"verb": "focus", "args": {"name": "Cube", "allow_edits": True}})
         self.assertEqual(data["status"], "ok")
         self.assertEqual(data["object"], "Cube")
         # Verify the object is no longer hidden.
@@ -1062,9 +1030,7 @@ class _TestServerMixin:
             ),
         })
         # Jump to it via data name with allow_edits enabled.
-        data = self._test_tool("jump_to_view3d_object_data_by_name", {
-            "name": "Cube", "allow_edits": True,
-        })
+        data = self._test_tool("viewport", {"verb": "focus", "args": {"target": "data", "name": "Cube", "allow_edits": True}})
         self.assertEqual(data["status"], "ok")
         self.assertEqual(data["data_name"], "Cube")
         # Verify the object is no longer hidden.

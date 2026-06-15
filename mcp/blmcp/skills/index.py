@@ -89,7 +89,7 @@ class Skill:
                     "path": os.path.relpath(full, self.path),
                     "size": os.path.getsize(full),
                 })
-        found.sort(key=lambda f: f["path"])
+        found.sort(key=lambda f: str(f["path"]))
         return found
 
 
@@ -222,7 +222,7 @@ def _load_config() -> dict:
 
     path = os.path.expanduser(
         os.environ.get("BLENDER_MCP_SKILLS_CONFIG", _CONFIG_PATH_DEFAULT))
-    config = {"skill_dirs": [], "skill_repos": []}
+    config: dict[str, list[str]] = {"skill_dirs": [], "skill_repos": []}
     try:
         with open(path, encoding="utf-8") as fh:
             loaded = json.load(fh)

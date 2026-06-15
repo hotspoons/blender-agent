@@ -68,5 +68,5 @@ result = {"world": world.name}
 - If everything is washed out, look at view transform
   (`scene.view_settings.view_transform`, AgX vs Standard) before
   touching lights.
-- Use `render_thumbnail_to_path` for fast iteration; only do full
+- Use `capture("render", {path, quality: "thumbnail"})` for fast iteration; only do full
   renders once the balance looks right.

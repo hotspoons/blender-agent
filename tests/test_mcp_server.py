@@ -296,7 +296,7 @@ class TestDataFiles(unittest.TestCase):
 
 class TestSearchApiDocs(unittest.TestCase):
     """
-    Tests for the ``search_api_docs`` tool.
+    Tests for the ``docs("api", ...)`` verb.
     """
 
     def test_basic_lookup(self) -> None:
@@ -307,10 +307,7 @@ class TestSearchApiDocs(unittest.TestCase):
         # Match the canonical `.. module:: bpy.data` directive line,
         # which uniquely identifies `api/bpy.data.rst` regardless of
         # how many other files mention `bpy.data` in prose.
-        payload = _call_server_tool(
-            "search_api_docs",
-            {"query": "module:: bpy.data", "max_results": 5},
-        )
+        payload = _call_server_tool("docs", {"verb": "api", "args": {"query": "module:: bpy.data", "max_results": 5}})
         hits = payload["hits"]
         paths = [hit["path"] for hit in hits]
         self.assertIn("api/bpy.data.rst", paths)
@@ -324,7 +321,7 @@ class TestSearchApiDocs(unittest.TestCase):
 
 class TestSearchManualDocs(unittest.TestCase):
     """
-    Tests for the ``search_manual_docs`` tool.
+    Tests for the ``docs("manual", ...)`` verb.
     """
 
     def test_basic_lookup(self) -> None:
@@ -332,10 +329,7 @@ class TestSearchManualDocs(unittest.TestCase):
         Checks that a common manual term returns hits, all confined to
         the manual corpus.
         """
-        payload = _call_server_tool(
-            "search_manual_docs",
-            {"query": "modeling", "max_results": 3},
-        )
+        payload = _call_server_tool("docs", {"verb": "manual", "args": {"query": "modeling", "max_results": 3}})
         hits = payload["hits"]
         self.assertTrue(hits, "expected at least one manual hit for 'modeling'")
         for hit in hits:
@@ -528,24 +522,6 @@ class TestMCPServer(unittest.TestCase):
                 ),
             )
 
-    def test_cli_tools_require_blend_file(self) -> None:
-        """
-        Checks that every ``_for_cli`` tool requires a ``blend_file`` argument.
-        """
-        checked = 0
-        for tool in self._tools:
-            if not tool["name"].endswith("_for_cli"):
-                continue
-            schema = tool["inputSchema"]
-            required = schema.get("required", [])
-            self.assertIn(
-                "blend_file",
-                required,
-                "Tool {:s} does not require 'blend_file'".format(tool["name"]),
-            )
-            checked += 1
-        self.assertGreater(checked, 0, "No _for_cli tools found")
-
     def test_non_cli_tools_do_not_require_blend_file(self) -> None:
         """
         Checks that non-CLI tools do not require a ``blend_file`` argument.
@@ -561,22 +537,6 @@ class TestMCPServer(unittest.TestCase):
             )
             checked += 1
         self.assertGreater(checked, 0, "No non-CLI tools found")
-
-    def test_cli_tools_have_non_cli_twins(self) -> None:
-        """
-        Checks that every ``_for_cli`` tool has a matching non-CLI version.
-        """
-        checked = 0
-        for name in self._tools_by_name:
-            if not name.endswith("_for_cli"):
-                continue
-            self.assertIn(
-                name[:-8],
-                self._tools_by_name,
-                "Tool {:s} has no non-CLI twin".format(name),
-            )
-            checked += 1
-        self.assertGreater(checked, 0, "No _for_cli tools found")
 
 
 class TestMainConfiguration(unittest.TestCase):
@@ -805,7 +765,7 @@ class TestMainConfiguration(unittest.TestCase):
 
 class TestGetPythonAPIDocs(unittest.TestCase):
     """
-    Exercise the ``get_python_api_docs`` MCP tool end-to-end via a
+    Exercise the ``docs("lookup", ...)`` verb end-to-end via a
     subprocess server. Does not require Blender.
     """
 
@@ -817,9 +777,7 @@ class TestGetPythonAPIDocs(unittest.TestCase):
         (There is no standalone ``bpy.rst`` in the bundled docs; the top-level
         namespace is split into ``bpy.app``, ``bpy.context``, ``bpy.data`` etc.)
         """
-        payload = _call_server_tool(
-            "get_python_api_docs", {"identifier": "bpy.app"},
-        )
+        payload = _call_server_tool("docs", {"verb": "lookup", "args": {"identifier": "bpy.app"}})
         self.assertEqual(payload["kind"], "exact")
         self.assertTrue(payload["found"])
         self.assertEqual(payload["identifier"], "bpy.app")
@@ -834,9 +792,7 @@ class TestGetPythonAPIDocs(unittest.TestCase):
         pages (``index``, ``info_overview``, ``change_log``) filtered
         out.
         """
-        payload = _call_server_tool(
-            "get_python_api_docs", {"identifier": "*"},
-        )
+        payload = _call_server_tool("docs", {"verb": "lookup", "args": {"identifier": "*"}})
         self.assertEqual(payload["kind"], "namespace")
         self.assertTrue(payload["found"])
         self.assertEqual(payload["identifier"], "*")
@@ -855,9 +811,7 @@ class TestGetPythonAPIDocs(unittest.TestCase):
         children of ``bpy`` regardless of whether a root ``bpy.rst``
         exists. Same shape as plain ``bpy``, but explicit.
         """
-        payload = _call_server_tool(
-            "get_python_api_docs", {"identifier": "bpy.*"},
-        )
+        payload = _call_server_tool("docs", {"verb": "lookup", "args": {"identifier": "bpy.*"}})
         self.assertEqual(payload["kind"], "namespace")
         self.assertTrue(payload["found"])
         self.assertEqual(payload["identifier"], "bpy.*")
@@ -875,9 +829,7 @@ class TestGetPythonAPIDocs(unittest.TestCase):
         ``bmesh`` alone resolves to ``kind: exact``. ``bmesh.*`` must
         bypass the exact-match and return the child namespace listing.
         """
-        payload = _call_server_tool(
-            "get_python_api_docs", {"identifier": "bmesh.*"},
-        )
+        payload = _call_server_tool("docs", {"verb": "lookup", "args": {"identifier": "bmesh.*"}})
         self.assertEqual(payload["kind"], "namespace")
         self.assertTrue(payload["found"])
         self.assertEqual(payload["identifier"], "bmesh.*")
@@ -892,9 +844,7 @@ class TestGetPythonAPIDocs(unittest.TestCase):
         on disk, so the tool must list direct-child identifiers under
         a ``submodules`` key.
         """
-        payload = _call_server_tool(
-            "get_python_api_docs", {"identifier": "bpy"},
-        )
+        payload = _call_server_tool("docs", {"verb": "lookup", "args": {"identifier": "bpy"}})
         self.assertEqual(payload["kind"], "namespace")
         self.assertTrue(payload["found"])
         self.assertEqual(payload["identifier"], "bpy")
@@ -914,9 +864,7 @@ class TestGetPythonAPIDocs(unittest.TestCase):
         (``bpy.app``, ``bpy.app.handlers``, ...), so the tool should
         return them as suggestions with ``found: False``.
         """
-        payload = _call_server_tool(
-            "get_python_api_docs", {"identifier": "app"},
-        )
+        payload = _call_server_tool("docs", {"verb": "lookup", "args": {"identifier": "app"}})
         self.assertEqual(payload["kind"], "suggestions")
         self.assertFalse(payload["found"])
         self.assertEqual(payload["identifier"], "app")
@@ -935,9 +883,7 @@ class TestGetPythonAPIDocs(unittest.TestCase):
         lives inside ``bpy.props.rst`` as ``.. function:: IntProperty``.
         The tool should find and return that block under ``kind: definition``.
         """
-        payload = _call_server_tool(
-            "get_python_api_docs", {"identifier": "bpy.props.IntProperty"},
-        )
+        payload = _call_server_tool("docs", {"verb": "lookup", "args": {"identifier": "bpy.props.IntProperty"}})
         self.assertEqual(payload["kind"], "definition")
         self.assertTrue(payload["found"])
         self.assertEqual(payload["identifier"], "bpy.props.IntProperty")
@@ -951,9 +897,7 @@ class TestGetPythonAPIDocs(unittest.TestCase):
         Checks that an unknown identifier yields ``kind: missing`` with
         ``found: False`` and no content.
         """
-        payload = _call_server_tool(
-            "get_python_api_docs", {"identifier": "this.module.doesnt.exist"},
-        )
+        payload = _call_server_tool("docs", {"verb": "lookup", "args": {"identifier": "this.module.doesnt.exist"}})
         self.assertEqual(payload["kind"], "missing")
         self.assertFalse(payload["found"])
         self.assertEqual(payload["identifier"], "this.module.doesnt.exist")
@@ -967,9 +911,7 @@ class TestGetPythonAPIDocs(unittest.TestCase):
         ``partial`` payload listing the real definitions in that RST
         so the agent can retry.
         """
-        payload = _call_server_tool(
-            "get_python_api_docs", {"identifier": "bpy.props.IntegerProperty"},
-        )
+        payload = _call_server_tool("docs", {"verb": "lookup", "args": {"identifier": "bpy.props.IntegerProperty"}})
         self.assertEqual(payload["kind"], "partial")
         self.assertFalse(payload["found"])
         self.assertEqual(payload["identifier"], "bpy.props.IntegerProperty")
@@ -992,9 +934,7 @@ class TestGetPythonAPIDocs(unittest.TestCase):
         cap. The tool should return a bullet-list summary with a
         too-large header instead of the full file, and empty examples.
         """
-        payload = _call_server_tool(
-            "get_python_api_docs", {"identifier": "bpy.ops.object"},
-        )
+        payload = _call_server_tool("docs", {"verb": "lookup", "args": {"identifier": "bpy.ops.object"}})
         self.assertEqual(payload["kind"], "exact")
         self.assertTrue(payload["found"])
         self.assertEqual(payload["examples"], [])
@@ -1024,9 +964,7 @@ class TestGetPythonAPIDocs(unittest.TestCase):
         character of the missing tail so an agent that typoed a class
         name still gets a focused near-miss list.
         """
-        payload = _call_server_tool(
-            "get_python_api_docs", {"identifier": "bpy.types.Scne"},
-        )
+        payload = _call_server_tool("docs", {"verb": "lookup", "args": {"identifier": "bpy.types.Scne"}})
         self.assertEqual(payload["kind"], "partial")
         self.assertFalse(payload["found"])
         self.assertEqual(payload["parent"], "bpy.types")
@@ -1057,9 +995,7 @@ class TestGetPythonAPIDocs(unittest.TestCase):
         examples. The tool should surface each referenced file's content
         in an ``examples`` list, deduplicated and with stable ordering.
         """
-        payload = _call_server_tool(
-            "get_python_api_docs", {"identifier": "bpy.app.handlers"},
-        )
+        payload = _call_server_tool("docs", {"verb": "lookup", "args": {"identifier": "bpy.app.handlers"}})
         self.assertEqual(payload["kind"], "exact")
         self.assertTrue(payload["found"])
         examples = payload["examples"]
@@ -1098,9 +1034,7 @@ class TestGetPythonAPIDocs(unittest.TestCase):
         the tool should return an empty ``examples`` list for shape
         stability.
         """
-        payload = _call_server_tool(
-            "get_python_api_docs", {"identifier": "bpy.app"},
-        )
+        payload = _call_server_tool("docs", {"verb": "lookup", "args": {"identifier": "bpy.app"}})
         self.assertEqual(payload["kind"], "exact")
         self.assertEqual(payload["examples"], [])
 

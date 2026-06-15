@@ -257,7 +257,7 @@ _WORKER_TASK_TEMPLATE = (
     "created, with counts.\n\n"
     "NOTE: your Blender runs HEADLESS (no GUI) — viewport screenshot tools do "
     "not work here. To show your work visually, RENDER an image (media_io with "
-    "verb 'render', or render_thumbnail_to_path), don't try to screenshot."
+    "verb 'render', or capture with verb 'render'), don't try to screenshot."
 )
 
 

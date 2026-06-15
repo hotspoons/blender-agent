@@ -222,14 +222,133 @@ EXPECTED_TOOLS = [
         }
     },
     {
+        "name": "blendfile",
+        "description": "\n"
+        "        Summarise a .blend file. The *verb* selects the aspect; pass\n"
+        "        ``blend_file`` in args to inspect a file on disk in a background\n"
+        "        Blender (``--background``) instead of the connected session.\n"
+        "\n"
+        "        Aspects (args = {} for the live session, or {blend_file}):\n"
+        "        - blendfile(\"datablocks\", {...}) \u2014 data-block counts, active\n"
+        "          workspace, render engine.\n"
+        "        - blendfile(\"path\", {...}) \u2014 fast path/save-status/age/backups.\n"
+        "        - blendfile(\"usage\", {...}) \u2014 guess primary use-cases\n"
+        "          (animation, modeling, rendering, ...) scored 0-100.\n"
+        "        - blendfile(\"missing\", {...}) \u2014 external references missing from\n"
+        "          disk (images, libraries, fonts, sounds, clips, caches, sequences).\n"
+        "        - blendfile(\"libraries\", {...}) \u2014 tree of directly and indirectly\n"
+        "          linked library files.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "verb": {
+                    "title": "Verb",
+                    "type": "string"
+                },
+                "args": {
+                    "additionalProperties": True,
+                    "title": "Args",
+                    "type": "object"
+                }
+            },
+            "required": [
+                "verb",
+                "args"
+            ],
+            "title": "blendfileArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "capture",
+        "description": "\n"
+        "        See the scene as pixels. One tool, verb-dispatched (args in {}):\n"
+        "\n"
+        "        - capture(\"screenshot\", {scope?: \"window\"|\"area\", area_ui_type?,\n"
+        "          size_limit?}) \u2014 PNG of the Blender UI. scope defaults to\n"
+        "          \"window\"; for \"area\" pass area_ui_type (the area's ui_type,\n"
+        "          e.g. \"VIEW_3D\"). size_limit caps bytes (0 = MCP message limit).\n"
+        "        - capture(\"render\", {path, quality?: \"full\"|\"thumbnail\"}) \u2014\n"
+        "          render the scene to *path* and attach the image so vision\n"
+        "          agents see it. quality \"full\" (default) uses current render\n"
+        "          settings; \"thumbnail\" is a fast, low-quality preview.\n"
+        "\n"
+        "        For deliverable files the user can download, prefer media_io(...)\n"
+        "        if the media extension is installed. Run `welcome` first if you\n"
+        "        have not this session.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "verb": {
+                    "title": "Verb",
+                    "type": "string"
+                },
+                "args": {
+                    "additionalProperties": True,
+                    "title": "Args",
+                    "type": "object"
+                }
+            },
+            "required": [
+                "verb",
+                "args"
+            ],
+            "title": "captureArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "docs",
+        "description": "\n"
+        "        Consult the bundled Blender docs before writing or debugging bpy\n"
+        "        code. One tool, verb-dispatched (args in {}):\n"
+        "\n"
+        "        - docs(\"api\", {query, max_results?, context?, index?}) \u2014\n"
+        "          full-text search of the Python API reference. Hits carry\n"
+        "          path, text, breadcrumb, index, score. Tokens are matched\n"
+        "          case-insensitively in any order; stop-words dropped. Use\n"
+        "          context to widen surrounding paragraphs; re-call with index\n"
+        "          (same query) to widen one hit to its enclosing section.\n"
+        "        - docs(\"manual\", {query, max_results?, context?, index?}) \u2014\n"
+        "          same, over the Blender user manual (concepts, workflows).\n"
+        "        - docs(\"lookup\", {identifier}) \u2014 exact docs for a fully-qualified\n"
+        "          name (e.g. \"bpy.types.Scene.frame_current\"). Trailing \"*\"\n"
+        "          discovers a namespace: \"*\" lists top-level modules, \"bpy.*\"\n"
+        "          lists direct children. Returns kind/found/identifier plus\n"
+        "          content/examples/submodules/suggestions depending on the match.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "verb": {
+                    "title": "Verb",
+                    "type": "string"
+                },
+                "args": {
+                    "additionalProperties": True,
+                    "title": "Args",
+                    "type": "object"
+                }
+            },
+            "required": [
+                "verb",
+                "args"
+            ],
+            "title": "docsArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "execute_blender_code",
         "description": "\n"
-        "        Execute Python code in the connected Blender instance.\n"
+        "        Execute Python code in Blender. With full access to ``bpy``; to\n"
+        "        return data, assign a JSON-serialisable dict to a variable named\n"
+        "        ``result``.\n"
         "\n"
-        "        The code runs in Blender's Python environment with full access to ``bpy``.\n"
-        "        To return data, assign a JSON-serialisable dict to a variable named ``result``.\n"
-        "        Deferred completion via ``check_is_finished`` is only supported by the\n"
-        "        interactive addon server, and is rejected in background mode.\n"
+        "        Without *blend_file* the code runs in the connected interactive\n"
+        "        Blender instance (deferred completion via ``check_is_finished``\n"
+        "        is supported here). Pass *blend_file* to instead open that file\n"
+        "        with ``blender --background`` and run the code in a one-shot\n"
+        "        background process (no deferred completion).\n"
         "        \n"
         "\n"
         "FIRST ACTION this session: call the `welcome` tool before this one. It lists the skills installed right now (rigging, media, ...) and the conventions these tools assume - skipping it means you won't know those skills exist or how this toolset expects to be driven.",
@@ -238,6 +357,18 @@ EXPECTED_TOOLS = [
                 "code": {
                     "title": "Code",
                     "type": "string"
+                },
+                "blend_file": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Blend File"
                 }
             },
             "required": [
@@ -248,683 +379,47 @@ EXPECTED_TOOLS = [
         }
     },
     {
-        "name": "execute_blender_code_for_cli",
+        "name": "scene",
         "description": "\n"
-        "        Execute Python code in a background Blender process.\n"
+        "        Read the live scene \u2014 the inspect-before-acting entry point. One\n"
+        "        tool, verb-dispatched (args in {}):\n"
         "\n"
-        "        Opens *blend_file* with ``blender --background`` and runs *code*.\n"
-        "        Assign a dict to ``result`` to return data.\n"
+        "        - scene(\"objects\", {}) \u2014 the scene's collection hierarchy and\n"
+        "          their objects (name, type, parent, data name, selection,\n"
+        "          visibility) plus nested child collections. START HERE.\n"
+        "        - scene(\"object\", {name}) \u2014 structured detail for one object:\n"
+        "          type, transforms, parent, children, modifiers, constraints,\n"
+        "          materials, visibility, data-block name, collections.\n"
+        "        - scene(\"mesh\", {name, evaluated?}) \u2014 topology / printability\n"
+        "          report: vert/edge/face counts, holes vs non-manifold vs\n"
+        "          degenerate triage, boundary loops, is_watertight, volume,\n"
+        "          world dimensions/bbox, scale-applied and normals-consistent\n"
+        "          flags. evaluated defaults true (modifiers applied); pass\n"
+        "          false for the raw base mesh.\n"
+        "        - scene(\"layout\", {}) \u2014 JSON of the window layout, areas, active\n"
+        "          object, and selection (no pixels; use capture(...) for an image).\n"
+        "\n"
+        "        Run `welcome` first if you have not this session.\n"
         "        \n"
         "\n"
         "FIRST ACTION this session: call the `welcome` tool before this one. It lists the skills installed right now (rigging, media, ...) and the conventions these tools assume - skipping it means you won't know those skills exist or how this toolset expects to be driven.",
         "inputSchema": {
             "properties": {
-                "blend_file": {
-                    "title": "Blend File",
+                "verb": {
+                    "title": "Verb",
                     "type": "string"
                 },
-                "code": {
-                    "title": "Code",
-                    "type": "string"
+                "args": {
+                    "additionalProperties": True,
+                    "title": "Args",
+                    "type": "object"
                 }
             },
             "required": [
-                "blend_file",
-                "code"
+                "verb",
+                "args"
             ],
-            "title": "execute_blender_code_for_cliArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "get_blendfile_summary_datablocks",
-        "description": "\n"
-        "        Return a summary of the blend file: data-block counts, active workspace, and render engine.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {},
-            "title": "get_blendfile_summary_datablocksArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "get_blendfile_summary_datablocks_for_cli",
-        "description": "\n"
-        "        Return a data-block summary by opening *blend_file* in background Blender.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "blend_file": {
-                    "title": "Blend File",
-                    "type": "string"
-                }
-            },
-            "required": [
-                "blend_file"
-            ],
-            "title": "get_blendfile_summary_datablocks_for_cliArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "get_blendfile_summary_missing_files",
-        "description": "\n"
-        "        Report external file references that are missing from disk\n"
-        "        (images, libraries, fonts, sounds, movie clips, caches, sequences).\n"
-        "        ",
-        "inputSchema": {
-            "properties": {},
-            "title": "get_blendfile_summary_missing_filesArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "get_blendfile_summary_missing_files_for_cli",
-        "description": "\n"
-        "        Report missing file references by opening *blend_file* in background Blender.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "blend_file": {
-                    "title": "Blend File",
-                    "type": "string"
-                }
-            },
-            "required": [
-                "blend_file"
-            ],
-            "title": "get_blendfile_summary_missing_files_for_cliArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "get_blendfile_summary_of_linked_libraries",
-        "description": "\n"
-        "        Return a tree of directly and indirectly linked library files.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {},
-            "title": "get_blendfile_summary_of_linked_librariesArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "get_blendfile_summary_of_linked_libraries_for_cli",
-        "description": "\n"
-        "        Return linked-library info by opening *blend_file* in background Blender.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "blend_file": {
-                    "title": "Blend File",
-                    "type": "string"
-                }
-            },
-            "required": [
-                "blend_file"
-            ],
-            "title": "get_blendfile_summary_of_linked_libraries_for_cliArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "get_blendfile_summary_path_info",
-        "description": "\n"
-        "        Simple/fast access to the blend file's path, save status, age, and backups.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {},
-            "title": "get_blendfile_summary_path_infoArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "get_blendfile_summary_path_info_for_cli",
-        "description": "\n"
-        "        Return path info by opening *blend_file* in background Blender.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "blend_file": {
-                    "title": "Blend File",
-                    "type": "string"
-                }
-            },
-            "required": [
-                "blend_file"
-            ],
-            "title": "get_blendfile_summary_path_info_for_cliArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "get_blendfile_summary_usage_guess",
-        "description": "\n"
-        "        Guess the primary use-cases of the current blend file (scored 0-100 with certainty).\n"
-        "        ",
-        "inputSchema": {
-            "properties": {},
-            "title": "get_blendfile_summary_usage_guessArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "get_blendfile_summary_usage_guess_for_cli",
-        "description": "\n"
-        "        Guess use-cases by opening *blend_file* in background Blender.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "blend_file": {
-                    "title": "Blend File",
-                    "type": "string"
-                }
-            },
-            "required": [
-                "blend_file"
-            ],
-            "title": "get_blendfile_summary_usage_guess_for_cliArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "get_mesh_diagnostics",
-        "description": "\n"
-        "        Return a topology / printability report for a mesh object.\n"
-        "\n"
-        "        Answers \"is this watertight / printable?\" in one call: vert/edge/face\n"
-        "        counts; the triage of open boundary edges (holes/openings) vs\n"
-        "        non-manifold edges (>2 faces or wire) vs degenerate faces; the number\n"
-        "        of distinct boundary loops; an ``is_watertight`` flag; bmesh volume;\n"
-        "        world-space dimensions and bounding box; and whether scale is applied\n"
-        "        and normals are consistent.\n"
-        "\n"
-        "        Useful before a boolean, before export, or after applying a modifier\n"
-        "        stack. With *evaluated* True (default) it reports the geometry you\n"
-        "        would export (modifiers applied); set it False to inspect the raw\n"
-        "        base mesh.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "name": {
-                    "title": "Name",
-                    "type": "string"
-                },
-                "evaluated": {
-                    "default": True,
-                    "title": "Evaluated",
-                    "type": "boolean"
-                }
-            },
-            "required": [
-                "name"
-            ],
-            "title": "get_mesh_diagnosticsArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "get_object_detail_summary",
-        "description": "\n"
-        "        Return a structured summary of the object identified by *name*.\n"
-        "\n"
-        "        Includes type, transforms, parent, children, modifiers, constraints,\n"
-        "        materials, visibility, data-block name, and collections.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "name": {
-                    "title": "Name",
-                    "type": "string"
-                }
-            },
-            "required": [
-                "name"
-            ],
-            "title": "get_object_detail_summaryArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "get_objects_summary",
-        "description": "\n"
-        "        Return the scene's collection hierarchy and their objects.\n"
-        "\n"
-        "        Each collection lists its objects (name, type, parent, data name,\n"
-        "        selection, visibility) and nested child collections.\n"
-        "        \n"
-        "\n"
-        "FIRST ACTION this session: call the `welcome` tool before this one. It lists the skills installed right now (rigging, media, ...) and the conventions these tools assume - skipping it means you won't know those skills exist or how this toolset expects to be driven.",
-        "inputSchema": {
-            "properties": {},
-            "title": "get_objects_summaryArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "get_python_api_docs",
-        "description": "\n"
-        "        Return the Blender Python API docs for *identifier*, or list\n"
-        "        modules matching a trailing-``*`` discovery pattern.\n"
-        "\n"
-        "        *identifier* should be a fully-qualified Python name (e.g.\n"
-        "        ``bpy.app`` or ``bpy.types.Scene.frame_current``).\n"
-        "        The trailing-``*`` forms are supported as discovery entry-points:\n"
-        "\n"
-        "        - ``*`` enumerates the top-level modules (``bpy``, ``bmesh``,\n"
-        "          ``mathutils``, ``gpu``, ...).\n"
-        "        - ``X.*`` enumerates the direct-child identifiers under the\n"
-        "          *X* namespace (``bpy.*`` -> ``bpy.app``, ``bpy.context``, ...).\n"
-        "\n"
-        "        Both return a ``namespace`` response even when ``X.rst`` would\n"
-        "        otherwise resolve to ``exact``; the ``.*`` form lets an agent\n"
-        "        force the child listing.\n"
-        "\n"
-        "        The response always carries ``kind``, ``found``, and ``identifier``.\n"
-        "        The remaining keys depend on ``kind``:\n"
-        "\n"
-        "        - ``\"exact\"`` (``found=True``): ``<identifier>.rst`` was read.\n"
-        "          Extra keys: ``content`` (RST text), ``examples``. When the\n"
-        "          file exceeds 32 KB, ``content`` is replaced with a dot-point\n"
-        "          summary of the file's top-level definitions (prefixed by a\n"
-        "          header noting the truncation) and ``examples`` is empty -\n"
-        "          re-query individual members for their rendered blocks.\n"
-        "        - ``\"namespace\"`` (``found=True``):\n"
-        "          no ``<identifier>.rst`` but ``<identifier>.<child>.rst`` siblings exist.\n"
-        "          Extra key: ``submodules`` (list of child identifiers).\n"
-        "        - ``\"definition\"`` (``found=True``):\n"
-        "          *identifier* is defined inside a parent RST\n"
-        "          (e.g. ``bpy.props.IntProperty`` lives in ``bpy.props.rst``).\n"
-        "          Extra keys: ``content`` (rendered block), ``examples``.\n"
-        "        - ``\"partial\"`` (``found=False``):\n"
-        "          the parent RST was located but the trailing component isn't defined in it.\n"
-        "          Extra keys:\n"
-        "          - ``parent`` the identifier whose RST was loaded.\n"
-        "          - ``available`` top-level definitions in that RST.\n"
-        "          - ``submodules`` sibling identifiers ``<parent>.<child>`` with their own RSTs,\n"
-        "            filtered to those whose last component contains every character of the missing tail.\n"
-        "\n"
-        "          For a toctree landing page like ``bpy.types`` ``available`` is empty and ``submodules``\n"
-        "          is the near-miss list; for a self-contained module like ``bpy.props`` it's the reverse.\n"
-        "        - ``\"suggestions\"`` (``found=False``):\n"
-        "          no direct match, but *identifier* appears as a component of other files.\n"
-        "          Extra key: ``suggestions`` (list of full identifiers).\n"
-        "        - ``\"missing\"`` (``found=False``): nothing matched.\n"
-        "\n"
-        "        ``examples`` (present on the ``exact`` and ``definition`` kinds)\n"
-        "        is a list of ``{path, content}`` entries referenced from this documentation.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "identifier": {
-                    "title": "Identifier",
-                    "type": "string"
-                }
-            },
-            "required": [
-                "identifier"
-            ],
-            "title": "get_python_api_docsArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "get_screenshot_of_area_as_image",
-        "description": "\n"
-        "        Take a screenshot of a single Blender area and return it as a PNG image.\n"
-        "\n"
-        "        *area_ui_type* matches the area's ``ui_type``.\n"
-        "\n"
-        "        *size_limit_in_bytes* caps the image size in bytes.\n"
-        "        Zero (the default) uses the MCP message size limit.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "area_ui_type": {
-                    "enum": [
-                        "VIEW_3D",
-                        "IMAGE_EDITOR",
-                        "UV",
-                        "ShaderNodeTree",
-                        "CompositorNodeTree",
-                        "GeometryNodeTree",
-                        "TextureNodeTree",
-                        "SEQUENCE_EDITOR",
-                        "CLIP_EDITOR",
-                        "DOPESHEET_EDITOR",
-                        "GRAPH_EDITOR",
-                        "NLA_EDITOR",
-                        "TEXT_EDITOR",
-                        "CONSOLE",
-                        "INFO",
-                        "TOPBAR",
-                        "STATUSBAR",
-                        "OUTLINER",
-                        "PROPERTIES",
-                        "FILE_BROWSER",
-                        "SPREADSHEET",
-                        "PREFERENCES"
-                    ],
-                    "title": "Area Ui Type",
-                    "type": "string"
-                },
-                "size_limit_in_bytes": {
-                    "default": 0,
-                    "title": "Size Limit In Bytes",
-                    "type": "integer"
-                }
-            },
-            "required": [
-                "area_ui_type"
-            ],
-            "title": "get_screenshot_of_area_as_imageArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "get_screenshot_of_window_as_image",
-        "description": "\n"
-        "        Take a screenshot of the entire Blender window and return it as a PNG image.\n"
-        "\n"
-        "        *size_limit_in_bytes* caps the image size in bytes.\n"
-        "        Zero (the default) uses the MCP message size limit.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "size_limit_in_bytes": {
-                    "default": 0,
-                    "title": "Size Limit In Bytes",
-                    "type": "integer"
-                }
-            },
-            "title": "get_screenshot_of_window_as_imageArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "get_screenshot_of_window_as_json",
-        "description": "\n"
-        "        Return a JSON description of the Blender window layout, areas, active object, and selection.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {},
-            "title": "get_screenshot_of_window_as_jsonArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "jump_to_tab_by_name",
-        "description": "\n"
-        "        Switch the active workspace tab to *name*.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "name": {
-                    "title": "Name",
-                    "type": "string"
-                }
-            },
-            "required": [
-                "name"
-            ],
-            "title": "jump_to_tab_by_nameArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "jump_to_tab_by_space_type",
-        "description": "\n"
-        "        Switch to a workspace whose main area matches *space_type*.\n"
-        "\n"
-        "        If *allow_edits* is True and no matching workspace exists, a new one\n"
-        "        is created by duplicating the current workspace.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "space_type": {
-                    "title": "Space Type",
-                    "type": "string"
-                },
-                "allow_edits": {
-                    "default": False,
-                    "title": "Allow Edits",
-                    "type": "boolean"
-                }
-            },
-            "required": [
-                "space_type"
-            ],
-            "title": "jump_to_tab_by_space_typeArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "jump_to_view3d_object_by_name",
-        "description": "\n"
-        "        Move the 3D viewport to focus on an object by *name*.\n"
-        "\n"
-        "        If *allow_edits* is True the object may be un-hidden and its\n"
-        "        collections enabled to make it visible.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "name": {
-                    "title": "Name",
-                    "type": "string"
-                },
-                "allow_edits": {
-                    "default": False,
-                    "title": "Allow Edits",
-                    "type": "boolean"
-                }
-            },
-            "required": [
-                "name"
-            ],
-            "title": "jump_to_view3d_object_by_nameArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "jump_to_view3d_object_data_by_name",
-        "description": "\n"
-        "        Move the 3D viewport to the object whose data block matches *name*.\n"
-        "\n"
-        "        If *allow_edits* is True the object may be un-hidden and its\n"
-        "        collections enabled to make it visible.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "name": {
-                    "title": "Name",
-                    "type": "string"
-                },
-                "allow_edits": {
-                    "default": False,
-                    "title": "Allow Edits",
-                    "type": "boolean"
-                }
-            },
-            "required": [
-                "name"
-            ],
-            "title": "jump_to_view3d_object_data_by_nameArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "render_thumbnail_to_path",
-        "description": "\n"
-        "        Render a small, low-quality thumbnail to *output_path* (temporarily overrides settings).\n"
-        "\n"
-        "        On success the thumbnail is also attached to the result so\n"
-        "        vision-capable agents can see the render without a separate\n"
-        "        screenshot call.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "output_path": {
-                    "title": "Output Path",
-                    "type": "string"
-                }
-            },
-            "required": [
-                "output_path"
-            ],
-            "title": "render_thumbnail_to_pathArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "render_viewport_to_path",
-        "description": "\n"
-        "        Render the current scene to *output_path* using current render settings.\n"
-        "\n"
-        "        On success the rendered image is also attached to the result\n"
-        "        (downscaled to fit the message size limit) so vision-capable\n"
-        "        agents can see the render without a separate screenshot call.\n"
-        "        ",
-        "inputSchema": {
-            "properties": {
-                "output_path": {
-                    "title": "Output Path",
-                    "type": "string"
-                }
-            },
-            "required": [
-                "output_path"
-            ],
-            "title": "render_viewport_to_pathArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "search_api_docs",
-        "description": "\n"
-        "Full-text search over the bundled Blender Python API reference.\n"
-        "\n"
-        "Returns a ranked list of hits. Each hit has:\n"
-        "\n"
-        "- ``path``: file path relative to the bundled docs.\n"
-        "- ``text``: the matching paragraph plus ``context``\n"
-        "  paragraphs on either side.\n"
-        "- ``breadcrumb``: the section path containing the hit\n"
-        "  (``Section > Sub-section > ...``).\n"
-        "- ``index``: the hit's position in the result list.\n"
-        "- ``score``: a relevance score; higher is better.\n"
-        "\n"
-        "The query is tokenised on whitespace and matched\n"
-        "case-insensitively. Every token must appear somewhere in\n"
-        "the paragraph body, the file path, or an enclosing section\n"
-        "title - in any order. Common English stop-words (``the``,\n"
-        "``a``, ``how``, ``to``, ...) are dropped, so natural\n"
-        "phrasings like ``\"how to bake\"`` work as expected. Regular\n"
-        "expressions are not supported.\n"
-        "\n"
-        "Use ``context`` to pull more surrounding paragraphs into\n"
-        "each hit (symmetric, default 0). Use ``index`` with the\n"
-        "position of a previous hit (same query) to get that hit\n"
-        "alone with its text widened to its enclosing section.\n"
-        "\n"
-        "Read-only; consults bundled RST files only.\n",
-        "inputSchema": {
-            "properties": {
-                "query": {
-                    "title": "Query",
-                    "type": "string"
-                },
-                "max_results": {
-                    "default": 20,
-                    "title": "Max Results",
-                    "type": "integer"
-                },
-                "context": {
-                    "default": 0,
-                    "title": "Context",
-                    "type": "integer"
-                },
-                "index": {
-                    "anyOf": [
-                        {
-                            "type": "integer"
-                        },
-                        {
-                            "type": "null"
-                        }
-                    ],
-                    "default": None,
-                    "title": "Index"
-                }
-            },
-            "required": [
-                "query"
-            ],
-            "title": "search_api_docsArguments",
-            "type": "object"
-        }
-    },
-    {
-        "name": "search_manual_docs",
-        "description": "\n"
-        "Full-text search over the bundled Blender user manual.\n"
-        "\n"
-        "Returns a ranked list of hits. Each hit has:\n"
-        "\n"
-        "- ``path``: file path relative to the bundled docs.\n"
-        "- ``text``: the matching paragraph plus ``context``\n"
-        "  paragraphs on either side.\n"
-        "- ``breadcrumb``: the section path containing the hit\n"
-        "  (``Section > Sub-section > ...``).\n"
-        "- ``index``: the hit's position in the result list.\n"
-        "- ``score``: a relevance score; higher is better.\n"
-        "\n"
-        "The query is tokenised on whitespace and matched\n"
-        "case-insensitively. Every token must appear somewhere in\n"
-        "the paragraph body, the file path, or an enclosing section\n"
-        "title - in any order. Common English stop-words (``the``,\n"
-        "``a``, ``how``, ``to``, ...) are dropped, so natural\n"
-        "phrasings like ``\"how to bake\"`` work as expected. Regular\n"
-        "expressions are not supported.\n"
-        "\n"
-        "Use ``context`` to pull more surrounding paragraphs into\n"
-        "each hit (symmetric, default 0). Use ``index`` with the\n"
-        "position of a previous hit (same query) to get that hit\n"
-        "alone with its text widened to its enclosing section.\n"
-        "\n"
-        "Read-only; consults bundled RST files only.\n",
-        "inputSchema": {
-            "properties": {
-                "query": {
-                    "title": "Query",
-                    "type": "string"
-                },
-                "max_results": {
-                    "default": 20,
-                    "title": "Max Results",
-                    "type": "integer"
-                },
-                "context": {
-                    "default": 0,
-                    "title": "Context",
-                    "type": "integer"
-                },
-                "index": {
-                    "anyOf": [
-                        {
-                            "type": "integer"
-                        },
-                        {
-                            "type": "null"
-                        }
-                    ],
-                    "default": None,
-                    "title": "Index"
-                }
-            },
-            "required": [
-                "query"
-            ],
-            "title": "search_manual_docsArguments",
+            "title": "sceneArguments",
             "type": "object"
         }
     },
@@ -1018,6 +513,43 @@ EXPECTED_TOOLS = [
                 "name"
             ],
             "title": "skills_readArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "viewport",
+        "description": "\n"
+        "        Drive what the viewport shows. One tool, verb-dispatched\n"
+        "        (args in {}):\n"
+        "\n"
+        "        - viewport(\"focus\", {name, target?: \"object\"|\"data\",\n"
+        "          allow_edits?}) \u2014 move the 3D viewport onto an object.\n"
+        "          target \"object\" (default) matches by object name; \"data\"\n"
+        "          matches by data-block name. With allow_edits true the object\n"
+        "          may be un-hidden and its collections enabled to reveal it.\n"
+        "        - viewport(\"tab\", {name? | space_type?, allow_edits?}) \u2014 switch\n"
+        "          the active workspace. Pass name for an exact tab, or\n"
+        "          space_type to match the first workspace whose main area is\n"
+        "          that type; with allow_edits and space_type, a new workspace is\n"
+        "          created if none matches.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "verb": {
+                    "title": "Verb",
+                    "type": "string"
+                },
+                "args": {
+                    "additionalProperties": True,
+                    "title": "Args",
+                    "type": "object"
+                }
+            },
+            "required": [
+                "verb",
+                "args"
+            ],
+            "title": "viewportArguments",
             "type": "object"
         }
     },

@@ -123,7 +123,7 @@ class TestLoader(unittest.TestCase):
         self.assertIsInstance(backend, PythonToolBackend)
         self.assertIn("probe", backend.capabilities())
         names = {s.name for s in _run(backend.list_tools())}
-        self.assertIn("get_objects_summary", names)
+        self.assertIn("scene", names)
 
 
 if __name__ == "__main__":

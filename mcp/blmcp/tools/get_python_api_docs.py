@@ -5,7 +5,7 @@
 # pylint: disable=C0114  # See tool doc-string.
 
 __all__ = (
-    "register",
+    "lookup",
 )
 
 import difflib
@@ -17,8 +17,6 @@ from blmcp.tools_helpers.rst_parse_docs import (
     find_definition_in_doctree,
     list_doctree_definitions,
 )
-from mcp.server.fastmcp import FastMCP  # pylint: disable=import-error,no-name-in-module
-from mcp.types import ToolAnnotations  # pylint: disable=import-error,no-name-in-module
 
 
 _DOC_EXT = ".rst"
@@ -356,163 +354,106 @@ def _collect_examples(content: str, api_path: str) -> list[dict[str, str]]:
     return examples
 
 
-# ---------------------------------------------------------------------------
-# Tool registration.
+def lookup(identifier: str) -> dict[str, object]:
+    """
+    Resolve the Blender Python API docs for *identifier* (the engine
+    behind the ``docs`` tool's ``lookup`` verb). See that tool's
+    docstring for the full response shape.
+    """
+    api_path = os.path.join(data_dir(), "api")
 
+    # Support partial match (glob).
+    if identifier == "*" or identifier.endswith(".*"):
+        if identifier == "*":
+            submodules = _list_top_level_modules(api_path)
+        else:
+            submodules = _list_direct_child_identifiers(
+                api_path, identifier[:-2],
+            )
+        return {
+            "kind": "namespace",
+            "found": True,
+            "identifier": identifier,
+            "submodules": submodules,
+        }
 
-def register(mcp: FastMCP) -> None:
-    @mcp.tool(
-        annotations=ToolAnnotations(
-            title="Get Python API Docs",
-            readOnlyHint=True,
-        )
-    )
-    def get_python_api_docs(identifier: str) -> dict[str, object]:
-        """
-        Return the Blender Python API docs for *identifier*, or list
-        modules matching a trailing-``*`` discovery pattern.
-
-        *identifier* should be a fully-qualified Python name (e.g.
-        ``bpy.app`` or ``bpy.types.Scene.frame_current``).
-        The trailing-``*`` forms are supported as discovery entry-points:
-
-        - ``*`` enumerates the top-level modules (``bpy``, ``bmesh``,
-          ``mathutils``, ``gpu``, ...).
-        - ``X.*`` enumerates the direct-child identifiers under the
-          *X* namespace (``bpy.*`` -> ``bpy.app``, ``bpy.context``, ...).
-
-        Both return a ``namespace`` response even when ``X.rst`` would
-        otherwise resolve to ``exact``; the ``.*`` form lets an agent
-        force the child listing.
-
-        The response always carries ``kind``, ``found``, and ``identifier``.
-        The remaining keys depend on ``kind``:
-
-        - ``"exact"`` (``found=True``): ``<identifier>.rst`` was read.
-          Extra keys: ``content`` (RST text), ``examples``. When the
-          file exceeds 32 KB, ``content`` is replaced with a dot-point
-          summary of the file's top-level definitions (prefixed by a
-          header noting the truncation) and ``examples`` is empty -
-          re-query individual members for their rendered blocks.
-        - ``"namespace"`` (``found=True``):
-          no ``<identifier>.rst`` but ``<identifier>.<child>.rst`` siblings exist.
-          Extra key: ``submodules`` (list of child identifiers).
-        - ``"definition"`` (``found=True``):
-          *identifier* is defined inside a parent RST
-          (e.g. ``bpy.props.IntProperty`` lives in ``bpy.props.rst``).
-          Extra keys: ``content`` (rendered block), ``examples``.
-        - ``"partial"`` (``found=False``):
-          the parent RST was located but the trailing component isn't defined in it.
-          Extra keys:
-          - ``parent`` the identifier whose RST was loaded.
-          - ``available`` top-level definitions in that RST.
-          - ``submodules`` sibling identifiers ``<parent>.<child>`` with their own RSTs,
-            filtered to those whose last component contains every character of the missing tail.
-
-          For a toctree landing page like ``bpy.types`` ``available`` is empty and ``submodules``
-          is the near-miss list; for a self-contained module like ``bpy.props`` it's the reverse.
-        - ``"suggestions"`` (``found=False``):
-          no direct match, but *identifier* appears as a component of other files.
-          Extra key: ``suggestions`` (list of full identifiers).
-        - ``"missing"`` (``found=False``): nothing matched.
-
-        ``examples`` (present on the ``exact`` and ``definition`` kinds)
-        is a list of ``{path, content}`` entries referenced from this documentation.
-        """
-        api_path = os.path.join(data_dir(), "api")
-
-        # Support partial match (glob).
-        if identifier == "*" or identifier.endswith(".*"):
-            if identifier == "*":
-                submodules = _list_top_level_modules(api_path)
-            else:
-                submodules = _list_direct_child_identifiers(
-                    api_path, identifier[:-2],
-                )
-            return {
-                "kind": "namespace",
-                "found": True,
-                "identifier": identifier,
-                "submodules": submodules,
-            }
-
-        # Exact match: `<identifier>.rst` exists on disk.
-        # Return its raw content, or a dot-point summary of its top-level
-        # definitions when the file is above the 32 KB cap.
-        if (candidate_path := _resolve_inside(api_path, identifier)) is not None:
-            # See `_collect_examples` for the `errors="replace"` rationale.
-            with open(candidate_path, encoding="utf-8", errors="replace") as fh:
-                content = fh.read()
-            if len(content) > _SUMMARY_CHAR_THRESHOLD:
-                return {
-                    "kind": "exact",
-                    "found": True,
-                    "identifier": identifier,
-                    "content": _summarize_rst_for_size(
-                        identifier, candidate_path, len(content),
-                    ),
-                    "examples": [],
-                }
+    # Exact match: `<identifier>.rst` exists on disk.
+    # Return its raw content, or a dot-point summary of its top-level
+    # definitions when the file is above the 32 KB cap.
+    if (candidate_path := _resolve_inside(api_path, identifier)) is not None:
+        # See `_collect_examples` for the `errors="replace"` rationale.
+        with open(candidate_path, encoding="utf-8", errors="replace") as fh:
+            content = fh.read()
+        if len(content) > _SUMMARY_CHAR_THRESHOLD:
             return {
                 "kind": "exact",
                 "found": True,
                 "identifier": identifier,
-                "content": content,
-                "examples": _collect_examples(content, api_path),
+                "content": _summarize_rst_for_size(
+                    identifier, candidate_path, len(content),
+                ),
+                "examples": [],
             }
+        return {
+            "kind": "exact",
+            "found": True,
+            "identifier": identifier,
+            "content": content,
+            "examples": _collect_examples(content, api_path),
+        }
 
-        if (submodules := _list_direct_child_identifiers(api_path, identifier)):
+    if (submodules := _list_direct_child_identifiers(api_path, identifier)):
+        return {
+            "kind": "namespace",
+            "found": True,
+            "identifier": identifier,
+            "submodules": submodules,
+        }
+
+    # Intra-file lookup: `bpy.props.IntProperty` has no `bpy.props.IntProperty.rst` of its own,
+    # but `bpy.props.rst` contains a `.. function:: IntProperty` block.
+    # Progressively strip trailing components until a parent RST exists,
+    # then search its doc-tree for the remaining dotted tail.
+    parts = identifier.split(".")
+    for strip_count in range(1, len(parts)):
+        prefix = ".".join(parts[:-strip_count])
+        tail = ".".join(parts[-strip_count:])
+        prefix_path = _resolve_inside(api_path, prefix)
+        if prefix_path is None:
+            continue
+        doctree = doctree_for_path(prefix_path)
+        if (rendered := find_definition_in_doctree(doctree, tail)):
             return {
-                "kind": "namespace",
+                "kind": "definition",
                 "found": True,
                 "identifier": identifier,
-                "submodules": submodules,
+                "content": rendered,
+                "examples": _collect_examples(rendered, api_path),
             }
+        # Parent RST located but tail isn't defined there; don't
+        # look further up - that would match unrelated identifiers
+        # in remoter files.
+        return {
+            "kind": "partial",
+            "found": False,
+            "identifier": identifier,
+            "parent": prefix,
+            "available": list_doctree_definitions(doctree),
+            "submodules": _filter_submodules_by_tail(
+                _list_direct_child_identifiers(api_path, prefix), tail,
+            ),
+        }
 
-        # Intra-file lookup: `bpy.props.IntProperty` has no `bpy.props.IntProperty.rst` of its own,
-        # but `bpy.props.rst` contains a `.. function:: IntProperty` block.
-        # Progressively strip trailing components until a parent RST exists,
-        # then search its doc-tree for the remaining dotted tail.
-        parts = identifier.split(".")
-        for strip_count in range(1, len(parts)):
-            prefix = ".".join(parts[:-strip_count])
-            tail = ".".join(parts[-strip_count:])
-            prefix_path = _resolve_inside(api_path, prefix)
-            if prefix_path is None:
-                continue
-            doctree = doctree_for_path(prefix_path)
-            if (rendered := find_definition_in_doctree(doctree, tail)):
-                return {
-                    "kind": "definition",
-                    "found": True,
-                    "identifier": identifier,
-                    "content": rendered,
-                    "examples": _collect_examples(rendered, api_path),
-                }
-            # Parent RST located but tail isn't defined there; don't
-            # look further up - that would match unrelated identifiers
-            # in remoter files.
-            return {
-                "kind": "partial",
-                "found": False,
-                "identifier": identifier,
-                "parent": prefix,
-                "available": list_doctree_definitions(doctree),
-                "submodules": _filter_submodules_by_tail(
-                    _list_direct_child_identifiers(api_path, prefix), tail,
-                ),
-            }
+    # "Did you mean" fallback: the identifier didn't match as a
+    # file or resolve intra-file, but it appears as a dotted
+    # component of other files - surface those as suggestions so
+    # the agent can retry with a valid name.
+    if (suggestions := _list_identifiers_containing_component(api_path, identifier)):
+        return {
+            "kind": "suggestions",
+            "found": False,
+            "identifier": identifier,
+            "suggestions": suggestions,
+        }
 
-        # "Did you mean" fallback: the identifier didn't match as a
-        # file or resolve intra-file, but it appears as a dotted
-        # component of other files - surface those as suggestions so
-        # the agent can retry with a valid name.
-        if (suggestions := _list_identifiers_containing_component(api_path, identifier)):
-            return {
-                "kind": "suggestions",
-                "found": False,
-                "identifier": identifier,
-                "suggestions": suggestions,
-            }
-
-        return {"kind": "missing", "found": False, "identifier": identifier}
+    return {"kind": "missing", "found": False, "identifier": identifier}

@@ -139,7 +139,7 @@ def main():
             tool_seen = False
             for _ in range(60):
                 page.wait_for_timeout(500)
-                if "get_objects_summary" in page.evaluate("() => document.body && (function dt(r){let s=r.textContent||'';r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)s+=dt(e.shadowRoot)});return s})(document)"):
+                if 'scene("objects")' in page.evaluate("() => document.body && (function dt(r){let s=r.textContent||'';r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)s+=dt(e.shadowRoot)});return s})(document)"):
                     tool_seen = True
                     break
             check("worker dispatches a real tool call through the stack", tool_seen)

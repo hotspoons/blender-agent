@@ -274,7 +274,7 @@ so unmet requirements surface *before* a run rather than mid-failure.
 **Capturing images — render is portable, screenshots need a display.** A
 headless worker has no GUI/GPU context, so viewport *screenshot* tools don't
 work there — but **rendering does, on every platform**. Workers are instructed
-to render (the `media_io` `render` verb / `render_thumbnail_to_path`); the
+to render (the `media_io` `render` verb / `capture` `render` verb); the
 screenshot tools return an actionable error pointing to render. That's the
 recommended, cross-platform way for workers to show their work.
 
@@ -352,23 +352,19 @@ MCP client ⇐ MCP (stdio|http) ⇒  blender-agent / blender-mcp  ⇐ TCP socket
 
 Core tools (always present):
 
-- `execute_blender_code` / `execute_blender_code_for_cli` — run Python in the
-  connected instance, or in a background Blender process.
-- `get_blendfile_summary_*` (+ `_for_cli`) — data-blocks, missing files,
-  linked libraries, path info, usage guess.
-- `get_objects_summary`, `get_object_detail_summary` — scene hierarchy and
-  per-object detail.
-- `get_mesh_diagnostics` — read-only topology / printability report for a mesh
-  (watertight check, open vs non-manifold vs degenerate triage, bounds,
-  volume); useful before a boolean, before export, or after applying modifiers.
-- `get_python_api_docs` — Blender Python API reference for an identifier (or
-  `*` discovery).
-- `get_screenshot_of_area_as_image`, `get_screenshot_of_window_as_image`,
-  `get_screenshot_of_window_as_json` — visual/structured snapshots.
-- `jump_to_tab_by_name`, `jump_to_tab_by_space_type`,
-  `jump_to_view3d_object_by_name`, `jump_to_view3d_object_data_by_name` —
-  navigate the UI/viewport.
-- `render_thumbnail_to_path`, `render_viewport_to_path` — render to a path.
+Most core tools are verb-dispatched: one tool with a `verb` and a polymorphic
+`args` object (the same shape as the extension tools `rig`/`media_io`).
+
+- `execute_blender_code` — run Python in the connected instance, or (with
+  `blend_file`) in a background Blender process.
+- `scene` — inspect the live scene: `objects` (hierarchy), `object` (per-object
+  detail), `mesh` (topology / printability triage), `layout` (window/areas JSON).
+- `blendfile` — summarise a .blend (`datablocks`, `path`, `usage`, `missing`,
+  `libraries`); pass `blend_file` in args to read a file in background Blender.
+- `capture` — `screenshot` (window/area) and `render` (`full`/`thumbnail`).
+- `viewport` — `focus` an object/data-block, or switch `tab`.
+- `docs` — Blender docs: `api`/`manual` full-text search, `lookup` an
+  identifier (or `*` discovery).
 - `welcome`, `skills_list`, `skills_search`, `skills_read` — onboarding and
   the skills library.
 

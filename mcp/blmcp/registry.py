@@ -38,8 +38,7 @@ _ENTRY_POINT_GROUP = "blender_mcp.extensions"
 # Core tools whose descriptions get the run-welcome-first nudge appended.
 _WELCOME_NUDGE_TOOLS = (
     "execute_blender_code",
-    "execute_blender_code_for_cli",
-    "get_objects_summary",
+    "scene",
 )
 _WELCOME_NUDGE = (
     "\n\nFIRST ACTION this session: call the `welcome` tool before this one. "

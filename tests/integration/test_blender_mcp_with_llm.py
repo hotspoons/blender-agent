@@ -486,7 +486,7 @@ def _start_mock_llm(port: int) -> http.server.HTTPServer:
                 _Handler._counter += 1
 
             if request_num == 0:
-                # First request: tell the LLM to call get_object_detail_summary.
+                # First request: tell the LLM to call scene("object").
                 response = {
                     "choices": [{
                         "message": {
@@ -496,8 +496,9 @@ def _start_mock_llm(port: int) -> http.server.HTTPServer:
                                 "id": "call_001",
                                 "type": "function",
                                 "function": {
-                                    "name": "get_object_detail_summary",
-                                    "arguments": json.dumps({"name": "Cube"}),
+                                    "name": "scene",
+                                    "arguments": json.dumps(
+                                        {"verb": "object", "args": {"name": "Cube"}}),
                                 },
                             }],
                         },
@@ -697,7 +698,7 @@ class TestChatClient(unittest.TestCase):
         )
         self.assertIn("Cube", stdout_text, "Expected 'Cube' in output.\n" + self._last_output_info)
         self.assertIn(
-            "get_object_detail_summary", stdout_text,
+            "scene", stdout_text,
             "Expected tool call name in output.\n" + self._last_output_info,
         )
 
@@ -713,7 +714,7 @@ class TestChatClient(unittest.TestCase):
         self.assertIn("Cube", stdout_text, "Expected 'Cube' in output.\n" + self._last_output_info)
         # Verify a tool was actually called (not just answered from training data).
         self.assertTrue(
-            "get_object_detail_summary" in stdout_text or "execute_blender_code" in stdout_text,
+            "scene" in stdout_text or "execute_blender_code" in stdout_text,
             "Expected a tool call in output.\n" + self._last_output_info,
         )
 
@@ -727,13 +728,12 @@ class TestChatClient(unittest.TestCase):
         an LLM/MCP is properly hooked up.
         """
         stdout_text, _stderr_text = self._run_chat_client(
-            "Use get_object_detail_summary to describe the object named 'Cube'.",
+            "Use scene with verb 'object' to describe the object named 'Cube'.",
             ["openai", "--api-url", "http://localhost:{:d}".format(_PORT_LLAMA_SERVER)],
         )
         self.assertIn("Cube", stdout_text, "Expected 'Cube' in output.\n" + self._last_output_info)
         self.assertTrue(
-            "get_object_detail_summary" in stdout_text
-            or "get_objects_summary" in stdout_text
+            "scene" in stdout_text
             or "execute_blender_code" in stdout_text,
             "Expected a tool call in output.\n" + self._last_output_info,
         )

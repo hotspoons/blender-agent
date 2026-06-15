@@ -66,7 +66,7 @@ result = {"material": mat.name, "slots": len(obj.data.materials)}
   before relying on it (`bpy.data.filepath`).
 - Principled input names differ across Blender versions (e.g.
   "Specular" became "Specular IOR Level" in 4.x). Check
-  `get_python_api_docs` or `bsdf.inputs.keys()` at runtime instead of
+  `docs("lookup", {identifier})` or `bsdf.inputs.keys()` at runtime instead of
   hardcoding from memory.
 - Verify in a render, not the solid viewport: switch to Material
-  Preview or do a small `render_thumbnail_to_path` and inspect it.
+  Preview or do a small `capture("render", {path, quality: "thumbnail"})` and inspect it.

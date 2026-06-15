@@ -196,7 +196,7 @@ async def make_backend(**_options: Any) -> "Any":
     The Blender build's ``ToolBackend`` factory, referenced from ``agent.yaml``
     (``backend.factory: blagent.blender_tools:make_backend``). Wraps the blmcp
     tool surface in a ``PythonToolBackend`` and wires the ground-truth scene
-    probe (``get_objects_summary``) used by the autonomy evaluator/auditor.
+    probe (``scene("objects")``) used by the autonomy evaluator/auditor.
 
     Assumes a Blender bridge is reachable (tool *calls* need it); spawning the
     headless surface remains the launcher's job. Extra YAML ``options`` are
@@ -210,12 +210,14 @@ async def make_backend(**_options: Any) -> "Any":
     by_name = {t.name: t for t in tools}
 
     async def _probe(session_id: str) -> str:
-        tool = by_name.get("get_objects_summary")
+        tool = by_name.get("scene")
         if tool is None:
-            return "(get_objects_summary unavailable)"
+            return "(scene unavailable)"
         media = MediaLibrary(tempfile.mkdtemp(prefix="probe_"))
         try:
-            result = await tool.call(ToolContext(media=media, session_id=session_id), {})
+            result = await tool.call(
+                ToolContext(media=media, session_id=session_id),
+                {"verb": "objects", "args": {}})
         except Exception as ex:  # pylint: disable=broad-except
             return "(scene probe failed: {:s})".format(str(ex))
         data = result.data if result.data is not None else result.summary

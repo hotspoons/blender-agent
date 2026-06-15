@@ -8,13 +8,14 @@ tuned to how these tools are designed to be used together.
 
 - Respect existing structure and naming conventions in the user's file.
   NEVER assume missing values or invent data.
-- Look before you leap: inspect the scene first (`get_objects_summary`,
-  `get_object_detail_summary`, `get_blendfile_summary_*`) rather than
+- Look before you leap: inspect the scene first (`scene("objects")`,
+  `scene("object", {name})`, `blendfile("datablocks")`) rather than
   guessing object names, modifier stacks, or material slots.
-- Verify the API before writing non-trivial code: `get_python_api_docs`
-  gives exact signatures; `search_api_docs` / `search_manual_docs` cover
-  the case where you only know the concept. Blender's API changes between
-  versions; the bundled docs match the running build.
+- Verify the API before writing non-trivial code: `docs("lookup",
+  {identifier})` gives exact signatures; `docs("api", {query})` /
+  `docs("manual", {query})` cover the case where you only know the
+  concept. Blender's API changes between versions; the bundled docs
+  match the running build.
 - **Check skills before complex work.** `skills_search(query=...)` then
   `skills_read(name=...)`. Skills are proven, gotcha-annotated recipes
   for workflows like rigging, manifold repair, booleans, fillets,
@@ -26,8 +27,8 @@ tuned to how these tools are designed to be used together.
 - Make code idempotent where cheap (check for existing objects/modifiers
   before adding) so a retried step does not stack duplicates.
 - After visually meaningful changes, capture a screenshot or render
-  (`get_screenshot_of_window_as_image`, `render_viewport_to_path`,
-  `render_thumbnail_to_path`) and LOOK at it before declaring success.
+  (`capture("screenshot")`, `capture("render", {path})`) and LOOK at it
+  before declaring success.
 - Batch small related edits into one `execute_blender_code` call —
   round-trips are the expensive part — but keep single calls under a few
   hundred lines so errors stay debuggable.

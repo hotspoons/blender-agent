@@ -127,10 +127,10 @@ async def completions(request: Request) -> StreamingResponse:
     elif kind == "review":
         gen = _stream_text("", json.dumps({"accept": True, "guidance": "", "request_qa": False}))
     elif kind == "worker_tool":
-        gen = _stream_tool_call("get_objects_summary", {})
+        gen = _stream_tool_call("scene", {"verb": "objects", "args": {}})
     elif kind == "worker_proof":
         gen = _stream_text("The scene looks right.",
-                           "PROOF OF WORK: inspected the scene via get_objects_summary; "
+                           "PROOF OF WORK: inspected the scene via scene(\"objects\"); "
                            "the task is complete.")
     else:
         gen = _stream_text("", "Hello from the fake LLM.")

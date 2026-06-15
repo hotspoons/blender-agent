@@ -96,7 +96,7 @@ them - they have different causes and fixes:
 - **degenerate faces** (`f.calc_area() < 1e-8`) - zero-area slivers,
   usually boolean debris; clear with `dissolve_degenerate`.
 
-`get_mesh_diagnostics(name)` returns exactly this triage (plus
+`scene("mesh", {name})` returns exactly this triage (plus
 `is_watertight`, volume, world bounds, scale/normal flags) in one call -
 run it after each boolean instead of re-typing a `bmesh` stats block.
 

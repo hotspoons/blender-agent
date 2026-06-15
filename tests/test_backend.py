@@ -181,7 +181,7 @@ class TestRuntimeBackendWiring(unittest.TestCase):
         from blagent.tools import Tool, ToolResult
 
         class Probe(Tool):
-            name = "get_objects_summary"
+            name = "scene"
             description = "scene probe"
             read_only = True
 
@@ -201,7 +201,7 @@ class TestRuntimeBackendWiring(unittest.TestCase):
         self.assertIn("probe", rt.backend.capabilities())
         # Registry carries the domain tool AND the core harness tools.
         names = {t.name for t in rt.registry}
-        self.assertIn("get_objects_summary", names)
+        self.assertIn("scene", names)
         self.assertTrue({"skills", "media", "ask_user"} <= names)
 
     def test_probe_routes_through_backend(self) -> None:
@@ -211,7 +211,7 @@ class TestRuntimeBackendWiring(unittest.TestCase):
         self.assertEqual(text, "scene: 3 cubes")
 
     def test_probe_handles_missing_tool(self) -> None:
-        rt = self._runtime([])           # no get_objects_summary
+        rt = self._runtime([])           # no scene probe
         sid = rt.new_session()
         text = _run(rt._make_probe(sid)())
         self.assertIn("unavailable", text)

@@ -77,7 +77,7 @@ running conversation is ever trimmed, your assignment still lives HERE.
 When finished, end your turn with a short PROOF OF WORK: what you changed and
 concrete evidence (object names, counts, verify output, a rendered image). To
 show the scene visually, RENDER it (media_io verb 'render', or
-render_thumbnail_to_path) — this Blender is headless, so viewport screenshot
+capture verb 'render') — this Blender is headless, so viewport screenshot
 tools do not work. If you could not finish, say so plainly and why.
 """
 
@@ -911,14 +911,16 @@ class AgentRuntime:
 
     async def _probe_state(self, session_id: str) -> str:
         """The Blender ground-truth probe wired into the PythonToolBackend:
-        a read-only scene snapshot via ``get_objects_summary``. (Lives here
+        a read-only scene snapshot via ``scene("objects")``. (Lives here
         until the Blender backend factory owns it after the package split.)"""
-        tool = self.registry.get("get_objects_summary")
+        tool = self.registry.get("scene")
         if tool is None:
-            return "(get_objects_summary unavailable)"
+            return "(scene unavailable)"
         media = self._get_or_load_session(session_id).media
         try:
-            result = await tool.call(ToolContext(media=media, session_id=session_id), {})
+            result = await tool.call(
+                ToolContext(media=media, session_id=session_id),
+                {"verb": "objects", "args": {}})
         except Exception as ex:  # pylint: disable=broad-except
             return "(scene probe failed: {:s})".format(ex)
         data = result.data if result.data is not None else result.summary

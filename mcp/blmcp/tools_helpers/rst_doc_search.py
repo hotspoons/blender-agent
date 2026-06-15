@@ -62,7 +62,7 @@ def with_doc(doc: str) -> Callable[[Callable[..., object]], Callable[..., object
     """
     Decorator that sets the wrapped function's ``__doc__`` from
     *doc*. Used to share the search-tool description between
-    ``search_api_docs`` and ``search_manual_docs`` while keeping
+    the `docs` tool's ``api`` and ``manual`` verbs while keeping
     each function defined literally in its own file (so the
     ``@mcp.tool(...)`` decorator the AST-scanning tool-listing
     test looks for is still on the function definition). Stack as
