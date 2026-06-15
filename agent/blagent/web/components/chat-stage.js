@@ -584,6 +584,29 @@ export class BaChatStage extends LitElement {
   }
 
   /** Render assistant text with <think> blocks as collapsible cards. */
+  /** Worker mini-transcript text: same <think> collapsing as the main view,
+   *  rendered compactly. `streaming` styles the trailing live text muted. */
+  _renderWorkerText(text, keyPrefix, streaming) {
+    return splitThinking(text).map((part, index) => {
+      if (part.type === "text") {
+        if (!part.body.trim()) return nothing;
+        return html`<div class="wtext ${streaming ? "stream" : ""}">${part.body}</div>`;
+      }
+      const key = `${keyPrefix}:${index}`;
+      const live = part.open;
+      const open = live ? !this._closedThinks.has(key) : this._openThinks.has(key);
+      return html`
+        <div class="think">
+          <div class="think-head"
+            @click=${() => this._toggleSet(live ? "_closedThinks" : "_openThinks", key)}>
+            ${icon(open ? "chevron-down" : "chevron-right")}
+            ${live ? html`<span class="live ellipsis">Thinking</span>` : "Thought for a moment"}
+          </div>
+          ${open ? html`<div class="think-body">${part.body}</div>` : nothing}
+        </div>`;
+    });
+  }
+
   _renderAssistantText(text, keyPrefix) {
     return splitThinking(text).map((part, index) => {
       if (part.type === "text") {
@@ -721,12 +744,12 @@ export class BaChatStage extends LitElement {
         </div>
         ${open && agent.timeline?.length ? html`
           <div class="agent-activity">
-            ${agent.timeline.map((e) => {
-              if (e.kind === "text") return html`<div class="wtext">${e.content}</div>`;
+            ${agent.timeline.map((e, i) => {
+              if (e.kind === "text") return this._renderWorkerText(e.content, `${agent.id}:t${i}`);
               if (e.kind === "injected") return html`<div class="winject">⟶ ${e.content}</div>`;
               return this._renderWorkerCall(agent.id, e.call_id, agent.calls[e.call_id]);
             })}
-            ${agent.stream ? html`<div class="wtext stream">${agent.stream}</div>` : nothing}
+            ${agent.stream ? this._renderWorkerText(agent.stream, `${agent.id}:stream`, true) : nothing}
             ${agent.drafting ? html`<div class="wdraft">${icon("arrow-path")} drafting ${agent.drafting.name || ""}…</div>` : nothing}
           </div>` : nothing}
         ${open && agent.media?.length ? html`
