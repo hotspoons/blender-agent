@@ -399,6 +399,13 @@ export class BaChatStage extends LitElement {
     .agent .role { font-size: 11px; font-weight: 700; text-transform: uppercase;
       letter-spacing: 0.05em; color: var(--text-muted); }
     .agent .task { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* Full delegated task, shown when the worker card is expanded (the header
+       truncates; this gives the complete prompt, wrapping). */
+    .agent-task-full { display: flex; gap: 7px; align-items: flex-start;
+      margin: 0 12px 8px 12px; padding: 8px 10px; font-size: 12.5px; color: var(--text);
+      background: var(--surface-muted); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); overflow-wrap: anywhere; }
+    .agent-task-full svg { width: 13px; height: 13px; flex-shrink: 0; margin-top: 2px; color: var(--text-muted); }
     .agent .state { display: inline-flex; }
     .agent .state .spin { animation: spin 1.4s linear infinite; }
     .agent .state.ok { color: var(--success); }
@@ -742,6 +749,9 @@ export class BaChatStage extends LitElement {
           <span class="task">${agent.task || agent.id}</span>
           <span class="state ${agent.ok === false ? "fail" : agent.state === "done" ? "ok" : ""}">${badge}</span>
         </div>
+        ${open ? html`
+          <div class="agent-task-full" title="The task delegated to this worker">
+            ${icon("clipboard")} ${agent.task || agent.id}</div>` : nothing}
         ${open && agent.timeline?.length ? html`
           <div class="agent-activity">
             ${agent.timeline.map((e, i) => {
@@ -757,7 +767,7 @@ export class BaChatStage extends LitElement {
             ${agent.media.map((mm) => html`<img src=${mm.data_url} alt=${mm.id} title=${mm.id}
               @click=${() => { this._lightbox = { src: mm.data_url, alt: mm.id }; }}>`)}
           </div>` : nothing}
-        ${open && agent.proof ? html`<div class="proof">${agent.proof}</div>` : nothing}
+        ${agent.proof ? html`<div class="proof">${agent.proof}</div>` : nothing}
         ${open && agent.artifacts?.length ? html`
           <div class="agent-events">
             ${agent.artifacts.map((p) => html`<span class="ev-chip art">${p.split("/").pop()}</span>`)}
