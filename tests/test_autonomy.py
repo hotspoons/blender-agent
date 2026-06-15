@@ -592,7 +592,7 @@ class TestChildSessionRunner(unittest.TestCase):
         self.assertIn("model a peg", sysmsg)
         self.assertIn("assemble the arm", sysmsg)
         self.assertIn("peg mates with socket", sysmsg)
-        self.assertIn("no user to ask", sysmsg.lower())
+        self.assertIn("not in a conversation", sysmsg.lower())
 
 
 if __name__ == "__main__":

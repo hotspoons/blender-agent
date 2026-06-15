@@ -305,6 +305,16 @@ class TestRuntimeBackendWiring(unittest.TestCase):
         self.assertIn("Assemble the robot arm", str(title))
 
 
+    def test_set_config_persists_autonomy_qa(self) -> None:
+        # The per-worker QA toggle must survive a restart (read back from disk),
+        # since run_autonomy_turn decides the reviewer from config at run start.
+        import json
+        rt = self._runtime([])
+        rt.set_config({"autonomy_qa": True})
+        self.assertTrue(rt.store.config.autonomy_qa)
+        with open(rt.store._config_path, encoding="utf-8") as fh:
+            self.assertTrue(json.load(fh).get("autonomy_qa"))
+
     def test_worker_ask_orchestrator_answers_directly(self) -> None:
         from blagent.llm import LlmChunk, LlmClient
         rt = self._runtime([self._probe_tool()])

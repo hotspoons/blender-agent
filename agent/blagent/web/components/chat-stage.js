@@ -207,7 +207,6 @@ export class BaChatStage extends LitElement {
     .think-body {
       padding: 0 12px 10px;
       color: var(--text-muted);
-      white-space: pre-wrap;
       word-break: break-word;
       line-height: 1.55;
     }
@@ -389,6 +388,13 @@ export class BaChatStage extends LitElement {
     .obj .obj-text { flex: 1; }
     .obj .ev { color: var(--text-muted); font-size: 12px; max-width: 40%;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .request { background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-md); padding: 10px 12px; }
+    .req-head { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 6px; }
+    .req-head svg { width: 13px; height: 13px; }
+    .req-msg { font-size: 13.5px; color: var(--text); overflow-wrap: anywhere; }
+    .req-msg + .req-msg { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
     .agent {
       border: 1px solid var(--border); border-left: 3px solid var(--text-muted);
       border-radius: var(--radius-md); background: var(--surface-elevated); overflow: hidden;
@@ -446,16 +452,10 @@ export class BaChatStage extends LitElement {
     .agent .state .spin { animation: spin 1.4s linear infinite; }
     .agent .state.ok { color: var(--success); }
     .agent .state.fail { color: var(--danger); }
-    /* Rendered markdown: block elements own spacing (pre-wrap would double-space). */
+    /* Rendered markdown (spacing comes from the shared .md-content sheet). */
     .agent .proof { padding: 8px 12px 10px 12px; font-size: 12.5px; color: var(--text);
       border-top: 1px solid var(--border); line-height: 1.5;
       max-height: 480px; overflow-y: auto; overscroll-behavior: contain; }
-    .agent .proof > :first-child { margin-top: 0; }
-    .agent .proof > :last-child { margin-bottom: 0; }
-    .agent .proof p { margin: 0 0 8px; }
-    .agent .proof ul, .agent .proof ol { margin: 6px 0; padding-left: 22px; }
-    .agent .proof li { margin: 2px 0; }
-    .agent .proof pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
     .agent .inject { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border); }
     .agent .inject input { flex: 1; background: var(--surface); color: var(--text);
       border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 5px 8px; font: inherit; font-size: 12.5px; }
@@ -666,7 +666,7 @@ export class BaChatStage extends LitElement {
             ${icon(open ? "chevron-down" : "chevron-right")}
             ${live ? html`<span class="live ellipsis">Thinking</span>` : "Thought for a moment"}
           </div>
-          ${open ? html`<div class="think-body">${part.body}</div>` : nothing}
+          ${open ? html`<div class="think-body">${unsafeHtml(renderMarkdown(part.body))}</div>` : nothing}
         </div>`;
     });
   }
@@ -693,7 +693,7 @@ export class BaChatStage extends LitElement {
                   ${open ? nothing : html`<span class="activity">${words} words so far</span>`}`
               : "Thought for a moment"}
           </div>
-          ${open ? html`<div class="think-body">${part.body}</div>` : nothing}
+          ${open ? html`<div class="think-body">${unsafeHtml(renderMarkdown(part.body))}</div>` : nothing}
         </div>`;
     });
   }
@@ -916,12 +916,17 @@ export class BaChatStage extends LitElement {
 
   _renderAutonomy() {
     const a = this._autonomy || {};
-    const active = (a.objectives?.length || a.agentOrder?.length || a.done || a.planner);
+    const active = (a.objectives?.length || a.agentOrder?.length || a.done || a.planner || a.prompts?.length);
     if (!active) return nothing;
     const sym = (s) => (s === "met" ? "✓" : "○");
     const done = a.done;
     return html`
       <div class="auto">
+        ${a.prompts?.length ? html`
+        <div class="request">
+          <div class="req-head">${icon("clipboard")} Request</div>
+          ${a.prompts.map((p) => html`<div class="req-msg">${p}</div>`)}
+        </div>` : nothing}
         ${a.objectives?.length ? html`
         <div class="objectives">
           <div class="obj-head">
@@ -983,7 +988,8 @@ export class BaChatStage extends LitElement {
   render() {
     const records = this._records.filter((r) => !r.synthetic && r.role !== "tool");
     const autoActive = !!(this._autonomy && (this._autonomy.objectives?.length
-      || this._autonomy.agentOrder?.length || this._autonomy.done || this._autonomy.planner));
+      || this._autonomy.agentOrder?.length || this._autonomy.done || this._autonomy.planner
+      || this._autonomy.prompts?.length));
     // (compaction "summary" records render as a divider, see _renderRecord)
     const showEmpty = records.length === 0 && !this._streaming && !this._busy && !autoActive;
     return html`

@@ -475,6 +475,15 @@ class AgentRuntime:
                         self._persist_view(session_id, view)
         return persist_emit
 
+    def _autonomy_prompts(self, session_id: str) -> list[str]:
+        """The user's intake prompts (the request that shaped the objectives),
+        in order — shown in the Request card above the objectives."""
+        out: list[str] = []
+        for r in self.session_records(session_id):
+            if r.get("autonomy_goal") and str(r.get("content", "")).strip():
+                out.append(str(r["content"]).strip())
+        return out
+
     def _finalize_stopped_view(self, session_id: str) -> None:
         """On stop/abort, finalize the view so no worker card shows stale 'running'
         controls, then re-emit + persist the snapshot."""
@@ -808,13 +817,18 @@ class AgentRuntime:
         session = self._get_or_load_session(session_id)
         view = self._reset_view(session_id)
         persist_emit = self._persist_emit_for(session_id, view)
-        # The submitted request becomes the session's first record (history).
+        # The submitted request is intake (shown in the Request card + persisted
+        # for title), not a raw bottom-of-transcript bubble.
         try:
-            session.engine.push_record({"role": "user", "content": goal, "autonomy_goal": True})
+            session.engine.push_record({
+                "role": "user", "content": goal, "autonomy_goal": True,
+                "synthetic": True, "title": goal[:80]})
         except Exception as ex:  # pylint: disable=broad-except
             _log.warning("persist draft goal failed session=%s: %s", session_id, ex)
 
         async def _run() -> None:
+            await persist_emit({"type": "autonomy_goal", "session_id": session_id,
+                                "prompts": self._autonomy_prompts(session_id)})
             await persist_emit({"type": "planner_stream", "session_id": session_id,
                                 "phase": "draft", "state": "start"})
 
@@ -989,6 +1003,8 @@ class AgentRuntime:
 
         async def _run() -> None:
             try:
+                await persist_emit({"type": "autonomy_goal", "session_id": session_id,
+                                    "prompts": self._autonomy_prompts(session_id)})
                 result = await orchestrator.run(objs, max_rounds=rounds)
                 # Persist a readable outcome so the session reloads with what
                 # the orchestrator actually did (not an empty transcript).

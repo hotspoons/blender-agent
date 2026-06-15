@@ -70,6 +70,13 @@ async function applyHighlightCss() {
 const _MD_CSS = `
   .md-content > :first-child { margin-top: 0; }
   .md-content > :last-child { margin-bottom: 0; }
+  .md-content p { margin: 6px 0; }
+  .md-content h1, .md-content h2, .md-content h3,
+  .md-content h4, .md-content h5, .md-content h6 { margin: 10px 0 4px; line-height: 1.3; }
+  .md-content ul, .md-content ol { margin: 6px 0; padding-left: 22px; }
+  .md-content li { margin: 2px 0; }
+  .md-content li > p { margin: 0; }
+  .md-content pre { margin: 8px 0; }
   .md-content table {
     display: block;
     width: max-content;

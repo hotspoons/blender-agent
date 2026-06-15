@@ -86,10 +86,16 @@ def main():
                     "store._handle({type:'autonomy_view', session_id:'orch-1', view: v}); }",
                     view)
 
-            def view(agents, order, objectives=None, done=None):
-                return {"objectives": objectives or [], "agents": agents, "agentOrder": order,
-                        "rounds": [], "gathered": None, "done": done, "audit": None,
-                        "currentRound": 0, "draft": None}
+            def view(agents, order, objectives=None, done=None, prompts=None):
+                return {"prompts": prompts or [], "objectives": objectives or [], "agents": agents,
+                        "agentOrder": order, "rounds": [], "gathered": None, "done": done,
+                        "audit": None, "planner": None, "currentRound": 0, "draft": None}
+
+            # --- the original request is pinned at the top (Request card) ---
+            push_view(view({}, [], prompts=["ORIGINAL_PROMPT_PEGS"]))
+            page.wait_for_timeout(200)
+            text = page.evaluate(_DOM_TEXT)
+            _check("request card shows the original prompt at top", "ORIGINAL_PROMPT_PEGS" in text)
 
             # --- planner card: draft-phase "looking around" projects from the
             #     snapshot's planner field (feedback before objectives arrive) ---
@@ -143,18 +149,20 @@ def main():
             # --- done worker shows its proof (snapshot) ---
             done_worker = {"orch-1:w:t1": {**running_worker["orch-1:w:t1"], "state": "done",
                                            "ok": True,
-                                           "proof": "PROOF_DONE_42\n\n- item one\n- item two"}}
+                                           "proof": "## PROOF_DONE_42\n\npara one\n\npara two\n\n- item one\n- item two"}}
             push_view(view(done_worker, ["orch-1:w:t1"]))
             page.wait_for_timeout(300)
             text = page.evaluate(_DOM_TEXT)
             _check("worker: proof shown on done (Result tab default)", "PROOF_DONE_42" in text)
-            # Proof is rendered markdown: block elements (no raw bullets), and the
-            # container must NOT be pre-wrap (that double-spaced the rendered HTML).
-            proof_probe = page.evaluate("""() => { let r=null; const w=(root)=>{const el=root.querySelector&&root.querySelector('.proof'); if(el)r=el; root.querySelectorAll&&root.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)w(e.shadowRoot)})}; w(document); return r ? {ws: getComputedStyle(r).whiteSpace, lis: r.querySelectorAll('li').length} : null; }""")
+            # Proof is rendered markdown with TIGHT spacing (the double/triple-space
+            # bug was pre-wrap + browser-default heading/paragraph margins).
+            proof_probe = page.evaluate("""() => { let r=null; const w=(root)=>{const el=root.querySelector&&root.querySelector('.proof'); if(el)r=el; root.querySelectorAll&&root.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)w(e.shadowRoot)})}; w(document); if(!r) return null; const h=r.querySelector('h1,h2,h3'); const p=r.querySelector('p'); const px=(el,prop)=>el?parseFloat(getComputedStyle(el)[prop]):0; return { ws: getComputedStyle(r).whiteSpace, lis: r.querySelectorAll('li').length, hTop: px(h,'marginTop'), pTop: px(p,'marginTop') }; }""")
             _check("worker proof: not pre-wrap (no double-spacing)",
                    proof_probe and proof_probe["ws"] != "pre-wrap", str(proof_probe))
             _check("worker proof: markdown list rendered as <li>",
                    proof_probe and proof_probe["lis"] == 2, str(proof_probe))
+            _check("worker proof: heading + paragraph margins are tight",
+                   proof_probe and proof_probe["hTop"] <= 12 and proof_probe["pTop"] <= 8, str(proof_probe))
             _check("done worker: Result tab hides the work timeline", "execute_blender_code" not in text)
             # switch to the Work tab -> timeline (tool calls) appears
             page.evaluate("""() => { const find=(r)=>{for(const b of r.querySelectorAll('button')){if((b.textContent||'').trim()==='Work')return b; const s=b.shadowRoot&&find(b.shadowRoot); } for(const e of r.querySelectorAll('*')){if(e.shadowRoot){const f=find(e.shadowRoot); if(f)return f;}} return null;}; const b=find(document); if(b)b.click(); }""")
@@ -231,6 +239,16 @@ def main():
             _check("transcript: assistant answer shown", "OUTER_REPLY_9" in text)
             _check("transcript: no raw <think>", "<think>" not in text)
             _check("transcript: reasoning collapsed", "INNER_THOUGHT_9" not in text)
+
+            # Reasoning is rendered markdown (tight spacing), not pre-wrapped raw
+            # text (which double-spaced on the model's blank lines). Expand and check.
+            _drive(page, "store._handle({type:'session_loaded', session_id:'plain-2', records:[{role:'assistant', content:'<think>para A\\n\\npara B</think>REPLY', tool_calls:[]}], media:[]});")
+            page.wait_for_timeout(200)
+            page.evaluate("""() => { const find=(r)=>{for(const e of r.querySelectorAll('.think-head'))return e; for(const e of r.querySelectorAll('*')){if(e.shadowRoot){const f=find(e.shadowRoot); if(f)return f;}} return null;}; const h=find(document); if(h)h.click(); }""")
+            page.wait_for_timeout(200)
+            tb = page.evaluate("""() => { let b=null; const w=(r)=>{const el=r.querySelector&&r.querySelector('.think-body'); if(el)b=el; r.querySelectorAll&&r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)w(e.shadowRoot)})}; w(document); return b ? {ws: getComputedStyle(b).whiteSpace, ps: b.querySelectorAll('p').length} : null; }""")
+            _check("thinking trace: not pre-wrap, markdown paragraphs",
+                   tb and tb["ws"] != "pre-wrap" and tb["ps"] >= 2, str(tb))
 
             # --- objectives draft renders read-only (no editable cells) ---
             _drive(page, "store.setAutonomyLevel('orchestrator'); store._handle({type:'objectives_draft', goal:'g', objectives:[{text:'Goal one full text here', acceptance:'done when X happens fully'},{text:'Goal two', acceptance:'done when Y'}]});")

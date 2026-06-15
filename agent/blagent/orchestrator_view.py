@@ -26,6 +26,7 @@ class OrchestratorView:
         self.reset()
 
     def reset(self) -> None:
+        self.prompts: list[str] = []
         self.objectives: list[dict[str, Any]] = []
         self.agents: dict[str, dict[str, Any]] = {}
         self.agent_order: list[str] = []
@@ -38,6 +39,7 @@ class OrchestratorView:
 
     def snapshot(self) -> dict[str, Any]:
         return {
+            "prompts": self.prompts,
             "objectives": self.objectives,
             "agents": self.agents,
             "agentOrder": self.agent_order,
@@ -71,6 +73,9 @@ class OrchestratorView:
         if ev.get("parent_session_id") and ev.get("session_id") in self.agents:
             return self._worker(ev)
 
+        if t == "autonomy_goal":
+            self.prompts = list(ev.get("prompts") or [])
+            return True
         if t == "autonomy_round_start":
             if ev.get("objectives") is not None:
                 self.objectives = ev["objectives"]
