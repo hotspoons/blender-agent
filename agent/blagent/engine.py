@@ -26,7 +26,6 @@ __all__ = (
 import asyncio
 import json
 import logging
-import re
 import time
 import uuid
 
@@ -34,6 +33,7 @@ from typing import Any, Awaitable, Callable
 
 from .llm import LlmClient, LlmError
 from .media import MediaLibrary
+from .thinking import THINK_RE, ThinkingDecoder, to_context, to_display
 from .tools import ToolContext, ToolError, ToolRegistry, TurnBudget
 
 _log = logging.getLogger("blagent.engine")
@@ -116,34 +116,14 @@ _SELF_REPORT_PROMPT = (
 
 _TRIM_NOTICE = "[Note: earlier conversation was trimmed to fit the context window.]"
 
-# Model reasoning embedded in assistant content as <think>/<thinking>
-# blocks (the local-model pipeline normalizes everything to <think>;
-# remote endpoints such as LM Studio pass the tags through verbatim).
-# An unterminated block (aborted generation) runs to end of text.
-_THINK_RE = re.compile(r"<think(?:ing)?>.*?(?:</think(?:ing)?>|\Z)", re.DOTALL)
-
-
-def _strip_thinking(text: str) -> str:
-    """
-    Remove reasoning blocks before content goes back to a model.
-    Chat templates expect previous-turn thinking to be dropped (Qwen's
-    own template strips it), and it is pure context-budget waste. The
-    transcript keeps the full text; the chat UI renders the blocks as
-    collapsible cards.
-    """
-    if "<think" not in text:
-        return text
-    return _THINK_RE.sub("", text).strip()
-
-
-def _fold_reasoning(reasoning: str, content: str) -> str:
-    """Prepend a separated reasoning trace as a <think> block for DISPLAY +
-    the persisted transcript. Stripped again by ``_strip_thinking`` before the
-    text is sent back to the model, so the context / KV cache is untouched."""
-    if not reasoning:
-        return content
-    block = "<think>\n{:s}\n</think>".format(reasoning)
-    return block if not content else "{:s}\n\n{:s}".format(block, content)
+# Chain-of-thought handling lives in the codec (blagent.thinking): the CONTEXT
+# path (to_context) strips reasoning before text returns to the model; the
+# DISPLAY path (to_display) folds a separated trace into a <think> block; the
+# streaming ThinkingDecoder unifies server reasoning channels + inline tags.
+# Thin aliases keep the historical names (and runtime's `_strip_thinking` import).
+_THINK_RE = THINK_RE
+_strip_thinking = to_context
+_fold_reasoning = to_display
 
 _SUMMARY_SYSTEM_PROMPT = (
     "You compress conversation history for a Blender assistant agent. "
@@ -898,13 +878,10 @@ class AgentEngine:
         Stream one LLM round, emitting token events; reassemble content
         and tool calls from the deltas.
         """
-        content_parts: list[str] = []
-        # Reasoning trace (models whose endpoint separates chain-of-thought
-        # into reasoning_content/reasoning — e.g. Kimi). Streamed to the UI as
-        # a <think> block so it isn't dead air, and folded into the record for
-        # display; _strip_thinking drops it before anything goes back to the
-        # model, so the KV cache / context is untouched.
-        reasoning_parts: list[str] = []
+        # Reasoning trace is handled by the codec (see ThinkingDecoder below):
+        # streamed to the UI as a normalized <think> block so it isn't dead
+        # air, and folded into the record for DISPLAY; to_context drops it
+        # before anything returns to the model, so the KV cache is untouched.
         think_open = False
         # index -> {id, name, arguments}
         calls: dict[int, dict[str, Any]] = {}
@@ -921,6 +898,21 @@ class AgentEngine:
         watchdog = asyncio.create_task(
             self._quiet_watchdog(session_id, last_chunk_at))
 
+        # The codec unifies both trace sources (server reasoning channel +
+        # inline <think> tags in content) into one normalized stream.
+        decoder = ThinkingDecoder()
+
+        async def _emit_segments(segments: "list[tuple[str, str]]") -> None:
+            nonlocal think_open
+            for channel, text in segments:
+                if channel == "reasoning" and not think_open:
+                    think_open = True
+                    await self._emit({"type": "token", "session_id": session_id, "text": "<think>"})
+                elif channel == "content" and think_open:
+                    think_open = False
+                    await self._emit({"type": "token", "session_id": session_id, "text": "</think>"})
+                await self._emit({"type": "token", "session_id": session_id, "text": text})
+
         try:
             async for chunk in llm.stream(request):
                 last_chunk_at[0] = _now()
@@ -930,18 +922,7 @@ class AgentEngine:
                     # re-loops to apply the injection. (Tool calls aren't
                     # dispatched on an interrupted round.)
                     break
-                if chunk.reasoning:
-                    if not think_open:
-                        think_open = True
-                        await self._emit({"type": "token", "session_id": session_id, "text": "<think>"})
-                    reasoning_parts.append(chunk.reasoning)
-                    await self._emit({"type": "token", "session_id": session_id, "text": chunk.reasoning})
-                if chunk.content:
-                    if think_open:
-                        think_open = False
-                        await self._emit({"type": "token", "session_id": session_id, "text": "</think>"})
-                    content_parts.append(chunk.content)
-                    await self._emit({"type": "token", "session_id": session_id, "text": chunk.content})
+                await _emit_segments(decoder.feed(content=chunk.content, reasoning=chunk.reasoning))
                 for delta in chunk.tool_calls:
                     index = int(delta.get("index", 0))
                     slot = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
@@ -962,6 +943,8 @@ class AgentEngine:
                         "chars": sum(len(c["arguments"]) for c in calls.values()),
                         "n_calls": len(calls),
                     })
+            # Flush any held-back tail (e.g. an inline tag at the very end).
+            await _emit_segments(decoder.finish())
         finally:
             watchdog.cancel()
             try:
@@ -975,7 +958,7 @@ class AgentEngine:
             await self._emit({"type": "token", "session_id": session_id, "text": "</think>"})
         # Hand the trace to the caller to fold into the persisted record
         # (display-only; stripped before the next model call).
-        self._round_reasoning = "".join(reasoning_parts).strip()
+        self._round_reasoning = decoder.reasoning
 
         tool_calls = []
         for index in sorted(calls):
@@ -984,7 +967,7 @@ class AgentEngine:
                 slot["id"] = "call_{:d}_{:d}".format(int(_now() * 1000), index)
             if slot["name"]:
                 tool_calls.append(slot)
-        return "".join(content_parts), tool_calls
+        return decoder.content, tool_calls
 
     async def _budget_review(
             self,
