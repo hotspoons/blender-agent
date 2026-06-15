@@ -78,7 +78,9 @@ _WORKER_TASK_TEMPLATE = (
     "created, with counts.\n\n"
     "NOTE: your Blender runs HEADLESS (no GUI) — viewport screenshot tools do "
     "not work here. To show your work visually, RENDER an image (media_io with "
-    "verb 'render', or capture with verb 'render'), don't try to screenshot."
+    "verb 'render', or capture with verb 'render'), don't try to screenshot. The "
+    "render tool AUTO-FRAMES the scene, so you do NOT need to add a camera or "
+    "lights — don't, they'd just clutter your component."
 )
 
 
@@ -164,12 +166,12 @@ class BlenderWorkerStrategy(RemoteWorkerStrategy):
             "You are the GATHER agent for a parallel assembly. Start from a clean "
             "empty scene (delete the default Camera, Cube and Light). Merge these "
             "component Blender files into that ONE scene: for each file, append "
-            "its real objects (use bpy, e.g. bpy.ops.wm.append from each file's "
-            "Object directory), but SKIP each component's leftover default Camera, "
-            "Cube and Light so they don't pile up as duplicates. Then export the "
-            "merged scene as a Blender file via the media_io tool (export, format "
-            "'blend', filename '{master}.blend'). Component files (absolute paths "
-            "on this machine):\n{files}\n\n"
+            "ONLY its MESH objects (use bpy, e.g. bpy.ops.wm.append from each "
+            "file's Object directory) — SKIP any cameras, lights and empties, "
+            "which are per-component render scaffolding, not part of the assembly. "
+            "Then export the merged scene as a Blender file via the media_io tool "
+            "(export, format 'blend', filename '{master}.blend'). Component files "
+            "(absolute paths on this machine):\n{files}\n\n"
             "End with a PROOF OF WORK: the total object count in the merged scene."
         ).format(master=master, files=files)
 

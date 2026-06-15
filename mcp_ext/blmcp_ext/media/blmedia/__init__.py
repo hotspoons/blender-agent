@@ -334,6 +334,68 @@ def stage_file(path: str, jail: str | None = None,
     }
 
 
+def _make_framing_camera(scene) -> object:
+    """
+    A temporary 3/4-view camera that frames the scene's mesh objects, for
+    headless renders where the scene has no camera (common for worker agents
+    that clear the default scene). The caller removes it after rendering, so
+    nothing is left behind in an exported component.
+    """
+    import mathutils
+
+    cam_data = bpy.data.cameras.new("__auto_render_cam")
+    cam_obj = bpy.data.objects.new("__auto_render_cam", cam_data)
+    scene.collection.objects.link(cam_obj)
+    pts = [obj.matrix_world @ mathutils.Vector(corner)
+           for obj in scene.objects if obj.type == "MESH"
+           for corner in obj.bound_box]
+    if pts:
+        lo = mathutils.Vector((min(p.x for p in pts), min(p.y for p in pts), min(p.z for p in pts)))
+        hi = mathutils.Vector((max(p.x for p in pts), max(p.y for p in pts), max(p.z for p in pts)))
+        center = (lo + hi) / 2.0
+        radius = max((hi - lo).length / 2.0, 0.5)
+    else:
+        center, radius = mathutils.Vector((0.0, 0.0, 0.0)), 5.0
+    location = center + mathutils.Vector((1.0, -1.0, 0.7)).normalized() * (radius * 3.0 + 1.0)
+    cam_obj.location = location
+    cam_obj.rotation_euler = (center - location).to_track_quat("-Z", "Y").to_euler()
+    return cam_obj
+
+
+def _resolve_render_camera(scene, camera: str | None):
+    """
+    Resolve the camera to render with, returning ``(cam, temp_or_None)``. A
+    named *camera* must exist; an active scene camera or a lone camera is used
+    as-is; with NO camera a temporary framing one is built (returned as the
+    second item so the caller removes it afterwards). Raises only when the
+    choice is genuinely ambiguous (several cameras, none active, none named).
+    """
+    if camera:
+        cam = bpy.data.objects.get(camera)
+        if cam is None or cam.type != "CAMERA":
+            raise ValueError("no camera object named {!r}".format(camera))
+        return cam, None
+    if scene.camera is not None:
+        return scene.camera, None
+    cameras = [o for o in bpy.data.objects if o.type == "CAMERA"]
+    if len(cameras) == 1:
+        return cameras[0], None
+    if not cameras:
+        cam = _make_framing_camera(scene)
+        return cam, cam
+    raise ValueError(
+        "the scene has {:d} cameras and none is active; pass {{'camera': name}} "
+        "to choose one".format(len(cameras)))
+
+
+def _remove_temp_camera(temp_cam: object) -> None:
+    if temp_cam is None:
+        return
+    data = temp_cam.data
+    bpy.data.objects.remove(temp_cam, do_unlink=True)
+    bpy.data.cameras.remove(data, do_unlink=True)
+
+
 def render_frame(jail: str | None = None, frame: int | None = None,
                  filename: str | None = None, format: str = "png",
                  camera: str | None = None) -> dict:
@@ -350,19 +412,11 @@ def render_frame(jail: str | None = None, frame: int | None = None,
             format, ", ".join(sorted(_IMAGE_RENDER_FORMATS))))
 
     scene = bpy.context.scene
-    cam = bpy.data.objects.get(camera) if camera else scene.camera
-    if camera and (cam is None or cam.type != "CAMERA"):
-        raise ValueError("no camera object named {!r}".format(camera))
-    if cam is None:
-        # One camera in the scene is unambiguous — use it.
-        cameras = [o for o in bpy.data.objects if o.type == "CAMERA"]
-        if len(cameras) == 1:
-            cam = cameras[0]
-        else:
-            raise ValueError(
-                "the scene has no active camera ({:d} camera objects); add one "
-                "(bpy.ops.object.camera_add) or pass {{'camera': name}}".format(
-                    len(cameras)))
+    # No camera? Build a temporary framing one and remove it afterwards, so a
+    # headless worker can just render without first authoring (and leaking) a
+    # camera into its exported component.
+    cam, temp_cam = _resolve_render_camera(scene, camera)
+    cam_name = cam.name
 
     root = resolve_jail(jail)
     stem = safe_name(filename or "render")
@@ -384,6 +438,7 @@ def render_frame(jail: str | None = None, frame: int | None = None,
         (scene.camera, scene.frame_current,
          scene.render.filepath,
          scene.render.image_settings.file_format) = previous
+        _remove_temp_camera(temp_cam)
 
     if not os.path.isfile(path):
         raise RuntimeError("render produced no file at {!r}".format(path))
@@ -393,7 +448,7 @@ def render_frame(jail: str | None = None, frame: int | None = None,
         "size": os.path.getsize(path),
         "format": format,
         "frame": int(frame) if frame is not None else previous[1],
-        "camera": cam.name,
+        "camera": cam_name,
     }
 
 
@@ -679,17 +734,8 @@ def render_video(jail: str | None = None, start: int | None = None,
             "or pass {{'ffmpeg': '/path/to/ffmpeg'}}.".format(install))
 
     scene = bpy.context.scene
-    cam = bpy.data.objects.get(camera) if camera else scene.camera
-    if camera and (cam is None or cam.type != "CAMERA"):
-        raise ValueError("no camera object named {!r}".format(camera))
-    if cam is None:
-        cameras = [o for o in bpy.data.objects if o.type == "CAMERA"]
-        if len(cameras) == 1:
-            cam = cameras[0]
-        else:
-            raise ValueError(
-                "the scene has no active camera ({:d} camera objects); add one "
-                "or pass {{'camera': name}}".format(len(cameras)))
+    cam, temp_cam = _resolve_render_camera(scene, camera)
+    cam_name = cam.name
 
     start = scene.frame_start if start is None else int(start)
     end = scene.frame_end if end is None else int(end)
@@ -737,6 +783,7 @@ def render_video(jail: str | None = None, start: int | None = None,
         (scene.camera, scene.frame_current,
          scene.render.filepath,
          scene.render.image_settings.file_format) = previous
+        _remove_temp_camera(temp_cam)
         shutil.rmtree(tmpdir, ignore_errors=True)
 
     return {
@@ -748,6 +795,6 @@ def render_video(jail: str | None = None, start: int | None = None,
         "frames": n_frames,
         "range": [start, end],
         "step": step,
-        "camera": cam.name,
+        "camera": cam_name,
         "ffmpeg": binary,
     }

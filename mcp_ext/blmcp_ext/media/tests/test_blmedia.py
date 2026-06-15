@@ -206,7 +206,24 @@ class TestRenderFrame(_MediaTestCase):
         self.assertEqual(bpy.context.scene.render.filepath, previous_path)
         self.assertIsNone(bpy.context.scene.camera)
 
-    def test_render_without_camera_is_actionable(self) -> None:
+    def test_render_without_camera_auto_frames_and_leaves_no_trace(self) -> None:
+        # No camera in the scene (a worker that cleared the defaults): render
+        # builds a temporary framing camera, renders, and removes it — so the
+        # call succeeds AND the exported component stays camera-free.
+        self.assertEqual([o for o in bpy.data.objects if o.type == "CAMERA"], [])
+        report = blmedia.render_frame(self.jail, filename="auto")
+        self.assertEqual(report["file"], "auto.png")
+        self.assertGreater(report["size"], 0)
+        self.assertTrue(os.path.isfile(os.path.join(report["folder"], "auto.png")))
+        # The temporary camera is gone and the active camera is unchanged.
+        self.assertEqual([o for o in bpy.data.objects if o.type == "CAMERA"], [])
+        self.assertIsNone(bpy.context.scene.camera)
+
+    def test_render_ambiguous_multiple_cameras_is_actionable(self) -> None:
+        # Several cameras, none active: don't guess — raise with the fix.
+        _add_camera("A")
+        _add_camera("B")
+        self.assertIsNone(bpy.context.scene.camera)
         with self.assertRaises(ValueError) as caught:
             blmedia.render_frame(self.jail)
         self.assertIn("camera", str(caught.exception))
