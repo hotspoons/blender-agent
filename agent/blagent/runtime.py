@@ -336,6 +336,9 @@ class AgentRuntime:
         # Live autonomy objective lists by session id, for mid-run updates.
         self._autonomy_objs: dict[str, list[Any]] = {}
         self._stopped_workers: set[str] = set()
+        # Autonomy-level switch requested mid-turn: applied when the turn ends
+        # (or immediately on stop), so a switch never disrupts a running turn.
+        self._pending_autonomy: dict[str, str] = {}
         # Backend-owned orchestrator view (the frontend projects its snapshot).
         self._views: dict[str, OrchestratorView] = {}
         self._view_emit_at: dict[str, float] = {}
@@ -394,6 +397,7 @@ class AgentRuntime:
         self._swarm_stoppers = {}
         self._autonomy_objs = {}
         self._stopped_workers = set()
+        self._pending_autonomy = {}
         self._views = {}
         self._view_emit_at = {}
         self._subscribers = set()
@@ -715,6 +719,8 @@ class AgentRuntime:
                     "message": "internal error: {:s}: {:s}".format(type(ex).__name__, str(ex)),
                 })
                 await self.emit({"type": "turn_done", "session_id": session_id})
+            finally:
+                await self._apply_pending_autonomy(session_id)
 
         session.task = asyncio.create_task(_run())
         return session_id
@@ -1230,6 +1236,7 @@ class AgentRuntime:
             finally:
                 self._autonomy_objs.pop(session_id, None)
                 await self.emit({"type": "turn_done", "session_id": session_id})
+                await self._apply_pending_autonomy(session_id)
 
         session.task = asyncio.create_task(_run())
         return session_id
@@ -1448,17 +1455,30 @@ class AgentRuntime:
             lines.append("- {:s}: {:s}".format(tool.name, first))
         return "\n".join(lines)
 
+    _SINGLE_LEVELS = ("ask", "yolo")
+
     def set_autonomy_level(self, session_id: str, level: str) -> dict[str, object]:
         """
-        Set the autonomy slider and, in the session, re-issue the tool catalog
-        with a notice that autonomy changed — so the agent re-grounds on its new
-        mode on the next turn. Maps the level onto the concrete config knobs.
+        Set the autonomy slider. If a turn is in flight, DEFER the switch until
+        it completes (or until the user stops) so it never disrupts a running
+        turn; otherwise apply immediately. Maps the level onto config knobs and
+        re-grounds the agent with a role-change notice + tool catalog.
         """
         if level == "minimal":  # legacy alias
             level = "ask"
         if level not in self._AUTONOMY_NOTICE:
             level = "yolo"
+        session = self._sessions.get(session_id) if session_id else None
+        if session is not None and session.busy:
+            self._pending_autonomy[session_id] = level
+            public = self.store.config.as_public()
+            public["pending_autonomy"] = level
+            return public
+        return self._apply_autonomy_level(session_id, level)
+
+    def _apply_autonomy_level(self, session_id: str, level: str) -> dict[str, object]:
         config = self.store.config
+        prev = config.autonomy_level
         config.autonomy_level = level
         config.autonomy = "ask" if level == "ask" else "auto"
         config.autonomy_workers = "swarm" if level == "swarm" else "in_process"
@@ -1471,8 +1491,7 @@ class AgentRuntime:
             swarm_ready, swarm_report = swarm_preflight()
         if session_id:
             session = self._get_or_load_session(session_id)
-            notice = "[Autonomy changed] {:s}\n\nYour current tool catalog:\n{:s}".format(
-                self._AUTONOMY_NOTICE[level], self._tool_catalog_summary())
+            notice = self._autonomy_change_notice(prev, level)
             if swarm_report:
                 notice += "\n\n{:s}".format(swarm_report)
             session.engine.push_record({
@@ -1480,8 +1499,31 @@ class AgentRuntime:
                 "synthetic": True, "autonomy_notice": level,
             })
         public = config.as_public()
+        public["pending_autonomy"] = None
         if level == "swarm":
-            # Let the UI warn the user about missing requirements (e.g. no
-            # Blender / no Xvfb) at the moment they pick swarm.
             public["swarm_preflight"] = {"ready": swarm_ready, "report": swarm_report}
         return public
+
+    def _autonomy_change_notice(self, prev: str, level: str) -> str:
+        """The role-change seed: the prior conversation context carries over (same
+        session), so make the role transition explicit and re-inject the tools."""
+        role = ""
+        crossing = (prev in self._SINGLE_LEVELS) != (level in self._SINGLE_LEVELS)
+        if crossing and prev in self._SINGLE_LEVELS:
+            role = ("\n\nYOUR ROLE CHANGED: single agent -> ORCHESTRATOR. The prior "
+                    "conversation context carries over; from here, pursue the user's "
+                    "objectives by delegating to worker sub-agents and verifying their work.")
+        elif crossing:
+            role = ("\n\nYOUR ROLE CHANGED: orchestrator -> single agent. The prior "
+                    "context (objectives and worker results) carries over; you now act "
+                    "directly with the tools below.")
+        return "[Autonomy changed] {:s}{:s}\n\nYour current tool catalog:\n{:s}".format(
+            self._AUTONOMY_NOTICE[level], role, self._tool_catalog_summary())
+
+    async def _apply_pending_autonomy(self, session_id: str) -> None:
+        """Apply a switch deferred during a turn (called at turn end / on stop)."""
+        level = self._pending_autonomy.pop(session_id, None)
+        if level is None:
+            return
+        public = self._apply_autonomy_level(session_id, level)
+        await self.emit({"type": "config", "config": public})

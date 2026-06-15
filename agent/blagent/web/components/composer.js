@@ -26,6 +26,7 @@ export class BaComposer extends LitElement {
     _dragOver: { state: true },
     _autoload: { state: true },      // loading a local model before send
     _level: { state: true },         // autonomy level: ask|yolo|orchestrator|swarm
+    _pendingLevel: { state: true },  // switch deferred until the running turn ends
     _autoOpen: { state: true },      // is the autonomy slider expanded?
     _objRows: { state: true },       // drafted objectives (read-only list; agent-managed)
     _swarmPreflight: { state: true },// {ready, report} — swarm requirements
@@ -41,6 +42,7 @@ export class BaComposer extends LitElement {
     this._dragOver = false;
     this._autoload = false;
     this._level = store.state.autonomyLevel;
+    this._pendingLevel = store.state.pendingAutonomy;
     this._autoOpen = false;
     this._objRows = [];
     this._swarmPreflight = store.state.swarmPreflight;
@@ -71,6 +73,7 @@ export class BaComposer extends LitElement {
           (a) => a.sessionId === store.state.sessionId);
       }
       if (keys.has("autonomyLevel")) this._level = store.state.autonomyLevel;
+      if (keys.has("pendingAutonomy")) this._pendingLevel = store.state.pendingAutonomy;
       if (keys.has("swarmPreflight")) this._swarmPreflight = store.state.swarmPreflight;
       if (keys.has("draftPending")) this._draftPending = store.state.draftPending;
       if (keys.has("autonomy")) {
@@ -264,7 +267,11 @@ export class BaComposer extends LitElement {
     .auto-slider .tick:last-of-type { transform: translateX(-100%); }
     .auto-slider .tick:hover:not(:disabled) { color: var(--text); }
     .auto-slider .tick.on { color: var(--accent); }
+    .auto-slider .tick.pending { color: var(--warning); }
     .auto-slider .tick:disabled { cursor: default; opacity: 0.6; }
+    .auto-pending { display: flex; align-items: center; gap: 5px; margin-top: 6px;
+      font-size: 11.5px; color: var(--warning); }
+    .auto-pending svg { width: 12px; height: 12px; animation: spin 1.4s linear infinite; }
     .autonomy .auto-dismiss { border: none; background: transparent; color: var(--text-muted);
       cursor: pointer; padding: 0; display: inline-flex; align-items: center; }
     .autonomy .auto-dismiss:hover { color: var(--text); }
@@ -502,8 +509,10 @@ export class BaComposer extends LitElement {
   }
 
   _commitLevel(val) {
-    this._level = val;                       // immediate visual
-    if (val !== store.state.autonomyLevel) store.setAutonomyLevel(val);
+    if (val === store.state.autonomyLevel) { this._level = val; return; }
+    // Mid-turn the switch is deferred: snap the knob back and show it pending.
+    this._level = this._busy ? store.state.autonomyLevel : val;
+    store.setAutonomyLevel(val);
   }
 
   _idxFromClientX(clientX, track) {
@@ -514,7 +523,6 @@ export class BaComposer extends LitElement {
 
   // Drag the knob: preview live (no backend churn), commit once on release.
   _onTrackDown(e) {
-    if (this._busy) return;
     e.preventDefault();
     const track = e.currentTarget;
     try { track.setPointerCapture(e.pointerId); } catch (_e) { /* ignore */ }
@@ -587,11 +595,14 @@ export class BaComposer extends LitElement {
           </div>
           <div class="ticks">
             ${BaComposer._LEVELS.map(([val, label, desc], i) => html`
-              <button class="tick ${this._level === val ? "on" : ""}"
-                style="left:${pct(i)}%" title=${desc} ?disabled=${this._busy}
+              <button class="tick ${this._level === val ? "on" : ""} ${this._pendingLevel === val ? "pending" : ""}"
+                style="left:${pct(i)}%" title=${desc}
                 @click=${() => this._commitLevel(val)}>${label}</button>`)}
           </div>
         </div>
+        ${this._pendingLevel ? html`
+          <div class="auto-pending" title="Applies when the current turn finishes; Stop applies it now">
+            ${icon("arrow-path")} switching to <strong>${this._pendingLevel}</strong> after this turn</div>` : nothing}
         <button class="auto-dismiss" title="Dismiss"
           @click=${() => { this._autoOpen = false; }}>${icon("x-mark")}</button>
       </div>

@@ -33,6 +33,7 @@ class Store extends EventTarget {
       models: { endpoint: "", list: [], error: "", loading: false },
       // Autonomy mode (slider): minimal | yolo | orchestrator | swarm.
       autonomyLevel: "yolo",
+      pendingAutonomy: null,   // a switch deferred until the running turn ends
       swarmPreflight: null,    // {ready, report} — swarm requirements (set on switch)
       draftPending: false,     // guided-intake draft request in flight
       // Live autonomy/swarm run state for the bounded nested UI.
@@ -267,6 +268,8 @@ class Store extends EventTarget {
         const patch = {
           config: msg.config,
           autonomyLevel: msg.config?.autonomy_level || this.state.autonomyLevel,
+          // A switch requested mid-turn is deferred until the turn ends; show it.
+          pendingAutonomy: msg.config?.pending_autonomy || null,
         };
         // Swarm readiness report (Blender present? off-screen GL? per-OS) —
         // surfaced when the user switches to swarm so missing requirements
@@ -409,9 +412,11 @@ class Store extends EventTarget {
     this.send({ type: "set_config", ...updates });
   }
 
-  /** Set the autonomy slider; the backend re-issues the tool catalog. */
+  /** Set the autonomy slider; the backend re-issues the tool catalog. A switch
+   *  requested mid-turn is deferred (shown as pending) until the turn ends. */
   setAutonomyLevel(level) {
-    this._set({ autonomyLevel: level });
+    if (this.state.busy) this._set({ pendingAutonomy: level });
+    else this._set({ autonomyLevel: level, pendingAutonomy: null });
     this.send({ type: "set_autonomy_level", session_id: this.state.sessionId, level });
   }
 

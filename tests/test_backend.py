@@ -337,6 +337,39 @@ class TestRuntimeBackendWiring(unittest.TestCase):
         return StubRunner(), WorkerTask(id="t0", objective_id="o1", instruction="build it",
                                         acceptance="exists")
 
+    def test_autonomy_switch_defers_during_a_turn_then_applies(self) -> None:
+        rt = self._runtime([])
+        sid = rt.new_session()
+        session = rt._get_or_load_session(sid)
+        out: dict = {}
+
+        async def scenario():
+            async def busywork():
+                await asyncio.sleep(0.3)
+            session.task = asyncio.ensure_future(busywork())
+            out["deferred"] = rt.set_autonomy_level(sid, "orchestrator")   # busy -> defer
+            out["mid"] = rt.store.config.autonomy_level
+            await session.task                                            # turn ends
+            await rt._apply_pending_autonomy(sid)
+            out["after"] = rt.store.config.autonomy_level
+
+        _run(scenario())
+        self.assertEqual(out["deferred"].get("pending_autonomy"), "orchestrator")
+        self.assertEqual(out["mid"], "yolo")            # not switched mid-turn
+        self.assertEqual(out["after"], "orchestrator")  # applied at turn end
+        self.assertNotIn(sid, rt._pending_autonomy)
+
+    def test_autonomy_switch_immediate_when_idle_with_role_note(self) -> None:
+        rt = self._runtime([])
+        sid = rt.new_session()
+        public = rt.set_autonomy_level(sid, "orchestrator")   # idle -> immediate
+        self.assertEqual(public["autonomy_level"], "orchestrator")
+        self.assertIsNone(public.get("pending_autonomy"))
+        note = [r for r in rt.session_records(sid)
+                if r.get("autonomy_notice") == "orchestrator"][-1]
+        self.assertIn("ROLE CHANGED", note["content"])
+        self.assertIn("ORCHESTRATOR", note["content"])
+
     def test_review_loop_replenishes_and_reruns_until_accepted(self) -> None:
         from blagent.llm import LlmChunk, LlmClient
         rt = self._runtime([self._probe_tool()])

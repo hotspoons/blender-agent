@@ -97,6 +97,18 @@ def main():
             text = page.evaluate(_DOM_TEXT)
             _check("request card shows the original prompt at top", "ORIGINAL_PROMPT_PEGS" in text)
 
+            # --- a mid-turn autonomy switch shows a pending hint (deferred) ---
+            _drive(page, "store._set({busy:true}); store._handle({type:'config', config:{autonomy_level:'yolo', pending_autonomy:'orchestrator'}});")
+            page.wait_for_timeout(120)
+            pa = _drive(page, "return store.state.pendingAutonomy;")
+            _check("pending autonomy tracked from config event", pa == "orchestrator", "pa=%s" % pa)
+            page.evaluate("""() => { const find=(r)=>{const e=r.querySelector&&r.querySelector('ba-composer'); if(e)return e; let f=null; r.querySelectorAll&&r.querySelectorAll('*').forEach(el=>{if(el.shadowRoot){const g=find(el.shadowRoot); if(g)f=g;}}); return f;}; const c=find(document); if(c){c._autoOpen=true; c.requestUpdate&&c.requestUpdate();} }""")
+            page.wait_for_timeout(200)
+            text = page.evaluate(_DOM_TEXT)
+            _check("pending autonomy hint rendered in composer",
+                   "switching to" in text and "after this turn" in text)
+            _drive(page, "store._set({busy:false});")
+
             # --- planner card: draft-phase "looking around" projects from the
             #     snapshot's planner field (feedback before objectives arrive) ---
             push_view({**view({}, []), "planner": {
