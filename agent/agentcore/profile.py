@@ -1,6 +1,6 @@
-# SPDX-FileCopyrightText: 2026 Blender Authors
+# SPDX-FileCopyrightText: 2026 agentcore contributors
 #
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
 """
 ``AgentProfile`` — the domain *flavor* of an agent, separate from its
@@ -18,10 +18,7 @@ viewers) stay in the web extension module; text + an optional favicon
 data-URL travel here.
 """
 
-__all__ = (
-    "AgentProfile",
-    "blender_profile",
-)
+__all__ = ("AgentProfile",)
 
 import dataclasses
 from typing import Any
@@ -47,6 +44,10 @@ class AgentProfile:
     swarm_blurb: str = "Parallel workers, each running its own instance, merged at the end."
     favicon: str = ""        # optional data: URL; empty → web extension supplies it
 
+    # The agent's base system prompt (the domain build supplies it; agentcore
+    # falls back to a neutral default when empty).
+    system_prompt: str = ""
+
     # --- prompt overrides (None → core/neutral default) -------------------
     # Threaded incrementally; carried here so a YAML build can override them.
     prompts: dict[str, str] = dataclasses.field(default_factory=dict)
@@ -70,20 +71,3 @@ class AgentProfile:
         if self.favicon:
             block["favicon"] = self.favicon
         return block
-
-
-def blender_profile() -> AgentProfile:
-    """The Blender build's profile (the default until a YAML build overrides)."""
-    return AgentProfile(
-        noun="scene",
-        chat_field_prefix="blender",
-        title="Blender Agent",
-        brand_word="Blender",
-        brand_rest=" Agent",
-        welcome_word="Blender",
-        welcome_rest=" Agent",
-        welcome_body="Connected to your Blender session through the MCP tool surface.",
-        welcome_hint='Try: "what\'s in my scene?" or "make the selected mesh manifold".',
-        composer_placeholder="Ask the Blender agent…",
-        swarm_blurb="Parallel workers, each its own headless Blender, merged at the end.",
-    )

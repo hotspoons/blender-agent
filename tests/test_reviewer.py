@@ -42,7 +42,7 @@ _RECORDS = [
 class TestVerdictParsing(unittest.TestCase):
 
     def _parse(self, text: str, max_grant: int = 8):
-        from blagent.reviewer import _parse_verdict
+        from agentcore.reviewer import _parse_verdict
         return _parse_verdict(text, max_grant)
 
     def test_clean_json(self) -> None:
@@ -76,21 +76,21 @@ class TestVerdictParsing(unittest.TestCase):
 class TestReviewerTools(unittest.TestCase):
 
     def test_user_requests_skip_synthetic(self) -> None:
-        from blagent.reviewer import _get_user_requests
+        from agentcore.reviewer import _get_user_requests
         requests = _get_user_requests(_RECORDS)
         self.assertEqual(len(requests), 2)
         self.assertIn("walk cycle", requests[0])
         self.assertNotIn("(synthetic nudge)", requests)
 
     def test_search_finds_tool_results(self) -> None:
-        from blagent.reviewer import _search_history
+        from agentcore.reviewer import _search_history
         hits = _search_history(_RECORDS, "Rig.Assembly armature")
         self.assertTrue(hits)
         self.assertEqual(hits[0]["role"], "tool")
         self.assertIn("Rig.Assembly", hits[0]["snippet"])
 
     def test_search_empty_query(self) -> None:
-        from blagent.reviewer import _search_history
+        from agentcore.reviewer import _search_history
         self.assertEqual(_search_history(_RECORDS, "!!"), [])
 
 
@@ -103,7 +103,7 @@ class TestReviewLoop(unittest.TestCase):
         only then renders its verdict — the checks land in the detail.
         """
         from agentcore.llm import LlmChunk, LlmClient
-        from blagent.reviewer import review_budget
+        from agentcore.reviewer import review_budget
 
         class Skeptic(LlmClient):
             async def stream(self, request: dict[str, Any]) -> Any:
@@ -134,7 +134,7 @@ class TestReviewLoop(unittest.TestCase):
         one tool-less final request, and an unparseable answer = stop.
         """
         from agentcore.llm import LlmChunk, LlmClient
-        from blagent.reviewer import review_budget
+        from agentcore.reviewer import review_budget
 
         class Waffler(LlmClient):
             async def stream(self, request: dict[str, Any]) -> Any:

@@ -34,7 +34,7 @@ def _import_autonomy() -> Any:
     for path in (os.path.join(_REPO_DIR, "mcp"), os.path.join(_REPO_DIR, "agent")):
         if path not in sys.path:
             sys.path.insert(0, path)
-    return importlib.import_module("blagent.autonomy")
+    return importlib.import_module("agentcore.autonomy")
 
 
 def _run(coro: Any) -> Any:
@@ -392,10 +392,10 @@ class TestChildSessionRunner(unittest.TestCase):
         for path in (os.path.join(_REPO_DIR, "mcp"), os.path.join(_REPO_DIR, "agent")):
             if path not in sys.path:
                 sys.path.insert(0, path)
-        from blagent.autonomy import WorkerTask
+        from agentcore.autonomy import WorkerTask
         from agentcore.llm import LlmChunk, LlmClient
         from agentcore.media import MediaLibrary
-        from blagent.runtime import ChildSessionRunner
+        from agentcore.runtime import ChildSessionRunner
         from agentcore.tools import Tool, ToolRegistry, ToolResult
 
         tool_calls: list[dict[str, Any]] = []
@@ -476,10 +476,10 @@ class TestChildSessionRunner(unittest.TestCase):
         for path in (os.path.join(_REPO_DIR, "mcp"), os.path.join(_REPO_DIR, "agent")):
             if path not in sys.path:
                 sys.path.insert(0, path)
-        from blagent.autonomy import WorkerTask
+        from agentcore.autonomy import WorkerTask
         from agentcore.llm import LlmChunk, LlmClient
         from agentcore.media import MediaLibrary
-        from blagent.runtime import ChildSessionRunner
+        from agentcore.runtime import ChildSessionRunner
         from agentcore.tools import Tool, ToolRegistry, ToolResult
 
         def _stub(tool_name: str) -> Any:

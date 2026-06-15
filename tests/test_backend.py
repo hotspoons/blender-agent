@@ -172,8 +172,8 @@ class TestRuntimeBackendWiring(unittest.TestCase):
     """The runtime holds a ToolBackend and reaches ground truth through it."""
 
     def _runtime(self, tools: Any) -> Any:
-        from blagent.runtime import AgentRuntime
-        from blagent.store import AgentStore
+        from agentcore.runtime import AgentRuntime
+        from agentcore.store import AgentStore
         store = AgentStore(data_dir=tempfile.mkdtemp(prefix="agentdata_"))
         return AgentRuntime(store, tools)
 
@@ -218,8 +218,8 @@ class TestRuntimeBackendWiring(unittest.TestCase):
 
     def test_create_builds_registry_from_generic_backend(self) -> None:
         b = _imp()
-        from blagent.runtime import AgentRuntime
-        from blagent.store import AgentStore
+        from agentcore.runtime import AgentRuntime
+        from agentcore.store import AgentStore
 
         class _Inline(b._DefaultBackendMixin):
             async def list_tools(self):
@@ -239,17 +239,25 @@ class TestRuntimeBackendWiring(unittest.TestCase):
         with self.assertRaises(TypeError):
             self._runtime("not a backend")  # type: ignore[arg-type]
 
-    def test_public_ui_profile_defaults_to_blender(self) -> None:
+    def test_public_ui_profile_defaults_to_generic_agentcore(self) -> None:
+        # Post-split: agentcore is domain-agnostic, so the default profile is
+        # neutral; the Blender branding comes from blagent's blender_profile().
         rt = self._runtime([])
         ui = rt.public_ui_profile()
-        self.assertEqual(ui["title"], "Blender Agent")
-        self.assertEqual(ui["brand"]["word"], "Blender")
+        self.assertEqual(ui["brand"]["word"], "Agent")
         self.assertIn("hint", ui["welcome"])
 
+    def test_blender_profile_supplies_branding_and_prompt(self) -> None:
+        from blagent.blender_tools import blender_profile
+        prof = blender_profile()
+        self.assertEqual(prof.title, "Blender Agent")
+        self.assertEqual(prof.brand_word, "Blender")
+        self.assertTrue(prof.system_prompt)        # the Blender system prompt is carried
+
     def test_explicit_profile_overrides(self) -> None:
-        from blagent.profile import AgentProfile
-        from blagent.runtime import AgentRuntime
-        from blagent.store import AgentStore
+        from agentcore.profile import AgentProfile
+        from agentcore.runtime import AgentRuntime
+        from agentcore.store import AgentStore
         store = AgentStore(data_dir=tempfile.mkdtemp(prefix="agentdata_"))
         rt = AgentRuntime(store, [], profile=AgentProfile(title="Foo", brand_word="Foo"))
         self.assertEqual(rt.public_ui_profile()["title"], "Foo")
@@ -317,7 +325,7 @@ class TestRuntimeBackendWiring(unittest.TestCase):
             self.assertTrue(yaml.safe_load(fh).get("autonomy_qa"))
 
     def _review_stub(self):
-        from blagent.autonomy import WorkerResult, WorkerTask
+        from agentcore.autonomy import WorkerResult, WorkerTask
 
         class StubRunner:
             def __init__(self) -> None:

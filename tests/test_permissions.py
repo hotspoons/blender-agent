@@ -19,7 +19,7 @@ def _imp():
     for p in (os.path.join(_REPO_DIR, "mcp"), os.path.join(_REPO_DIR, "agent")):
         if p not in sys.path:
             sys.path.insert(0, p)
-    return importlib.import_module("blagent.permissions")
+    return importlib.import_module("agentcore.permissions")
 
 
 class _FakeTool:

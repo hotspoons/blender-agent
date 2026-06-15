@@ -258,8 +258,8 @@ class TestSwarmRequirements(unittest.TestCase):
         for path in (os.path.join(_REPO_DIR, "mcp"), os.path.join(_REPO_DIR, "agent")):
             if path not in sys.path:
                 sys.path.insert(0, path)
-        from blagent.runtime import AgentRuntime
-        from blagent.store import AgentStore
+        from agentcore.runtime import AgentRuntime
+        from agentcore.store import AgentStore
         rt = AgentRuntime(AgentStore(tempfile.mkdtemp(prefix="agentdata_")), [])
         sid = rt.new_session()
         pub = rt.set_autonomy_level(sid, "swarm")
@@ -283,8 +283,8 @@ class TestWorkerControls(unittest.TestCase):
         for path in (os.path.join(_REPO_DIR, "mcp"), os.path.join(_REPO_DIR, "agent")):
             if path not in sys.path:
                 sys.path.insert(0, path)
-        from blagent.runtime import AgentRuntime
-        from blagent.store import AgentStore
+        from agentcore.runtime import AgentRuntime
+        from agentcore.store import AgentStore
         return AgentRuntime(AgentStore(tempfile.mkdtemp(prefix="agentdata_")), [])
 
     def test_inprocess_worker_inject_interrupt_stop(self) -> None:
@@ -333,7 +333,7 @@ class TestWorkerControls(unittest.TestCase):
         self.assertFalse(rt.inject_into_worker("nope", "x"))
 
     def test_update_objectives_edits_appends_and_interjects(self) -> None:
-        from blagent.autonomy import Objective
+        from agentcore.autonomy import Objective
         rt = self._runtime()
         # No live run -> None.
         self.assertIsNone(rt.update_objectives("s1", [{"text": "x"}]))
@@ -371,8 +371,8 @@ class TestAutonomyLevel(unittest.TestCase):
         for path in (os.path.join(_REPO_DIR, "mcp"), os.path.join(_REPO_DIR, "agent")):
             if path not in sys.path:
                 sys.path.insert(0, path)
-        from blagent.runtime import AgentRuntime
-        from blagent.store import AgentStore
+        from agentcore.runtime import AgentRuntime
+        from agentcore.store import AgentStore
 
         store = AgentStore(tempfile.mkdtemp(prefix="agentdata_"))
         rt = AgentRuntime(store, [])
@@ -401,8 +401,8 @@ class TestAutonomyLevel(unittest.TestCase):
         for path in (os.path.join(_REPO_DIR, "mcp"), os.path.join(_REPO_DIR, "agent")):
             if path not in sys.path:
                 sys.path.insert(0, path)
-        from blagent.runtime import AgentRuntime
-        from blagent.store import AgentStore
+        from agentcore.runtime import AgentRuntime
+        from agentcore.store import AgentStore
         from agentcore.tools import ToolContext, ToolError
 
         rt = AgentRuntime(AgentStore(tempfile.mkdtemp(prefix="agentdata_")), [])

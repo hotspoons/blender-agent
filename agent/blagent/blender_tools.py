@@ -16,6 +16,7 @@ Tool discovery mirrors ``blmcp.main`` exactly: every public module in
 
 __all__ = (
     "BlenderTool",
+    "blender_profile",
     "build_blender_registry",
     "load_initial_instructions",
     "make_backend",
@@ -30,7 +31,34 @@ import yaml
 
 from mcp.server.fastmcp import FastMCP
 
+from agentcore.profile import AgentProfile
 from agentcore.tools import Tool, ToolContext, ToolResult
+
+_SYSTEM_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "system_prompt.md")
+
+
+def blender_profile() -> AgentProfile:
+    """The Blender build's profile: branding + the Blender system prompt. The
+    default until a YAML build overrides it."""
+    try:
+        with open(_SYSTEM_PROMPT_PATH, encoding="utf-8") as fh:
+            system_prompt = fh.read()
+    except OSError:
+        system_prompt = ""
+    return AgentProfile(
+        noun="scene",
+        chat_field_prefix="blender",
+        title="Blender Agent",
+        brand_word="Blender",
+        brand_rest=" Agent",
+        welcome_word="Blender",
+        welcome_rest=" Agent",
+        welcome_body="Connected to your Blender session through the MCP tool surface.",
+        welcome_hint='Try: "what\'s in my scene?" or "make the selected mesh manifold".',
+        composer_placeholder="Ask the Blender agent…",
+        swarm_blurb="Parallel workers, each its own headless Blender, merged at the end.",
+        system_prompt=system_prompt,
+    )
 
 
 def _build_fastmcp() -> FastMCP:

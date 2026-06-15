@@ -83,7 +83,7 @@ class TestLoader(unittest.TestCase):
 
     def test_load_agent_python_backend(self) -> None:
         _prep_path()
-        from blagent.loader import load_agent
+        from agentcore.loader import load_agent
         from agentcore.backend import PythonToolBackend
         path = self._write_yaml(_YAML.format())
         rt = _run(load_agent(path, data_dir=tempfile.mkdtemp(prefix="agentdata_")))
@@ -107,7 +107,7 @@ class TestLoader(unittest.TestCase):
 
     def test_unknown_backend_type_raises(self) -> None:
         _prep_path()
-        from blagent.loader import load_agent
+        from agentcore.loader import load_agent
         bad = _YAML.format().replace('type: "python"', 'type: "carrier-pigeon"')
         path = self._write_yaml(bad)
         with self.assertRaises(ValueError):

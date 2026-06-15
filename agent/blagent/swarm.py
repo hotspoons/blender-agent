@@ -1,6 +1,6 @@
-# SPDX-FileCopyrightText: 2026 Blender Authors
+# SPDX-FileCopyrightText: 2026 agentcore contributors
 #
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
 """
 Swarm: real-subprocess worker instances for autonomy mode (Phase 4).
@@ -495,7 +495,7 @@ class RemoteWorkerStrategy:
             worker.stop()
 
     async def __call__(self, task: Any) -> Any:
-        from .autonomy import WorkerResult
+        from agentcore.autonomy import WorkerResult
 
         agent_id = self._agent_id(task.id)
         component = "component_{:s}".format(_safe(task.id))

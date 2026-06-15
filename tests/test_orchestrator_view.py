@@ -18,7 +18,7 @@ def _mod():
     for p in (os.path.join(_REPO, "mcp"), os.path.join(_REPO, "agent")):
         if p not in sys.path:
             sys.path.insert(0, p)
-    return importlib.import_module("blagent.orchestrator_view")
+    return importlib.import_module("agentcore.orchestrator_view")
 
 
 class TestOrchestratorView(unittest.TestCase):

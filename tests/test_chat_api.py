@@ -64,8 +64,8 @@ class _ChatApiTestCase(unittest.TestCase):
         self._tmp.cleanup()
 
     def _runtime(self, fake_llm_factory):
-        from blagent.runtime import AgentRuntime
-        from blagent.store import AgentStore
+        from agentcore.runtime import AgentRuntime
+        from agentcore.store import AgentStore
 
         async def build():
             store = AgentStore(data_dir=self._tmp.name)
@@ -128,8 +128,8 @@ class TestConfigure(_ChatApiTestCase):
 
     def test_missing_remote_llm_refused(self) -> None:
         from blagent import chat_api
-        from blagent.store import AgentStore
-        from blagent.runtime import AgentRuntime
+        from agentcore.store import AgentStore
+        from agentcore.runtime import AgentRuntime
 
         store = AgentStore(data_dir=self._tmp.name)
         store.config.endpoint = ""

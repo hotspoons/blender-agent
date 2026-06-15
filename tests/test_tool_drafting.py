@@ -33,7 +33,7 @@ _HAS_AGENT_DEPS = all(
 class TestToolDrafting(unittest.TestCase):
 
     def test_drafting_events_during_argument_stream(self) -> None:
-        from blagent.engine import AgentEngine
+        from agentcore.engine import AgentEngine
         from agentcore.llm import LlmChunk, LlmClient
         from agentcore.tools import ToolRegistry
 
@@ -86,7 +86,7 @@ class TestToolDrafting(unittest.TestCase):
         writes — drafting can't fire. The watchdog must report the
         silence itself.
         """
-        from blagent.engine import AgentEngine
+        from agentcore.engine import AgentEngine
         from agentcore.llm import LlmChunk, LlmClient
         from agentcore.tools import ToolRegistry
 

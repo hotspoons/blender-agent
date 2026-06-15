@@ -85,7 +85,7 @@ class TestSkillsStore(unittest.TestCase):
 
     def setUp(self) -> None:
         _import_blagent()
-        from blagent.store import AgentStore
+        from agentcore.store import AgentStore
 
         self._tmp = tempfile.TemporaryDirectory()
         self.store = AgentStore(data_dir=self._tmp.name)
@@ -111,7 +111,7 @@ class TestSkillsStore(unittest.TestCase):
         """
         Checks that searching for fillet terminology finds the bevel skill.
         """
-        from blagent.store import search_skills
+        from agentcore.store import search_skills
 
         hits = search_skills(self.store.list_skills(), "rounded corners fillet")
         self.assertTrue(hits)
@@ -138,7 +138,7 @@ class TestLocalLlmBridge(unittest.TestCase):
         Checks chunk/done correlation between a fake browser and the bridge.
         """
         _import_blagent()
-        from blagent.local_llm import LocalLlmBridge
+        from agentcore.local_llm import LocalLlmBridge
 
         class FakeWs:
             def __init__(self, bridge: Any) -> None:
@@ -171,7 +171,7 @@ class TestLocalLlmBridge(unittest.TestCase):
         Checks that a browser disconnect terminates in-flight streams.
         """
         _import_blagent()
-        from blagent.local_llm import LocalLlmBridge
+        from agentcore.local_llm import LocalLlmBridge
 
         class SilentWs:
             async def send_json(self, data: Any) -> None:
@@ -365,8 +365,8 @@ class TestAgentTurn(unittest.TestCase):
         from blagent.app import create_app
         from blagent.blender_tools import build_blender_registry
         from agentcore.llm import LlmChunk, LlmClient
-        from blagent.runtime import AgentRuntime
-        from blagent.store import AgentStore
+        from agentcore.runtime import AgentRuntime
+        from agentcore.store import AgentStore
 
         from starlette.testclient import TestClient
 
@@ -436,7 +436,7 @@ class TestTurnBudgetExhaustion(unittest.TestCase):
 
     def test_unrun_calls_get_skipped_records(self) -> None:
         _import_blagent()
-        from blagent.engine import AgentEngine
+        from agentcore.engine import AgentEngine
         from agentcore.llm import LlmChunk, LlmClient
         from agentcore.tools import ToolRegistry
 
@@ -494,7 +494,7 @@ class TestUnknownToolSuggestion(unittest.TestCase):
 
     def test_close_match_suggested(self) -> None:
         _import_blagent()
-        from blagent.engine import AgentEngine
+        from agentcore.engine import AgentEngine
         from agentcore.llm import LlmChunk, LlmClient
         from agentcore.tools import Tool, ToolRegistry
 
@@ -551,7 +551,7 @@ class TestBudgetReview(unittest.TestCase):
 
     def _engine(self, events: list[dict[str, Any]]) -> Any:
         _import_blagent()
-        from blagent.engine import AgentEngine
+        from agentcore.engine import AgentEngine
         from agentcore.tools import ToolRegistry
 
         async def emit(event: dict[str, Any]) -> None:
@@ -661,7 +661,7 @@ class TestContextBudget(unittest.TestCase):
 
     def _engine(self) -> Any:
         _import_blagent()
-        from blagent.engine import AgentEngine
+        from agentcore.engine import AgentEngine
         from agentcore.media import MediaLibrary
         from agentcore.tools import ToolRegistry
 
@@ -796,7 +796,7 @@ class TestContextBudget(unittest.TestCase):
         self.assertEqual(placeholders, 2)
 
     def _engine_with_tools(self, tools: "list[Any]") -> Any:
-        from blagent.engine import AgentEngine
+        from agentcore.engine import AgentEngine
         from agentcore.media import MediaLibrary
         from agentcore.tools import ToolRegistry
 
@@ -821,7 +821,7 @@ class TestCompaction(unittest.TestCase):
 
     def _engine(self) -> Any:
         _import_blagent()
-        from blagent.engine import AgentEngine
+        from agentcore.engine import AgentEngine
         from agentcore.media import MediaLibrary
         from agentcore.tools import ToolRegistry
 
@@ -932,8 +932,8 @@ class TestInstanceTitle(unittest.TestCase):
     def test_hello_carries_title_and_update_broadcasts(self) -> None:
         _import_blagent()
         from blagent.app import create_app
-        from blagent.runtime import AgentRuntime
-        from blagent.store import AgentStore
+        from agentcore.runtime import AgentRuntime
+        from agentcore.store import AgentStore
 
         from starlette.testclient import TestClient
 
@@ -966,7 +966,7 @@ class TestVisionFallback(unittest.TestCase):
 
     def test_image_rejection_falls_back_to_text(self) -> None:
         _import_blagent()
-        from blagent.engine import AgentEngine
+        from agentcore.engine import AgentEngine
         from agentcore.llm import LlmChunk, LlmClient, LlmError
         from agentcore.media import MediaLibrary
         from agentcore.tools import ToolRegistry
@@ -1035,7 +1035,7 @@ class TestSessionLocking(unittest.TestCase):
 
     def _stores(self) -> Any:
         _import_blagent()
-        from blagent.store import AgentStore
+        from agentcore.store import AgentStore
 
         data_dir = tempfile.mkdtemp(prefix="blagent-lock-")
         return AgentStore(data_dir), AgentStore(data_dir)
@@ -1063,7 +1063,7 @@ class TestSessionLocking(unittest.TestCase):
 
     def test_loser_gets_busy_error_and_reads_still_work(self) -> None:
         _import_blagent()
-        from blagent.store import SessionBusyError
+        from agentcore.store import SessionBusyError
 
         store_a, store_b = self._stores()
         sid = "20260611-000000-cccccc"
@@ -1115,7 +1115,7 @@ class TestWeightedRoundBudget(unittest.TestCase):
 
     def _rounds_until_exhaustion(self, tool_name: str, read_only: bool) -> int:
         _import_blagent()
-        from blagent.engine import AgentEngine
+        from agentcore.engine import AgentEngine
         from agentcore.llm import LlmChunk, LlmClient
         from agentcore.tools import Tool, ToolRegistry, ToolResult
 
@@ -1180,7 +1180,7 @@ class TestVoiceOfGodInjection(unittest.TestCase):
 
     def _engine_and_llm(self, llm_factory: Any) -> Any:
         _import_blagent()
-        from blagent.engine import AgentEngine
+        from agentcore.engine import AgentEngine
         from agentcore.tools import Tool, ToolRegistry, ToolResult
 
         class StubTool(Tool):
@@ -1334,8 +1334,8 @@ class TestElicitation(unittest.TestCase):
 
     def test_ask_user_round_trip(self) -> None:
         _import_blagent()
-        from blagent.agent_tools import AskUserTool
-        from blagent.engine import AgentEngine
+        from agentcore.agent_tools import AskUserTool
+        from agentcore.engine import AgentEngine
         from agentcore.llm import LlmChunk, LlmClient
         from agentcore.tools import ToolRegistry
 
@@ -1392,7 +1392,7 @@ class TestReasoningTrace(unittest.TestCase):
 
     def test_reasoning_folded_and_stripped(self) -> None:
         _import_blagent()
-        from blagent.engine import AgentEngine
+        from agentcore.engine import AgentEngine
         from agentcore.llm import LlmChunk, LlmClient
         from agentcore.tools import ToolRegistry
 
@@ -1442,7 +1442,7 @@ class TestAskUserHeadless(unittest.TestCase):
 
     def test_ask_user_without_interactive_user_errors(self) -> None:
         _import_blagent()
-        from blagent.agent_tools import AskUserTool
+        from agentcore.agent_tools import AskUserTool
         from agentcore.tools import ToolContext, ToolError
 
         ctx = ToolContext(media=None, elicit=None)  # headless: no user attached
@@ -1456,7 +1456,7 @@ class TestSetAutonomyElicits(unittest.TestCase):
 
     def _call(self, elicit, args=None):
         _import_blagent()
-        from blagent.agent_tools import SetAutonomyTool
+        from agentcore.agent_tools import SetAutonomyTool
         from agentcore.tools import ToolContext
         applied: list[str] = []
         tool = SetAutonomyTool(lambda sid, level: applied.append(level))

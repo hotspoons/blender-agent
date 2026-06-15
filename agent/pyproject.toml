@@ -26,8 +26,10 @@ include = ["blagent*", "agentcore*"]
 [tool.setuptools.package-data]
 "blagent" = [
     "data/system_prompt.md",
-    "data/permissions.yaml",
     "web/**/*",
+]
+"agentcore" = [
+    "data/permissions.yaml",
 ]
 
 [tool.mypy]

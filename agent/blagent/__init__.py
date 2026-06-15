@@ -106,9 +106,9 @@ async def run_server(
     from .blender_surface import (
         BlenderSurface, bridge_reachable, spawned_by_blender, surface_decision,
     )
-    from .blender_tools import build_blender_registry
-    from .runtime import AgentRuntime
-    from .store import AgentStore
+    from .blender_tools import blender_profile, build_blender_registry
+    from agentcore.runtime import AgentRuntime
+    from agentcore.store import AgentStore
 
     if port is None and mcp_port is None:
         raise ValueError(
@@ -146,7 +146,7 @@ async def run_server(
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     logging.getLogger("blagent").setLevel(logging.INFO)
     logging.getLogger("blagent").addHandler(handler)
-    runtime = AgentRuntime(store, blender_tools)
+    runtime = AgentRuntime(store, blender_tools, profile=blender_profile())
     runtime.instance_title = title if title is not None else os.environ.get("BLENDER_AGENT_TITLE", "")
     runtime.instance_port = port or 0
     app = create_app(runtime)

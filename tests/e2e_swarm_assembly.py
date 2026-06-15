@@ -62,7 +62,7 @@ def _make_strategy(exchange_dir):
 
 
 async def _run(strategy):
-    from blagent.autonomy import ParallelScheduler
+    from agentcore.autonomy import ParallelScheduler
 
     tasks = [types.SimpleNamespace(id=tid, objective_id=tid, instruction=instr, context="")
              for tid, instr in _TASKS]

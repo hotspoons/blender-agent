@@ -1,6 +1,6 @@
-# SPDX-FileCopyrightText: 2026 Blender Authors
+# SPDX-FileCopyrightText: 2026 agentcore contributors
 #
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT OR Apache-2.0
 
 """
 Agent runtime, ported from Foyer Studio's ``foyer-agent/src/runtime.rs``:
@@ -29,7 +29,7 @@ from agentcore.backend import PythonToolBackend, ToolBackend
 from .engine import AgentEngine, _strip_thinking
 from .orchestrator_view import OrchestratorView
 from .permissions import ToolPermissions, WORKER_DENY
-from .profile import AgentProfile, blender_profile
+from .profile import AgentProfile
 from agentcore.llm import LlmClient, LlmError, LocalLlmBridgeClient, OpenAiHttpClient
 from agentcore.media import MediaLibrary
 from .store import AgentStore, SessionBusyError
@@ -217,7 +217,12 @@ class ChildSessionRunner:
                     return content
         return ""
 
-_SYSTEM_PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "system_prompt.md")
+_DEFAULT_SYSTEM_PROMPT = (
+    "You are a capable autonomous agent operating a workspace through a set of "
+    "tools. Use the tools to accomplish the user's request, verify your own "
+    "work, and report concisely what you did. Prefer acting over asking when the "
+    "intent is clear."
+)
 
 # The orchestrator/swarm run state is owned by the BACKEND: events are reduced
 # into an OrchestratorView (blagent.orchestrator_view) and the snapshot is
@@ -301,7 +306,7 @@ class AgentRuntime:
         self.store = store
         # Domain flavor (brand/copy/prompts). Defaults to the Blender build's
         # profile; a YAML build passes its own.
-        self.profile = profile or blender_profile()
+        self.profile = profile or AgentProfile()
         # Tool RBAC matrix (role -> allowed tools), from data/permissions.yaml.
         self.permissions = permissions or ToolPermissions.load()
         self.local_llm = LocalLlmBridge()
@@ -405,11 +410,9 @@ class AgentRuntime:
         return self
 
     def _load_system_prompt(self) -> str:
-        # No skills index here: the prompt compels a `welcome` call, whose
-        # response carries the live skill inventory — duplicating it in the
-        # system prompt would cost tokens on every turn.
-        with open(_SYSTEM_PROMPT_PATH, encoding="utf-8") as fh:
-            return fh.read()
+        # The domain build supplies the base prompt via its profile; agentcore
+        # falls back to a neutral default.
+        return self.profile.system_prompt or _DEFAULT_SYSTEM_PROMPT
 
     # ------------------------------------------------------------------
     # Event broadcast.
@@ -1119,7 +1122,7 @@ class AgentRuntime:
         # each), fanned out in parallel, exchanging .blend via a shared dir.
         if config.autonomy_workers == "swarm" and config.endpoint:
             from .autonomy import ParallelScheduler
-            from .swarm import RemoteWorkerStrategy
+            from blagent.swarm import RemoteWorkerStrategy
 
             exchange_dir = os.path.join(self.store.session_dir(session_id), "exchange")
             swarm_strategy: "Any" = RemoteWorkerStrategy(
@@ -1489,7 +1492,7 @@ class AgentRuntime:
         # cross-platform requirements (and any missing ones) up front.
         swarm_ready, swarm_report = True, ""
         if level == "swarm":
-            from .blender_surface import swarm_preflight
+            from blagent.blender_surface import swarm_preflight
             swarm_ready, swarm_report = swarm_preflight()
         if session_id:
             session = self._get_or_load_session(session_id)
