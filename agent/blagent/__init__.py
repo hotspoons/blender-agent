@@ -147,8 +147,11 @@ async def run_server(
     log_path = os.path.join(store.data_dir, "agent.log")
     handler = logging.handlers.RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=2)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    logging.getLogger("blagent").setLevel(logging.INFO)
-    logging.getLogger("blagent").addHandler(handler)
+    # Route both the Blender build (blagent.*) and the harness (agentcore.*,
+    # incl. agentcore.trace context tracing) to agent.log.
+    for _name in ("blagent", "agentcore"):
+        logging.getLogger(_name).setLevel(logging.INFO)
+        logging.getLogger(_name).addHandler(handler)
     runtime = AgentRuntime(store, blender_tools, profile=blender_profile())
     # A swarm worker subprocess runs as the "worker" RBAC role, so it gets the
     # filtered surface (no set_autonomy/ask_user) — a leaf executor can't change

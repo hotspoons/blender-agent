@@ -155,6 +155,7 @@ class ChildSessionRunner:
             system_prompt=worker_system,
             emit=child_emit,
             append_record=records.append,
+            trace_label="worker:{:s}".format(agent_id),
         )
         # Kept alive so the orchestrator can replenish the budget and continue
         # the SAME worker (continue_) after a review; released explicitly.
@@ -469,6 +470,7 @@ class AgentRuntime:
             system_prompt=self._system_prompt,
             emit=self.emit,
             append_record=_append_record,
+            trace_label="chat:{:s}".format(session_id),
         )
         engine.records = self.store.load_records(session_id)
         session = _Session(session_id, engine, media)
@@ -799,7 +801,8 @@ class AgentRuntime:
         user = "OBJECTIVES:\n{:s}\n\nA worker asks:\n{:s}\n\nOptions it offered: {:s}".format(
             listing, question, ", ".join(options) or "(none)")
         try:
-            text = await _complete(self._make_llm(), self._model_name(), _ORCH_DECIDE_SYSTEM, user)
+            text = await _complete(self._make_llm(), self._model_name(), _ORCH_DECIDE_SYSTEM, user,
+                                   trace_label="orchestrator_decide")
         except Exception as ex:  # pylint: disable=broad-except
             _log.warning("orchestrator decision failed session=%s: %s", session_id, ex)
             return {"escalate": True, "question": question}
@@ -872,7 +875,8 @@ class AgentRuntime:
                 state, "NOTE: the user STOPPED this worker." if stopped else "")
         )
         try:
-            text = await _complete(self._make_llm(), self._model_name(), _REVIEW_SYSTEM, user)
+            text = await _complete(self._make_llm(), self._model_name(), _REVIEW_SYSTEM, user,
+                                   trace_label="orchestrator_review")
         except Exception as ex:  # pylint: disable=broad-except
             _log.warning("worker review failed session=%s: %s", session_id, ex)
             return {"accept": True, "guidance": "", "request_qa": False}
@@ -905,7 +909,8 @@ class AgentRuntime:
         engine = AgentEngine(
             registry=self.registry_for_role("worker"),   # full surface (camera/render ok)
             media=media_factory(qa_id), system_prompt=system,
-            emit=qa_emit, append_record=records.append)
+            emit=qa_emit, append_record=records.append,
+            trace_label="qa:{:s}".format(qa_id))
         findings = ""
         try:
             await engine.run_turn(
@@ -944,6 +949,29 @@ class AgentRuntime:
         text = data if isinstance(data, str) else json.dumps(data, default=str)
         return text[:6000]
 
+    def _conversation_context(self, session_id: str, limit: int = 4000) -> str:
+        """
+        The recent genuine conversation for this session (the user's notes and
+        the agent's replies), so the draft/planner reflect what was actually
+        discussed — not just the bare goal/objectives. Excludes the synthetic
+        objective/draft/goal records (those are derived and passed separately),
+        and keeps the most recent *limit* characters.
+        """
+        lines: list[str] = []
+        for record in self.session_records(session_id):
+            if (record.get("autonomy_objectives") or record.get("autonomy_objectives_draft")
+                    or record.get("autonomy_goal") or record.get("autonomy_notice")):
+                continue
+            role = record.get("role")
+            content = record.get("content")
+            if role not in ("user", "assistant") or not isinstance(content, str) or not content.strip():
+                continue
+            lines.append("{:s}: {:s}".format(role, content.strip()))
+        text = "\n".join(lines)
+        if len(text) > limit:
+            text = "…(earlier conversation omitted)…\n" + text[-limit:]
+        return text
+
     def draft_objectives(self, session_id: str, goal: str) -> str:
         """
         Guided intake: draft objectives from a one-line *goal* (LLM). Surfaces a
@@ -958,6 +986,9 @@ class AgentRuntime:
         if not session_id:
             session_id = self.new_session()
         session = self._get_or_load_session(session_id)
+        # Prior conversation (the user's notes + agent replies) BEFORE this goal
+        # record is pushed, so the draft reflects what was discussed.
+        conversation = self._conversation_context(session_id)
         view = self._reset_view(session_id)
         persist_emit = self._persist_emit_for(session_id, view)
         # The submitted request is intake (shown in the Request card + persisted
@@ -980,7 +1011,8 @@ class AgentRuntime:
                                     "phase": "draft", "state": "delta",
                                     "content": content, "reasoning": reasoning})
             try:
-                objs = await _draft(self._make_llm(), self._model_name(), goal, on_delta=on_delta)
+                objs = await _draft(self._make_llm(), self._model_name(), goal,
+                                    on_delta=on_delta, context=conversation)
             except Exception as ex:  # pylint: disable=broad-except
                 _log.warning("draft_objectives failed: %s", ex)
                 objs = []
@@ -1037,6 +1069,9 @@ class AgentRuntime:
         config = self.store.config
         llm = self._make_llm()
         model = self._model_name()
+        # Prior conversation, captured before the objectives record is pushed,
+        # so the planner's task instructions carry the user's actual intent.
+        conversation = self._conversation_context(session_id)
 
         objs = [
             Objective(
@@ -1132,7 +1167,8 @@ class AgentRuntime:
                 session_id, runner, persist_emit, probe, model,
                 qa_enabled=config.autonomy_qa, media_factory=media_factory)
         orchestrator = AutonomyOrchestrator(
-            planner=LlmPlanner(llm, model, emit=persist_emit, session_id=session_id),
+            planner=LlmPlanner(llm, model, emit=persist_emit, session_id=session_id,
+                               context=conversation),
             scheduler=scheduler,
             evaluator=StateAwareEvaluator(llm, model, probe=probe),
             policy=policy,

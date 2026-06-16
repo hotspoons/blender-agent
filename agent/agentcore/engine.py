@@ -194,12 +194,16 @@ class AgentEngine:
             system_prompt: str,
             emit: EngineEvents,
             append_record: Callable[[dict[str, Any]], None],
+            trace_label: str = "turn",
     ) -> None:
         self._registry = registry
         self._media = media
         self._system_prompt = system_prompt
         self._emit = emit
         self._append_record = append_record
+        # Tags this engine's LLM calls for the context trace
+        # (BLENDER_AGENT_TRACE_CONTEXT), e.g. "chat:<sid>" or "worker:<agent>".
+        self._trace_label = trace_label
         # Read-only scene queries: results go stale and age out harder.
         self._volatile_tools = {
             tool.name for tool in registry if getattr(tool, "volatile", False)}
@@ -515,6 +519,7 @@ class AgentEngine:
                 {"role": "user", "content": _SUMMARY_USER_PROMPT.format(
                     words=target_words, history=history)},
             ],
+            "_trace_label": self._trace_label + ":summary",
         }
         parts: list[str] = []
         async for chunk in llm.stream(request):
@@ -663,6 +668,7 @@ class AgentEngine:
                 "model": model,
                 "messages": self._llm_messages(context_tokens),
                 "tools": self._registry.specs(),
+                "_trace_label": self._trace_label,
             }
 
             try:
@@ -1003,7 +1009,8 @@ class AgentEngine:
                 })
             messages.append({"role": "user", "content": _SELF_REPORT_PROMPT})
             parts: list[str] = []
-            async for chunk in llm.stream({"model": model, "messages": messages}):
+            async for chunk in llm.stream({"model": model, "messages": messages,
+                                           "_trace_label": self._trace_label + ":budget"}):
                 if chunk.content:
                     parts.append(chunk.content)
             self_report = _strip_thinking("".join(parts))

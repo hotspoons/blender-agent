@@ -460,16 +460,18 @@ export class BaComposer extends LitElement {
     }
     this._autoload = false;
     if (this._autonomyMode()) {
-      // Autonomy modes: if objectives are already drafted/edited, launch them;
-      // otherwise SEND DECOMPOSES the goal into a set of objectives (guided
-      // intake) rather than running the whole prompt as one giant objective.
-      if (this._objRows.length) {
-        this._beginRun();
-      } else if (text) {
+      // Autonomy modes: TYPED TEXT always (re)drafts objectives — the backend
+      // folds in the conversation + any prior draft, so a new instruction is
+      // never silently dropped (it re-posts an updated objective list). To
+      // START a run, click "Begin run" (or send with an empty box once
+      // objectives are drafted).
+      if (text) {
         this._draftObjectives(text);
         ta.value = "";
         ta.style.height = "auto";
         return;
+      } else if (this._objRows.length) {
+        this._beginRun();
       } else {
         return;
       }

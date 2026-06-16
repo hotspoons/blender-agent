@@ -137,18 +137,21 @@ _COMPLETE_TIMEOUT_SECONDS = 240.0
 
 async def _complete(llm: LlmClient, model: str, system: str, user: str,
                     timeout: float = _COMPLETE_TIMEOUT_SECONDS,
-                    on_delta: "Callable[[str, str], Awaitable[None]] | None" = None) -> str:
+                    on_delta: "Callable[[str, str], Awaitable[None]] | None" = None,
+                    trace_label: str = "complete") -> str:
     """One completion; returns the content (falling back to the reasoning trace
     when a reasoning model answers there and leaves content empty). Bounded by
     *timeout* so a hang surfaces as a partial/empty result. When *on_delta* is
     given it is awaited per chunk with ``(content_delta, reasoning_delta)`` so a
-    caller can stream the planner/draft "looking around" to the UI."""
+    caller can stream the planner/draft "looking around" to the UI. *trace_label*
+    tags the call for the context trace (BLENDER_AGENT_TRACE_CONTEXT)."""
     request = {
         "model": model,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
+        "_trace_label": trace_label,
     }
     content: list[str] = []
     reasoning: list[str] = []
@@ -205,13 +208,21 @@ _DRAFT_SYSTEM = (
 
 async def draft_objectives(
         llm: LlmClient, model: str, goal: str,
-        on_delta: "Callable[[str, str], Awaitable[None]] | None" = None) -> list[dict[str, str]]:
+        on_delta: "Callable[[str, str], Awaitable[None]] | None" = None,
+        context: str = "") -> list[dict[str, str]]:
     """
     Propose objectives (each {text, acceptance}) for *goal*. The user edits/
     confirms before a run starts (guided intake, with an explicit-edit fallback).
     *on_delta* streams the draft's reasoning/content to the UI as it decomposes.
+    *context* is the recent conversation (the user's notes + agent replies) so
+    the objectives reflect what was actually discussed, not just the bare goal.
     """
-    text = await _complete(llm, model, _DRAFT_SYSTEM, "GOAL: " + goal, on_delta=on_delta)
+    user = "GOAL: " + goal
+    if context:
+        user = ("CONVERSATION SO FAR (the user's notes and your replies — fold any "
+                "relevant intent into the objectives):\n{:s}\n\n{:s}".format(context, user))
+    text = await _complete(llm, model, _DRAFT_SYSTEM, user, on_delta=on_delta,
+                           trace_label="draft")
     data = _extract_json_object(text)
     out: list[dict[str, str]] = []
     for raw in data.get("objectives", []) or []:
@@ -246,11 +257,14 @@ class LlmPlanner:
 
     def __init__(self, llm: LlmClient, model: str,
                  emit: "Callable[[dict[str, Any]], Awaitable[None]] | None" = None,
-                 session_id: str = "") -> None:
+                 session_id: str = "", context: str = "") -> None:
         self._llm = llm
         self._model = model
         self._emit = emit
         self._session_id = session_id
+        # Recent conversation (user notes + agent replies) so task instructions
+        # carry the user's actual intent to workers, not just the objective text.
+        self._context = context
 
     async def _planner_event(self, state: str, content: str = "", reasoning: str = "") -> None:
         if self._emit is None:
@@ -265,13 +279,17 @@ class LlmPlanner:
             "- id={:s} | goal: {:s} | acceptance: {:s}".format(o.id, o.text, o.acceptance)
             for o in unmet
         )
+        user = "UNMET OBJECTIVES:\n" + listing
+        if self._context:
+            user = ("CONVERSATION SO FAR (the user's notes and the agent's replies — let it "
+                    "inform the task instructions):\n{:s}\n\n{:s}".format(self._context, user))
         await self._planner_event("start")
 
         async def on_delta(content: str, reasoning: str) -> None:
             await self._planner_event("delta", content, reasoning)
 
-        text = await _complete(self._llm, self._model, _PLANNER_SYSTEM,
-                               "UNMET OBJECTIVES:\n" + listing, on_delta=on_delta)
+        text = await _complete(self._llm, self._model, _PLANNER_SYSTEM, user,
+                               on_delta=on_delta, trace_label="planner")
         await self._planner_event("done")
         data = _extract_json_object(text)
         by_id = {o.id: o for o in unmet}
@@ -354,7 +372,7 @@ class StateAwareEvaluator:
             "OBJECTIVES:\n{:s}\n\nWORKER PROOFS (claims):\n{:s}\n\n"
             "PROJECT STATE (ground truth):\n{:s}".format(objs, proofs, state)
         )
-        text = await _complete(self._llm, self._model, _EVAL_SYSTEM, user)
+        text = await _complete(self._llm, self._model, _EVAL_SYSTEM, user, trace_label="evaluator")
         data = _extract_json_object(text)
         verdicts: list[GoalVerdict] = []
         seen: set[str] = set()
@@ -460,7 +478,7 @@ class IndependentAuditor:
             "OBJECTIVES & THE ORCHESTRATOR'S CLAIMS:\n{:s}\n\n"
             "PROJECT STATE (ground truth — judge against THIS):\n{:s}".format(claims, state)
         )
-        text = await _complete(self._llm, self._model, _AUDIT_SYSTEM, user)
+        text = await _complete(self._llm, self._model, _AUDIT_SYSTEM, user, trace_label="auditor")
         data = _extract_json_object(text)
         claimed_met = {o.id for o in objectives if o.status == "met"}
         verdicts: list[AuditVerdict] = []

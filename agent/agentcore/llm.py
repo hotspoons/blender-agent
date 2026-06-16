@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from .trace import trace_llm_request
+
 if TYPE_CHECKING:
     from .local_llm import LocalLlmBridge
 
@@ -108,6 +110,9 @@ class OpenAiHttpClient(LlmClient):
             headers["Authorization"] = "Bearer {:s}".format(self._api_key)
         body = dict(request)
         body["stream"] = True
+        # Context trace (BLENDER_AGENT_TRACE_CONTEXT): log who-sent-what, then
+        # strip the internal label so it never goes on the wire.
+        trace_llm_request(str(body.pop("_trace_label", "")), body)
 
         url = "{:s}/chat/completions".format(self._base_url)
         try:
@@ -150,6 +155,8 @@ class LocalLlmBridgeClient(LlmClient):
                 "local model is not loaded - open the web UI and load one in "
                 "Settings, or configure an external endpoint instead."
             )
+        request = dict(request)
+        trace_llm_request(str(request.pop("_trace_label", "")), request)
         async for payload in self._bridge.send_streaming_request(request):
             chunk = LlmChunk.from_openai(payload)
             if chunk is not None:
