@@ -13,9 +13,11 @@ and a per-message breakdown (role, size, preview, image count) plus the tool
 count. That makes "the agent had zero context" answerable from the log — you
 can see whether the conversation actually reached the draft/planner/worker.
 
-Enable: ``BLENDER_AGENT_TRACE_CONTEXT=1`` (logs to the ``agentcore.trace``
-logger, which the blagent build routes to agent.log). ``=full`` logs whole
-message bodies instead of previews.
+Currently ON BY DEFAULT (we are debugging the orchestrator-context issue) —
+logs to the ``agentcore.trace`` logger, which the blagent build routes to
+agent.log. Set ``BLENDER_AGENT_TRACE_CONTEXT=0`` to silence it, or ``=full``
+to log whole message bodies instead of previews. TODO: flip the default back
+to OFF once the context issue is closed out.
 """
 
 __all__ = ("context_trace_enabled", "trace_llm_request")
@@ -32,7 +34,10 @@ _PREVIEW = 240
 
 
 def context_trace_enabled() -> bool:
-    return os.environ.get("BLENDER_AGENT_TRACE_CONTEXT", "").strip().lower() not in ("", "0", "false", "no")
+    # Default ON (temporary, while debugging the orchestrator-context issue) so
+    # it's live in an installed add-on build with no env to set. Opt out with
+    # BLENDER_AGENT_TRACE_CONTEXT=0/false/no/off.
+    return os.environ.get("BLENDER_AGENT_TRACE_CONTEXT", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def _full() -> bool:
