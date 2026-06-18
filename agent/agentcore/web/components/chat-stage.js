@@ -95,6 +95,16 @@ export class BaChatStage extends LitElement {
     this._autonomyRuns = store.state.autonomyRuns;
     this._openAgents = new Set();   // agent ids the user expanded
     this._agentTab = {};            // agent id -> active result/work tab
+    // Scroll-latch tear-off state per nested area (keyed by a STABLE id, not the
+    // DOM node, so it survives re-renders): true == the user scrolled up, so we
+    // stop auto-pinning that area to the bottom until they return to it.
+    this._latchTorn = new Map();
+  }
+
+  updated() {
+    // Pin after every render (not just on store events) so streaming worker
+    // cards + the page stick to the bottom unless the user has scrolled up.
+    this._scrollSoon();
   }
 
   connectedCallback() {
@@ -134,17 +144,22 @@ export class BaChatStage extends LitElement {
       if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 240) {
         el.scrollTop = el.scrollHeight;
       }
-      // Nested streaming areas follow live output (latched to the bottom)
-      // until the user scrolls up; scrolling back to the bottom re-latches.
-      // The page scroll is never touched (overscroll-behavior: contain).
-      this.renderRoot.querySelectorAll(".latch").forEach((n) => {
+      // Nested streaming areas (worker cards, planner trace) clamp to the
+      // bottom while at/near it and TEAR OFF when the user scrolls up — same
+      // feel as the page. Tear-off state is keyed by a stable id (data-latch-
+      // key), so a re-render that reuses or recreates the node won't snap the
+      // user back to the bottom. The page scroll is never touched here
+      // (overscroll-behavior: contain).
+      this.renderRoot.querySelectorAll(".latch[data-latch-key]").forEach((n) => {
+        const key = n.dataset.latchKey;
         if (!n.dataset.latchBound) {
           n.dataset.latchBound = "1";
           n.addEventListener("scroll", () => {
-            n.dataset.unlatched = (n.scrollHeight - n.scrollTop - n.clientHeight > 40) ? "1" : "";
+            if (n.scrollHeight - n.scrollTop - n.clientHeight > 40) this._latchTorn.set(key, true);
+            else this._latchTorn.delete(key);   // back at the bottom -> re-clamp
           });
         }
-        if (n.dataset.unlatched !== "1") n.scrollTop = n.scrollHeight;
+        if (!this._latchTorn.get(key)) n.scrollTop = n.scrollHeight;
       });
     });
   }
@@ -829,7 +844,7 @@ export class BaChatStage extends LitElement {
       <div class="agent-task-full" title="The task delegated to this worker">
         ${icon("clipboard")} ${agent.task || agent.id}</div>
       ${agent.timeline?.length ? html`
-        <div class="agent-activity latch">
+        <div class="agent-activity latch" data-latch-key="act:${agent.id}">
           ${agent.timeline.map((e, i) => {
             if (e.kind === "text") return this._renderWorkerText(e.content, `${agent.id}:t${i}`);
             if (e.kind === "injected") return html`<div class="winject">⟶ ${e.content}</div>`;
@@ -918,7 +933,7 @@ export class BaChatStage extends LitElement {
   }
 
   /** Live planning card (draft + per-round decomposition). */
-  _renderPlanner(p) {
+  _renderPlanner(p, key = "x") {
     if (!p) return nothing;
     const label = p.phase === "draft"
       ? "Planning objectives"
@@ -931,14 +946,14 @@ export class BaChatStage extends LitElement {
           ${p.active ? html`<span class="spin">${icon("arrow-path")}</span>` : icon("clipboard")}
           <span class="planner-label">${label}${p.active ? "…" : ""}</span>
         </div>
-        ${trace ? html`<div class="planner-trace latch">${trace}</div>` : nothing}
+        ${trace ? html`<div class="planner-trace latch" data-latch-key="plan:${key}:${p.phase}:${p.round ?? 0}">${trace}</div>` : nothing}
         ${body && p.active ? html`<div class="planner-body">${body}</div>` : nothing}
       </div>`;
   }
 
   /** Render ONE orchestrator view (a run, or the live draft/scratch). The
    *  backend is the source of truth; this is a pure projection of the snapshot. */
-  _renderAutonomyView(a) {
+  _renderAutonomyView(a, key = "x") {
     a = a || {};
     const active = (a.objectives?.length || a.agentOrder?.length || a.done || a.planner || a.prompts?.length);
     if (!active) return nothing;
@@ -968,7 +983,7 @@ export class BaChatStage extends LitElement {
               ${o.evidence ? html`<span class="ev" title=${o.evidence}>${o.evidence}</span>` : nothing}
             </div>`)}
         </div>` : nothing}
-        ${this._renderPlanner(a.planner)}
+        ${this._renderPlanner(a.planner, key)}
         ${(() => {
           const rows = [];
           let lastRound;
@@ -1027,7 +1042,7 @@ export class BaChatStage extends LitElement {
     for (const r of this._records) {
       if (r.autonomy_objectives) {
         const run = runs[runIdx++];
-        if (run) out.push(this._renderAutonomyView(run.view));
+        if (run) out.push(this._renderAutonomyView(run.view, run.run_id));
       } else if (r.synthetic || r.role === "tool") {
         // intake/draft records feed the run/draft cards; tools render inline.
       } else {
@@ -1037,11 +1052,11 @@ export class BaChatStage extends LitElement {
     // A live run that just started has no persisted objectives record in this
     // window yet — render the remaining run views after the records.
     for (; runIdx < runs.length; runIdx++) {
-      if (runs[runIdx]) out.push(this._renderAutonomyView(runs[runIdx].view));
+      if (runs[runIdx]) out.push(this._renderAutonomyView(runs[runIdx].view, runs[runIdx].run_id));
     }
     // Current draft / planning (the scratch live view), if any.
     const d = this._autonomy || {};
-    if (d.planner || d.prompts?.length) out.push(this._renderAutonomyView(d));
+    if (d.planner || d.prompts?.length) out.push(this._renderAutonomyView(d, "draft"));
     return out;
   }
 

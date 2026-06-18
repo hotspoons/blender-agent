@@ -251,6 +251,25 @@ def main():
             top = page.evaluate("""() => { let a=null; const w=(r)=>{const el=r.querySelector&&r.querySelector('.agent-activity.latch'); if(el)a=el; r.querySelectorAll&&r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)w(e.shadowRoot)})}; w(document); return a ? a.scrollTop : null; }""")
             _check("scrolling up unlatches (new output doesn't yank to bottom)",
                    top is not None and top < 80, "scrollTop=%s" % top)
+            # Tear-off must HOLD across many streaming updates (the real failure:
+            # snapping back to the bottom on each new token). Push several more.
+            for k in range(29, 34):
+                many["c%d" % k] = {"name": "get_objects_summary", "state": "done"}
+                latch_worker["orch-1:w:t1"]["timeline"].append({"kind": "call", "call_id": "c%d" % k})
+                push_view(view(latch_worker, ["orch-1:w:t1"]))
+                page.wait_for_timeout(80)
+            top2 = page.evaluate("""() => { let a=null; const w=(r)=>{const el=r.querySelector&&r.querySelector('.agent-activity.latch'); if(el)a=el; r.querySelectorAll&&r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)w(e.shadowRoot)})}; w(document); return a ? a.scrollTop : null; }""")
+            _check("tear-off holds across streaming (no snap-back to bottom)",
+                   top2 is not None and top2 < 80, "scrollTop=%s" % top2)
+            # Scrolling back to the bottom RE-CLAMPS (subsequent output sticks).
+            page.evaluate("""() => { const f=(r)=>{const el=r.querySelector&&r.querySelector('.agent-activity.latch'); if(el){el.scrollTop=el.scrollHeight; el.dispatchEvent(new Event('scroll'));} r.querySelectorAll&&r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)f(e.shadowRoot)})}; f(document); }""")
+            many["c34"] = {"name": "get_objects_summary", "state": "done"}
+            latch_worker["orch-1:w:t1"]["timeline"].append({"kind": "call", "call_id": "c34"})
+            push_view(view(latch_worker, ["orch-1:w:t1"]))
+            page.wait_for_timeout(200)
+            atbot = page.evaluate("""() => { let a=null; const w=(r)=>{const el=r.querySelector&&r.querySelector('.agent-activity.latch'); if(el)a=el; r.querySelectorAll&&r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)w(e.shadowRoot)})}; w(document); return a ? (a.scrollHeight - a.scrollTop - a.clientHeight) : null; }""")
+            _check("scrolling back to bottom re-clamps (sticks again)",
+                   atbot is not None and atbot < 40, "distFromBottom=%s" % atbot)
 
             # --- worker→orchestrator Q&A renders on the work timeline ---
             qna_worker = {"orch-1:w:t1": {
