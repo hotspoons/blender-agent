@@ -71,6 +71,12 @@ Stay strictly on this task — do not wander, do not "tidy up" unrelated things,
 do not redo other workers' work. This section is your ground truth: if the
 running conversation is ever trimmed, your assignment still lives HERE.
 
+## SAVE BEFORE RISKY EDITS
+Before any heavy or crash-prone operation — large boolean / remesh / voxel ops,
+high subdivision or applying modifiers on dense meshes, big imports, physics or
+particle bakes — first snapshot the file with `media_io` (verb 'export', format
+'blend'). Cheap insurance: if Blender hangs or crashes, the prior work survives.
+
 When finished, end your turn with a short PROOF OF WORK: what you changed and
 concrete evidence (object names, counts, verify output, a rendered image). To
 show the scene visually, RENDER it (media_io verb 'render', or
