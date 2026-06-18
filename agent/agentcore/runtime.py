@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import time
+import uuid
 
 
 from typing import Any, Awaitable, Callable
@@ -357,6 +358,9 @@ class AgentRuntime:
         self._pending_autonomy: dict[str, str] = {}
         # Backend-owned orchestrator view (the frontend projects its snapshot).
         self._views: dict[str, OrchestratorView] = {}
+        # session_id -> run_id of the run currently being reduced into _views,
+        # so its events/snapshots persist to runs/<run_id>.json (durable history).
+        self._active_run: dict[str, str] = {}
         self._view_emit_at: dict[str, float] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._system_prompt = self._load_system_prompt()
@@ -415,6 +419,7 @@ class AgentRuntime:
         self._stopped_workers = set()
         self._pending_autonomy = {}
         self._views = {}
+        self._active_run = {}
         self._view_emit_at = {}
         self._subscribers = set()
         self._system_prompt = self._load_system_prompt()
@@ -507,29 +512,45 @@ class AgentRuntime:
         return None
 
     def _view_path(self, session_id: str) -> str:
+        # Legacy single-view file (pre per-run runs/). Only READ now, for
+        # back-compat of sessions recorded before per-run durability.
         return os.path.join(self.store.session_dir(session_id), "autonomy_view.json")
 
+    def _run_view_path(self, session_id: str, run_id: str) -> str:
+        return os.path.join(self.store.session_dir(session_id), "runs", "{:s}.json".format(run_id))
+
     def _reset_view(self, session_id: str) -> "OrchestratorView":
-        """Start a fresh view for a new run (reload shows the latest run)."""
+        """Fresh live/scratch view for a new draft or the next run. Does NOT
+        delete any durable per-run files: orchestrator runs are kept permanently
+        under runs/<run_id>.json so a prior run survives a later draft/run and a
+        reload (the backend is the source of truth, the UI a pure projection)."""
         view = OrchestratorView()
         self._views[session_id] = view
-        try:
-            path = self._view_path(session_id)
-            if os.path.isfile(path):
-                os.remove(path)
-        except Exception:  # pylint: disable=broad-except
-            pass
+        self._active_run.pop(session_id, None)
+        return view
+
+    def _begin_run_view(self, session_id: str, run_id: str) -> "OrchestratorView":
+        """Start a fresh DURABLE view for a new orchestrator run (persisted to its
+        own runs/<run_id>.json), leaving earlier runs intact."""
+        view = OrchestratorView()
+        self._views[session_id] = view
+        self._active_run[session_id] = run_id
         return view
 
     def _persist_emit_for(
             self, session_id: str,
-            view: "OrchestratorView") -> "Callable[[dict[str, Any]], Awaitable[None]]":
+            view: "OrchestratorView",
+            run_id: "str | None" = None) -> "Callable[[dict[str, Any]], Awaitable[None]]":
         """Build the emit used by autonomy runs AND guided-intake drafting:
         reduce each event into the backend-owned view, emit the raw event for
         non-autonomy consumers, then emit the view SNAPSHOT (the frontend's only
         autonomy state — a pure projection). Token-like deltas are throttled;
-        milestones persist the snapshot so a reload re-projects the latest."""
+        milestones persist the snapshot so a reload re-projects the latest. Every
+        event is tagged with *run_id* (when this is a run) so the UI files it
+        under the right run block — multiple runs coexist in one session."""
         async def persist_emit(event: dict[str, Any]) -> None:
+            if run_id is not None and "run_id" not in event:
+                event["run_id"] = run_id
             changed = False
             try:
                 changed = view.apply(event)
@@ -543,9 +564,9 @@ class AgentRuntime:
                 if (not is_token) or (now - self._view_emit_at.get(session_id, 0.0) >= _VIEW_THROTTLE_SECONDS):
                     self._view_emit_at[session_id] = now
                     await self.emit({"type": "autonomy_view", "session_id": session_id,
-                                     "view": view.snapshot()})
+                                     "run_id": run_id, "view": view.snapshot()})
                     if not is_token:        # persist on milestones (not every token)
-                        self._persist_view(session_id, view)
+                        self._persist_view(session_id, view, run_id)
         return persist_emit
 
     def _autonomy_prompts(self, session_id: str) -> list[str]:
@@ -571,21 +592,29 @@ class AgentRuntime:
         except RuntimeError:
             pass
 
-    def _persist_view(self, session_id: str, view: "OrchestratorView") -> None:
+    def _persist_view(self, session_id: str, view: "OrchestratorView",
+                      run_id: "str | None" = None) -> None:
+        # Runs persist to their own durable file; a draft (no active run) is not
+        # persisted — it is restored from the last draft record on reload.
+        rid = run_id if run_id is not None else self._active_run.get(session_id)
+        if rid is None:
+            return
         try:
-            path = self._view_path(session_id)
+            path = self._run_view_path(session_id, rid)
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8") as fh:
                 json.dump(view.snapshot(), fh, default=str)
         except Exception as ex:  # pylint: disable=broad-except
-            _log.warning("persist autonomy view failed session=%s: %s", session_id, ex)
+            _log.warning("persist autonomy run view failed session=%s run=%s: %s", session_id, rid, ex)
 
     def session_autonomy_view(self, session_id: str) -> "dict[str, Any] | None":
-        """The backend-owned orchestrator view snapshot — the frontend renders
-        it directly (it holds no autonomy state of its own)."""
+        """The current LIVE orchestrator view (an active run or in-progress
+        draft), or None on a cold reload. Completed runs come from
+        ``session_autonomy_runs`` — the durable, per-run source of truth."""
         view = self._views.get(session_id)
-        if view is not None:
-            return view.snapshot()
+        return view.snapshot() if view is not None else None
+
+    def _read_legacy_view(self, session_id: str) -> "dict[str, Any] | None":
         path = self._view_path(session_id)
         if not os.path.isfile(path):
             return None
@@ -593,8 +622,66 @@ class AgentRuntime:
             with open(path, encoding="utf-8") as fh:
                 return json.load(fh)
         except Exception as ex:  # pylint: disable=broad-except
-            _log.warning("read autonomy view failed session=%s: %s", session_id, ex)
+            _log.warning("read legacy autonomy view failed session=%s: %s", session_id, ex)
             return None
+
+    def session_autonomy_runs(self, session_id: str) -> "list[dict[str, Any]]":
+        """Every orchestrator run in this session, in transcript order, each as
+        ``{run_id, view}`` — the durable history the UI projects. Each run is
+        marked by its ``autonomy_objectives`` transcript record. The run's view
+        comes from (in order): the live in-memory view if it's the active run;
+        runs/<run_id>.json; the single legacy view file (pre per-run sessions);
+        else a minimal view synthesized from the record's objectives (so the run
+        still shows even if its worker view was lost — e.g. wiped by an older
+        build before this fix)."""
+        runs: list[dict[str, Any]] = []
+        active = self._active_run.get(session_id)
+        live = self._views.get(session_id)
+        records = self.session_records(session_id)
+        legacy_used = False
+        for idx, record in enumerate(records):
+            if not record.get("autonomy_objectives"):
+                continue
+            rid = record.get("autonomy_run_id")
+            snap: "dict[str, Any] | None" = None
+            if rid and rid == active and live is not None:
+                snap = live.snapshot()
+            elif rid:
+                path = self._run_view_path(session_id, str(rid))
+                if os.path.isfile(path):
+                    try:
+                        with open(path, encoding="utf-8") as fh:
+                            snap = json.load(fh)
+                    except Exception as ex:  # pylint: disable=broad-except
+                        _log.warning("read run view failed session=%s run=%s: %s", session_id, rid, ex)
+            if snap is None and not legacy_used:
+                legacy = self._read_legacy_view(session_id)
+                if legacy and (legacy.get("agentOrder") or legacy.get("done") or legacy.get("objectives")):
+                    snap, legacy_used = legacy, True
+            if snap is None:
+                snap = self._synth_run_view(records, idx)
+            runs.append({"run_id": str(rid or "run-{:d}".format(idx)), "view": snap})
+        return runs
+
+    @staticmethod
+    def _synth_run_view(records: "list[dict[str, Any]]", idx: int) -> "dict[str, Any]":
+        """A minimal view for a run whose durable view is gone: its objectives,
+        and the request that preceded it. No worker cards (that data is lost)."""
+        record = records[idx]
+        prompts: list[str] = []
+        for j in range(idx - 1, -1, -1):
+            prev = records[j]
+            if prev.get("autonomy_objectives"):
+                break
+            if prev.get("autonomy_goal") and str(prev.get("content", "")).strip():
+                prompts.insert(0, str(prev["content"]).strip())
+        return {
+            "prompts": prompts,
+            "objectives": record.get("autonomy_objectives") or [],
+            "agents": {}, "agentOrder": [], "rounds": [],
+            "gathered": None, "done": None, "audit": None, "planner": None,
+            "currentRound": 0, "draft": None, "recovered": True,
+        }
 
     def session_media(self, session_id: str) -> list[dict[str, object]]:
         session = self._get_or_load_session(session_id)
@@ -1085,6 +1172,10 @@ class AgentRuntime:
         # mid-run; the orchestrator re-reads it each round.
         self._autonomy_objs[session_id] = objs
         rounds_cap = max_rounds or config.max_autonomy_rounds
+        # Stable id for THIS run: its objectives record carries it, and the run's
+        # durable view persists to runs/<run_id>.json. Lets the session hold many
+        # runs without one clobbering another.
+        run_id = uuid.uuid4().hex[:12]
 
         # Persist the run to the session transcript so it isn't empty on reload
         # (the live orchestrator view is event-driven/ephemeral). The objectives
@@ -1099,12 +1190,13 @@ class AgentRuntime:
                         "\n   _done when: {:s}_".format(o.acceptance) if o.acceptance else "")
                     for i, o in enumerate(objs))),
             "autonomy_objectives": [dataclasses.asdict(o) for o in objs],
+            "autonomy_run_id": run_id,   # ties this run's durable view to its place
             "synthetic": True,   # shown via the Objectives card, not a raw bubble
             "title": objs[0].text if objs else "Orchestrator run",
         })
 
-        view = self._reset_view(session_id)   # fresh backend-owned view for this run
-        persist_emit = self._persist_emit_for(session_id, view)
+        view = self._begin_run_view(session_id, run_id)   # fresh DURABLE per-run view
+        persist_emit = self._persist_emit_for(session_id, view, run_id)
 
         policy = (
             AutoPauseWhenBlockedPolicy()

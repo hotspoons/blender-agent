@@ -66,6 +66,7 @@ export class BaChatStage extends LitElement {
     _lightbox: { state: true },
     _approvals: { state: true },
     _autonomy: { state: true },
+    _autonomyRuns: { state: true },
     _openAgents: { state: true },
     _agentTab: { state: true },     // agent id -> "result" | "work"
   };
@@ -91,6 +92,7 @@ export class BaChatStage extends LitElement {
     this._closedThinks = new Set();
     this._lightbox = null;
     this._autonomy = store.state.autonomy;
+    this._autonomyRuns = store.state.autonomyRuns;
     this._openAgents = new Set();   // agent ids the user expanded
     this._agentTab = {};            // agent id -> active result/work tab
   }
@@ -116,6 +118,7 @@ export class BaChatStage extends LitElement {
       if (keys.has("drafting")) this._drafting = store.state.drafting;
       if (keys.has("quiet")) this._quiet = store.state.quiet;
       if (keys.has("autonomy")) this._autonomy = store.state.autonomy;
+      if (keys.has("autonomyRuns")) this._autonomyRuns = store.state.autonomyRuns;
       this._scrollSoon();
     });
   }
@@ -382,6 +385,10 @@ export class BaChatStage extends LitElement {
     /* Autonomy view: objectives card (inline, scrolls with the transcript)
        + bounded nested agent cards. */
     .auto { display: flex; flex-direction: column; gap: 18px; margin-bottom: 12px; }
+    .recovered-note { display: flex; align-items: center; gap: 7px; font-size: 11.5px;
+      color: var(--warning); background: var(--surface); border: 1px solid var(--border);
+      border-left: 3px solid var(--warning); border-radius: var(--radius-sm); padding: 7px 10px; }
+    .recovered-note svg { width: 13px; height: 13px; flex: none; }
     .objectives {
       background: var(--surface-elevated); border: 1px solid var(--border);
       border-radius: var(--radius-md); padding: 10px 12px;
@@ -929,14 +936,19 @@ export class BaChatStage extends LitElement {
       </div>`;
   }
 
-  _renderAutonomy() {
-    const a = this._autonomy || {};
+  /** Render ONE orchestrator view (a run, or the live draft/scratch). The
+   *  backend is the source of truth; this is a pure projection of the snapshot. */
+  _renderAutonomyView(a) {
+    a = a || {};
     const active = (a.objectives?.length || a.agentOrder?.length || a.done || a.planner || a.prompts?.length);
     if (!active) return nothing;
     const sym = (s) => (s === "met" ? "✓" : "○");
     const done = a.done;
     return html`
       <div class="auto">
+        ${a.recovered ? html`
+        <div class="recovered-note">${icon("exclamation-triangle")} Recovered from history — worker
+          details for this run were lost (older build); objectives shown below.</div>` : nothing}
         ${a.prompts?.length ? html`
         <div class="request">
           <div class="req-head">${icon("clipboard")} Request</div>
@@ -1000,13 +1012,48 @@ export class BaChatStage extends LitElement {
       </div>`;
   }
 
+  /**
+   * The session as an ordered projection of the backend's durable state: each
+   * orchestrator RUN renders (from its per-run view) at its objectives record's
+   * position; chat records render as bubbles; any live run with no persisted
+   * record yet, then the current draft/planning, render at the end. This is why
+   * a session keeps every run's history — the backend is the source of truth.
+   */
+  _renderConversation() {
+    const runs = this._autonomyRuns || [];
+    const out = [];
+    let runIdx = 0;
+    let recIdx = 0;
+    for (const r of this._records) {
+      if (r.autonomy_objectives) {
+        const run = runs[runIdx++];
+        if (run) out.push(this._renderAutonomyView(run.view));
+      } else if (r.synthetic || r.role === "tool") {
+        // intake/draft records feed the run/draft cards; tools render inline.
+      } else {
+        out.push(this._renderRecord(r, recIdx++));
+      }
+    }
+    // A live run that just started has no persisted objectives record in this
+    // window yet — render the remaining run views after the records.
+    for (; runIdx < runs.length; runIdx++) {
+      if (runs[runIdx]) out.push(this._renderAutonomyView(runs[runIdx].view));
+    }
+    // Current draft / planning (the scratch live view), if any.
+    const d = this._autonomy || {};
+    if (d.planner || d.prompts?.length) out.push(this._renderAutonomyView(d));
+    return out;
+  }
+
   render() {
     const records = this._records.filter((r) => !r.synthetic && r.role !== "tool");
-    const autoActive = !!(this._autonomy && (this._autonomy.objectives?.length
-      || this._autonomy.agentOrder?.length || this._autonomy.done || this._autonomy.planner
-      || this._autonomy.prompts?.length));
+    const runsActive = !!((this._autonomyRuns || []).length);
+    const scratch = this._autonomy || {};
+    const scratchActive = !!(scratch.objectives?.length || scratch.agentOrder?.length
+      || scratch.done || scratch.planner || scratch.prompts?.length);
     // (compaction "summary" records render as a divider, see _renderRecord)
-    const showEmpty = records.length === 0 && !this._streaming && !this._busy && !autoActive;
+    const showEmpty = records.length === 0 && !this._streaming && !this._busy
+      && !runsActive && !scratchActive;
     return html`
       <div class="scroll">
         ${showEmpty ? html`
@@ -1017,8 +1064,7 @@ export class BaChatStage extends LitElement {
               ? html`<br>${getProfile().welcome.hint}` : nothing}</p>
           </div>` : html`
           <div class="col">
-            ${this._renderAutonomy()}
-            ${records.map((r, i) => this._renderRecord(r, i))}
+            ${this._renderConversation()}
             ${this._unclaimedLiveToolIds(records).map((id) => this._renderToolCard(id))}
             ${this._pending ? this._renderConfirm() : nothing}
             ${this._elicit ? this._renderElicit() : nothing}

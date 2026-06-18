@@ -290,6 +290,36 @@ class TestWorkerControls(unittest.TestCase):
         from agentcore.store import AgentStore
         return AgentRuntime(AgentStore(tempfile.mkdtemp(prefix="agentdata_")), [])
 
+    def test_orchestrator_runs_are_durable_across_drafts(self) -> None:
+        # Regression: an orchestrator run's worker history must survive a LATER
+        # draft/run in the same session (and a reload). Previously the single
+        # per-session view was reset+deleted on the next draft, wiping it.
+        import os
+        rt = self._runtime()
+        sid = rt.new_session()
+        rt._get_or_load_session(sid).engine.push_record({
+            "role": "user", "content": "objs", "autonomy_run_id": "run-A", "synthetic": True,
+            "autonomy_objectives": [{"id": "o0", "text": "do A", "acceptance": "a"}]})
+        view = rt._begin_run_view(sid, "run-A")
+        emit = rt._persist_emit_for(sid, view, "run-A")
+        loop = asyncio.new_event_loop()
+        loop.run_until_complete(emit({"type": "agent_spawned", "session_id": sid,
+                                      "agent_id": sid + ":w:t0", "role": "worker", "task": "do A"}))
+        loop.run_until_complete(emit({"type": "agent_done", "session_id": sid,
+                                      "agent_id": sid + ":w:t0", "role": "worker", "ok": True, "proof": "PROOF"}))
+        self.assertTrue(os.path.isfile(rt._run_view_path(sid, "run-A")), "run persists to its own file")
+        runs = rt.session_autonomy_runs(sid)
+        self.assertEqual([r["run_id"] for r in runs], ["run-A"])
+        self.assertEqual(runs[0]["view"]["agents"][sid + ":w:t0"]["proof"], "PROOF")
+
+        # The bug trigger: a NEW draft must NOT destroy run-A.
+        rt._reset_view(sid)
+        self.assertTrue(os.path.isfile(rt._run_view_path(sid, "run-A")),
+                        "a later draft must not delete a prior run's durable view")
+        runs = rt.session_autonomy_runs(sid)
+        self.assertEqual(len(runs), 1, "the prior run still projects after a draft")
+        self.assertEqual(runs[0]["view"]["agents"][sid + ":w:t0"]["proof"], "PROOF")
+
     def test_worker_session_role_hides_self_management_tools(self) -> None:
         # A swarm worker subprocess runs as the "worker" RBAC role, so its
         # sessions must NOT expose set_autonomy / ask_user (a leaf executor

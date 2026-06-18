@@ -8,3 +8,6 @@ ext/
 
 # Extension build output (scripts/install.*)
 /dist/
+
+# Local agent data dir (symlinked from the host for log access; not committed)
+.agentdata/

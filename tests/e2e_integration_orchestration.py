@@ -144,11 +144,13 @@ def main():
                     break
             check("worker dispatches a real tool call through the stack", tool_seen)
 
-            # run reaches completion (autonomy_done) -> busy clears
+            # run reaches completion (autonomy_done) -> busy clears. The run's
+            # `done` lives in its durable per-run view (autonomyRuns), not scratch.
             done = False
             for _ in range(80):
                 page.wait_for_timeout(500)
-                if _drive(page, "return store.state.busy === false && store.state.autonomy.done != null;"):
+                if _drive(page, "const r=store.state.autonomyRuns; const v=r[r.length-1] && r[r.length-1].view; "
+                                "return store.state.busy === false && !!(v && v.done);"):
                     done = True
                     break
             check("orchestrator run completes (done, busy cleared)", done)
@@ -157,11 +159,11 @@ def main():
             check("worker proof rendered (no raw <think>)",
                   ("PROOF OF WORK" in txt) and ("<think>" not in txt))
 
-            # dedicated QA reviewer ran per worker and annotated the work
-            qa_seen = _drive(page, "return Object.values(store.state.autonomy.agents||{})"
-                                   ".some(a => a.role === 'qa') && "
-                                   "Object.values(store.state.autonomy.agents||{})"
-                                   ".some(a => a.review);")
+            # dedicated QA reviewer ran per worker and annotated the work (agents
+            # live in the run's durable view now).
+            qa_seen = _drive(page, "const r=store.state.autonomyRuns; const v=(r[r.length-1]||{}).view||{}; "
+                                   "const ags=Object.values(v.agents||{}); "
+                                   "return ags.some(a => a.role === 'qa') && ags.some(a => a.review);")
             check("bounded QA inspector spawned + worker reviewed", qa_seen)
             check("QA inspector rendered in the UI", "QA inspect" in txt)
 

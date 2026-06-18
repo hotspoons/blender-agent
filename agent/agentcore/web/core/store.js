@@ -49,6 +49,12 @@ class Store extends EventTarget {
         draft: null,            // {goal, objectives:[{text,acceptance}]} guided intake
         currentRound: 0,        // round index agents are spawned under
       },
+      // Durable orchestrator-run history: [{run_id, view}] in transcript order.
+      // The backend is the source of truth (per-run files); the UI projects this
+      // so a session keeps EVERY run, not just the latest. `autonomy` above is
+      // only the live draft/scratch; runs live here.
+      autonomyRuns: [],
+      activeRunId: null,        // run_id currently streaming (for optimistic patches)
     };
     this._ws = null;
     this._backoff = 500;
@@ -146,14 +152,18 @@ class Store extends EventTarget {
             // Switching sessions: clear the orchestrator/swarm view so a prior
             // run's objectives + worker cards don't bleed into the new session.
             autonomy: this._freshAutonomy(),
+            // Durable per-run history for THIS session (source of truth).
+            autonomyRuns: msg.autonomy_runs || [],
+            activeRunId: null,
             draftPending: false,
             busy: false,
           });
         }
-        // Project the backend-owned orchestrator view snapshot (the UI holds
-        // no autonomy state of its own — it just renders this).
+        // Only a live DRAFT projects into the scratch `autonomy`; an active run
+        // is already in autonomy_runs (don't double-render it).
         if (!sameSessionBusy && msg.autonomy_view) {
-          patch.autonomy = msg.autonomy_view;
+          const v = msg.autonomy_view;
+          if (!(v.agentOrder?.length || v.done || v.objectives?.length)) patch.autonomy = v;
         }
         // Restore a not-yet-run objectives DRAFT so "Begin run" survives reload:
         // replay the last persisted draft record into autonomy.draft, but only
@@ -281,8 +291,9 @@ class Store extends EventTarget {
         break;
       }
       case "autonomy_accepted":
-        // Fresh objectives run: adopt the run's session id (so abort/stop and
-        // updates target the right session) and reset the live autonomy view.
+        // A new run starts: adopt its session id and clear the draft scratch.
+        // PRIOR runs stay in autonomyRuns (the new run appends as its
+        // run-tagged autonomy_view snapshots arrive) — history is never wiped.
         this._set({
           sessionId: msg.session_id || this.state.sessionId,
           busy: true, error: "",
@@ -304,13 +315,22 @@ class Store extends EventTarget {
         }
         break;
       }
-      case "autonomy_view":
-        // Backend-owned orchestrator view: render the snapshot as-is. The UI
-        // does NOT reduce autonomy events — that complexity lives entirely in
-        // the backend (blagent.orchestrator_view). This is the ONLY autonomy
-        // state the frontend holds, and it is a pure projection.
-        this._set({ autonomy: msg.view || this._freshAutonomy() });
+      case "autonomy_view": {
+        // Backend-owned orchestrator view snapshot (pure projection — the UI
+        // never reduces autonomy events itself). A run-tagged snapshot updates
+        // that run's durable block; an untagged one is the live draft/scratch.
+        const view = msg.view || this._freshAutonomy();
+        if (msg.run_id) {
+          const runs = [...this.state.autonomyRuns];
+          const i = runs.findIndex((r) => r.run_id === msg.run_id);
+          if (i >= 0) runs[i] = { run_id: msg.run_id, view };
+          else runs.push({ run_id: msg.run_id, view });
+          this._set({ autonomyRuns: runs, activeRunId: msg.run_id });
+        } else {
+          this._set({ autonomy: view });
+        }
         break;
+      }
       case "injected": {
         // Surface a voice-of-god injection in the transcript.
         if (forThisSession) {
@@ -440,12 +460,18 @@ class Store extends EventTarget {
     this.send({ type: "update_objectives", session_id: this.state.sessionId, objectives: list });
   }
 
-  /** Mutate one live worker card in place (helper for the controls below). */
+  /** Mutate one live worker card in place (helper for the controls below).
+   *  Worker cards live in the active run's block (autonomyRuns). */
   _patchAgent(agentId, patch) {
-    const agents = this.state.autonomy.agents;
+    const runs = [...this.state.autonomyRuns];
+    const i = runs.findIndex((r) => r.run_id === this.state.activeRunId);
+    if (i < 0) return;
+    const view = runs[i].view || {};
+    const agents = view.agents || {};
     const ag = agents[agentId];
     if (!ag) return;
-    this._set({ autonomy: { ...this.state.autonomy, agents: { ...agents, [agentId]: { ...ag, ...patch } } } });
+    runs[i] = { ...runs[i], view: { ...view, agents: { ...agents, [agentId]: { ...ag, ...patch } } } };
+    this._set({ autonomyRuns: runs });
   }
 
   /**

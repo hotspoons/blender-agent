@@ -89,11 +89,14 @@ def main():
             # The frontend renders the backend-owned `autonomy_view` SNAPSHOT and
             # reduces no autonomy events itself. Build snapshots like the backend's
             # OrchestratorView.snapshot() and feed them via the autonomy_view event.
-            def push_view(view):
+            # A run-tagged snapshot routes into that run's durable block
+            # (autonomyRuns); the UI renders it as one run. Sequential pushes to
+            # the same run_id replace the view, exactly as live snapshots do.
+            def push_view(view, run_id="orch-1:run"):
                 page.evaluate(
-                    "async (v) => { const { store } = await import('/static/core/store.js'); "
-                    "store._handle({type:'autonomy_view', session_id:'orch-1', view: v}); }",
-                    view)
+                    "async ([v, rid]) => { const { store } = await import('/static/core/store.js'); "
+                    "store._handle({type:'autonomy_view', session_id:'orch-1', run_id: rid, view: v}); }",
+                    [view, run_id])
 
             def view(agents, order, objectives=None, done=None, prompts=None):
                 return {"prompts": prompts or [], "objectives": objectives or [], "agents": agents,
@@ -142,10 +145,13 @@ def main():
                            ["orch-1:w:t0"]))
             _drive(page, "store._handle({type:'autonomy_accepted', session_id:'orch-1'});")
             page.wait_for_timeout(120)
-            st = _drive(page, "return {sid: store.state.sessionId, busy: store.state.busy, agents: store.state.autonomy.agentOrder.length};")
+            st = _drive(page, "return {sid: store.state.sessionId, busy: store.state.busy, "
+                              "scratch: store.state.autonomy.agentOrder.length, runs: store.state.autonomyRuns.length};")
             _check("autonomy_accepted adopts session id", st["sid"] == "orch-1", str(st))
             _check("autonomy_accepted sets busy", st["busy"] is True)
-            _check("autonomy_accepted resets prior agents", st["agents"] == 0)
+            _check("autonomy_accepted clears the draft scratch", st["scratch"] == 0, str(st))
+            # The durability fix: a new run must NOT wipe prior runs.
+            _check("autonomy_accepted KEEPS prior runs (durable history)", st["runs"] >= 1, str(st))
 
             # --- worker card (from snapshot) collapses <think>, renders tool, no raw tags ---
             running_worker = {"orch-1:w:t1": {
@@ -272,9 +278,9 @@ def main():
             # --- session switch clears the autonomy view (no jumble) + busy ---
             _drive(page, "store._handle({type:'session_loaded', session_id:'plain-1', records:[], media:[]});")
             page.wait_for_timeout(200)
-            st = _drive(page, "return {agents: store.state.autonomy.agentOrder.length, objs: store.state.autonomy.objectives.length, busy: store.state.busy};")
-            _check("session switch clears worker cards", st["agents"] == 0, str(st))
-            _check("session switch clears objectives", st["objs"] == 0)
+            st = _drive(page, "return {runs: store.state.autonomyRuns.length, scratch: store.state.autonomy.agentOrder.length, busy: store.state.busy};")
+            _check("session switch clears worker cards (runs)", st["runs"] == 0, str(st))
+            _check("session switch clears scratch", st["scratch"] == 0)
             _check("session switch clears busy", st["busy"] is False)
 
             # --- main transcript collapses <think> in a persisted assistant record ---
@@ -317,12 +323,18 @@ def main():
                 "agentOrder": ["reload-1:w:t1"], "rounds": [], "gathered": None,
                 "done": {"paused": False, "allMet": True, "rounds": 1}, "audit": None, "currentRound": 0,
             }
+            # Reload contract: the durable per-run history (autonomy_runs) + the
+            # run's objectives record. The UI renders the run inline at the record.
             page.evaluate("async (snap) => { const { store } = await import('/static/core/store.js'); "
-                          "store._handle({type:'session_loaded', session_id:'reload-1', records:[], media:[], autonomy_view: snap}); }",
+                          "store._handle({type:'session_loaded', session_id:'reload-1', media:[], "
+                          "records:[{role:'user', content:'objs', synthetic:true, autonomy_run_id:'reload-run', "
+                          "autonomy_objectives:[{id:'obj-0', text:'RECON_OBJECTIVE_ABC', acceptance:'x', status:'met'}]}], "
+                          "autonomy_runs:[{run_id:'reload-run', view: snap}]}); }",
                           snap)
             page.wait_for_timeout(400)
-            st = _drive(page, "return {agents: store.state.autonomy.agentOrder.length, objs: store.state.autonomy.objectives.length};")
-            _check("reload projects autonomy snapshot", st["agents"] == 1 and st["objs"] == 1, str(st))
+            st = _drive(page, "return {runs: store.state.autonomyRuns.length, "
+                              "objs: (store.state.autonomyRuns[0] && store.state.autonomyRuns[0].view.objectives || []).length};")
+            _check("reload projects autonomy run snapshot", st["runs"] == 1 and st["objs"] == 1, str(st))
             text = page.evaluate(_DOM_TEXT)
             _check("reload projects objective text", "RECON_OBJECTIVE_ABC" in text)
             _check("reload projects worker proof", "RECON_PROOF_123" in text)
