@@ -389,6 +389,13 @@ class AgentRuntime:
         # session_id -> run_id of the run currently being reduced into _views,
         # so its events/snapshots persist to runs/<run_id>.json (durable history).
         self._active_run: dict[str, str] = {}
+        # Persistent conductor (orchestrator-as-agent) state, by session id: its
+        # own engine (transcript = the session), the run_id it conducts, the
+        # delegate runner, and a counter for unique worker task ids.
+        self._conductors: dict[str, AgentEngine] = {}
+        self._conductor_runs: dict[str, str] = {}
+        self._conductor_runners: dict[str, "Callable[[Any], Awaitable[Any]]"] = {}
+        self._delegate_n: dict[str, int] = {}
         self._view_emit_at: dict[str, float] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._system_prompt = self._load_system_prompt()
@@ -784,6 +791,13 @@ class AgentRuntime:
         """
         if not session_id:
             session_id = self.new_session()
+        # Orchestrator mode: messages go to the PERSISTENT conductor (plans,
+        # delegates, owns objectives) — context carries across messages, and a
+        # message mid-run steers it rather than starting over. Swarm still uses
+        # the round-based run; ask/yolo use the plain chat turn below.
+        if autonomy is None and self.store.config.autonomy_level == "orchestrator" \
+                and self.store.config.autonomy_workers != "swarm":
+            return await self.run_conductor_turn(session_id, content, media_ids=media_ids)
         session = self._get_or_load_session(session_id)
         if session.busy:
             raise RuntimeError("a turn is already running in this session")
@@ -1468,6 +1482,179 @@ class AgentRuntime:
                 })
             finally:
                 self._autonomy_objs.pop(session_id, None)
+                await self.emit({"type": "turn_done", "session_id": session_id})
+                await self._apply_pending_autonomy(session_id)
+
+        session.task = asyncio.create_task(_run())
+        return session_id
+
+    def _ensure_conductor(self, session_id: str) -> AgentEngine:
+        """Build (once) the persistent conductor engine for *session_id*: its
+        transcript IS the session, its tools own the objective list + delegate
+        to workers + read/search, and it streams as the main turn. One ongoing
+        run holds the objectives + delegated worker cards (durable per-run)."""
+        existing = self._conductors.get(session_id)
+        if existing is not None:
+            return existing
+        from .conductor import CONDUCTOR_SYSTEM, build_conductor_tools
+        from .autonomy import Objective, WorkerTask
+
+        config = self.store.config
+        model = self._model_name()
+        run_id = uuid.uuid4().hex[:12]
+        self._conductor_runs[session_id] = run_id
+        view = self._begin_run_view(session_id, run_id)
+        persist_emit = self._persist_emit_for(session_id, view, run_id)
+        session = self._get_or_load_session(session_id)
+
+        def media_factory(agent_id: str) -> MediaLibrary:
+            return MediaLibrary(os.path.join(
+                self.store.session_dir(session_id), "workers", agent_id.replace(":", "_")))
+
+        worker_registry = ToolRegistry(
+            list(self.registry_for_role("worker"))
+            + [AskOrchestratorTool(self._make_orchestrator_ask(session_id, persist_emit))])
+        base_runner = ChildSessionRunner(
+            registry=worker_registry, make_llm=self._make_llm, model=model, emit=persist_emit,
+            system_prompt=self._system_prompt, media_factory=media_factory,
+            parent_session_id=session_id, autonomy="auto", max_rounds=config.max_rounds,
+            context_tokens=config.context_tokens, budget_review=config.budget_review,
+            register=self._register_worker, unregister=self._unregister_worker)
+        self._conductor_runners[session_id] = self._make_reviewing_runner(
+            session_id, base_runner, persist_emit, self._make_probe(session_id), model,
+            qa_enabled=config.autonomy_qa, media_factory=media_factory)
+
+        async def _emit_objectives() -> None:
+            await persist_emit({"type": "objectives_update", "session_id": session_id,
+                                "objectives": [dataclasses.asdict(o) for o in self._autonomy_objs.get(session_id, [])]})
+
+        async def on_post(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            prev = {o.id: o for o in self._autonomy_objs.get(session_id, [])}
+            objs: list[Any] = []
+            for i, item in enumerate(raw):
+                text = str(item.get("text", "")).strip()
+                if not text:
+                    continue
+                oid = "obj-{:d}".format(i)
+                was = prev.get(oid)
+                objs.append(Objective(
+                    id=oid, text=text, acceptance=str(item.get("acceptance", "")).strip(),
+                    status=str(item.get("status") or (was.status if was else "unmet")),
+                    evidence=(was.evidence if was else "")))
+            self._autonomy_objs[session_id] = objs
+            if session_id not in self._delegate_n:   # first post marks the run in the transcript
+                session.engine.push_record({
+                    "role": "user", "autonomy_objectives": [dataclasses.asdict(o) for o in objs],
+                    "autonomy_run_id": run_id, "synthetic": True,
+                    "content": "**Objectives**", "title": objs[0].text if objs else "Orchestrator run"})
+                self._delegate_n[session_id] = 0
+            await _emit_objectives()
+            return [dataclasses.asdict(o) for o in objs]
+
+        async def on_complete(oid: str, evidence: str) -> bool:
+            for o in self._autonomy_objs.get(session_id, []):
+                if o.id == oid:
+                    o.status, o.evidence = "met", evidence
+                    await _emit_objectives()
+                    return True
+            return False
+
+        async def on_delegate(task: str, objective_id: str, acceptance: str) -> dict[str, Any]:
+            self._delegate_n[session_id] = self._delegate_n.get(session_id, 0) + 1
+            wt = WorkerTask(id="task-{:d}".format(self._delegate_n[session_id]),
+                            objective_id=objective_id, instruction=task,
+                            goal="(delegated by the orchestrator)",
+                            acceptance=acceptance or "the task is accomplished and verifiable")
+            agent_id = "{:s}:w:{:s}".format(session_id, wt.id)
+            # The conductor (not AutonomyOrchestrator) owns the worker lifecycle
+            # here, so it emits the spawn/done that build the worker card; the
+            # reviewing runner streams its activity + QA + review onto that card.
+            await persist_emit({"type": "agent_spawned", "session_id": session_id,
+                                "agent_id": agent_id, "role": "worker", "task": task,
+                                "objective_id": objective_id})
+            result = await self._conductor_runners[session_id](wt)
+            await persist_emit({"type": "agent_done", "session_id": session_id,
+                                "agent_id": agent_id, "role": "worker", "ok": bool(result.ok),
+                                "proof": result.proof or "", "artifacts": result.artifacts or []})
+            return {"agent_id": agent_id, "ok": bool(result.ok),
+                    "proof": result.proof or "(worker produced no report)"}
+
+        async def on_read(agent_id: str) -> "dict[str, Any] | None":
+            ag = (self._views.get(session_id).snapshot()["agents"] if self._views.get(session_id) else {}).get(agent_id)
+            if ag is None:
+                return None
+            tail = [e.get("content", "") for e in ag.get("timeline", []) if e.get("kind") == "text"][-3:]
+            return {"agent_id": agent_id, "role": ag.get("role"), "ok": ag.get("ok"),
+                    "proof": ag.get("proof", ""), "recent": tail, "review": ag.get("review")}
+
+        async def on_search(query: str, max_results: int) -> list[dict[str, Any]]:
+            terms = query.lower().split()
+            hits: list[dict[str, Any]] = []
+            for r in self.session_records(session_id):
+                text = str(r.get("content", ""))
+                if text and all(t in text.lower() for t in terms):
+                    hits.append({"role": r.get("role"), "snippet": " ".join(text.split())[:200]})
+            view_now = self._views.get(session_id)
+            if view_now is not None:
+                for ag in view_now.snapshot()["agents"].values():
+                    proof = str(ag.get("proof", ""))
+                    if proof and all(t in proof.lower() for t in terms):
+                        hits.append({"role": "worker:" + str(ag.get("id", "")), "snippet": " ".join(proof.split())[:200]})
+            return hits[:max_results]
+
+        ctools = build_conductor_tools(on_post=on_post, on_complete=on_complete,
+                                       on_delegate=on_delegate, on_read=on_read, on_search=on_search)
+        registry = ToolRegistry(
+            list(self.registry_for_role("qa")) + ctools + [ContinueWorkingTool()])
+
+        def _append(record: dict[str, Any], _sid: str = session_id) -> None:
+            engine.records[:] = self.store.append_record(_sid, record)
+
+        engine = AgentEngine(
+            registry=registry, media=session.media,
+            system_prompt=self._system_prompt + "\n" + CONDUCTOR_SYSTEM,
+            emit=self.emit, append_record=_append,
+            trace_label="conductor:{:s}".format(session_id))
+        engine.records = self.store.load_records(session_id)
+        self._conductors[session_id] = engine
+        return engine
+
+    async def run_conductor_turn(self, session_id: str, content: str,
+                                 media_ids: "list[str] | None" = None) -> str:
+        """Persistent orchestrator-as-agent turn. A message while the conductor
+        is already working is INJECTED as steering (lands at the next tool
+        boundary) rather than starting over — the conductor keeps full context."""
+        if not session_id:
+            session_id = self.new_session()
+        session = self._get_or_load_session(session_id)
+        engine = self._conductors.get(session_id)
+        if engine is not None and session.busy:
+            engine.inject(content, now=True)
+            engine.interrupt()
+            await self.emit({"type": "injected", "session_id": session_id, "content": content})
+            return session_id
+        if session.busy:
+            raise RuntimeError("a turn is already running in this session")
+        engine = self._ensure_conductor(session_id)
+        config = self.store.config
+        llm, model = self._make_llm(), self._model_name()
+
+        async def _run() -> None:
+            try:
+                await engine.run_turn(
+                    session_id=session_id, user_text=content, llm=llm, model=model,
+                    autonomy="auto", max_rounds=config.max_rounds, media_ids=media_ids,
+                    context_tokens=config.context_tokens, budget_review=config.budget_review)
+            except asyncio.CancelledError:
+                await self.emit({"type": "turn_done", "session_id": session_id, "aborted": True})
+                raise
+            except Exception as ex:  # pylint: disable=broad-except
+                _log.warning("conductor turn failed session=%s: %s", session_id, ex)
+                await self.emit({"type": "error", "session_id": session_id,
+                                 "message": "conductor error: {:s}".format(str(ex))})
+            finally:
+                if self._views.get(session_id) is not None:
+                    self._persist_view(session_id, self._views[session_id], self._conductor_runs.get(session_id))
                 await self.emit({"type": "turn_done", "session_id": session_id})
                 await self._apply_pending_autonomy(session_id)
 

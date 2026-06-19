@@ -459,12 +459,8 @@ export class BaComposer extends LitElement {
       return;
     }
     this._autoload = false;
-    if (this._autonomyMode()) {
-      // Autonomy modes: TYPED TEXT always (re)drafts objectives — the backend
-      // folds in the conversation + any prior draft, so a new instruction is
-      // never silently dropped (it re-posts an updated objective list). To
-      // START a run, click "Begin run" (or send with an empty box once
-      // objectives are drafted).
+    if (this._level === "swarm") {
+      // Swarm uses the draft -> review -> Begin-run flow (round-based).
       if (text) {
         this._draftObjectives(text);
         ta.value = "";
@@ -476,6 +472,9 @@ export class BaComposer extends LitElement {
         return;
       }
     } else {
+      // Orchestrator: messages go to the PERSISTENT conductor (it owns the
+      // objective list and delegates); ask/yolo: a plain chat turn. Either way
+      // the message carries context — it never restarts.
       store.chat(text || "(see attached image)", ready);
     }
     this._attachments = [];
