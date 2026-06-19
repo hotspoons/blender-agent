@@ -107,8 +107,15 @@ class Store extends EventTarget {
     const forThisSession = !msg.session_id || msg.session_id === this.state.sessionId;
     // Worker sub-agent events (parent_session_id-tagged) are reduced into the
     // orchestrator view on the BACKEND; the UI only renders the `autonomy_view`
-    // snapshot, so swallow them here (no frontend reduction).
-    if (msg.parent_session_id) return;
+    // snapshot, so swallow them here (no frontend reduction). EXCEPT: a sub-agent
+    // producing media (a render/scene view) should surface in the artifacts
+    // panel LIVE, not only after the run — so kick a debounced media refresh.
+    if (msg.parent_session_id) {
+      if (msg.type === "worker_media" || (msg.type === "tool_status" && msg.media_ids?.length)) {
+        this._refreshMediaSoon();
+      }
+      return;
+    }
     switch (msg.type) {
       case "hello":
         // Server-pushed branding (YAML-configurable) overlays the web
@@ -369,6 +376,12 @@ class Store extends EventTarget {
     if (this.state.sessionId) {
       this.send({ type: "load_session", id: this.state.sessionId });
     }
+  }
+
+  /** Debounced media refresh — workers emit media in bursts; coalesce. */
+  _refreshMediaSoon() {
+    clearTimeout(this._mediaTimer);
+    this._mediaTimer = setTimeout(() => this._refreshMedia(), 600);
   }
 
   // ----------------------------------------------------------------

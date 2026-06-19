@@ -529,15 +529,13 @@ class AgentRuntime:
 
     @staticmethod
     def _agent_id_from_safe(session_id: str, safe: str) -> "str | None":
-        """Reverse ``agent_id.replace(':', '_')`` for this session's workers/
-        gather dirs (session ids carry no colons, so this is unambiguous)."""
-        w = session_id + "_w_"
-        g = session_id + "_gather"
-        if safe.startswith(w):
-            return session_id + ":w:" + safe[len(w):]
-        if safe.startswith(g):
-            return session_id + ":gather" + safe[len(g):]
-        return None
+        """Reverse ``agent_id.replace(':', '_')`` for this session's sub-agent
+        media dirs (workers/qa/gather/planner). Session ids carry no colons and
+        the role/task segments use hyphens, so restoring colons is unambiguous."""
+        prefix = session_id + "_"
+        if not safe.startswith(prefix):
+            return None
+        return session_id + ":" + safe[len(prefix):].replace("_", ":")
 
     def _view_path(self, session_id: str) -> str:
         # Legacy single-view file (pre per-run runs/). Only READ now, for
@@ -719,17 +717,19 @@ class AgentRuntime:
             {**it, "url": "/media/{:s}/{:s}".format(session_id, str(it["id"]))}
             for it in session.media.list_public()
         ]
-        # Aggregate media produced by this session's workers (renders, etc.) so
-        # they appear in the session artifacts panel — not only inside each
-        # worker card.
-        workers_dir = os.path.join(self.store.session_dir(session_id), "workers")
-        if os.path.isdir(workers_dir):
-            for safe in sorted(os.listdir(workers_dir)):
+        # Aggregate media produced by this session's sub-agents (worker renders,
+        # QA inspections, the planner's scene views) so they appear in the
+        # artifacts panel — not only inside each agent card.
+        for sub in ("workers", "planner"):
+            sub_dir = os.path.join(self.store.session_dir(session_id), sub)
+            if not os.path.isdir(sub_dir):
+                continue
+            for safe in sorted(os.listdir(sub_dir)):
                 agent_id = self._agent_id_from_safe(session_id, safe)
                 if agent_id is None:
                     continue
                 try:
-                    lib = MediaLibrary(os.path.join(workers_dir, safe))
+                    lib = MediaLibrary(os.path.join(sub_dir, safe))
                 except Exception:  # pylint: disable=broad-except
                     continue
                 for it in lib.list_public():
@@ -1517,15 +1517,16 @@ class AgentRuntime:
 
     def worker_media_library(self, agent_id: str) -> MediaLibrary:
         """
-        The media library for an in-process worker, by its agent id. Mirrors
-        ``media_factory`` in ``run_autonomy_turn``: workers write under the
-        parent session's ``workers/<agent_id>`` jail. Lets the HTTP media route
-        serve a worker's tool-produced images (screenshots, renders).
+        The media library for a sub-agent, by its agent id, so the HTTP media
+        route can serve its tool-produced images (scene views, renders).
+        Workers/QA write under ``workers/<safe>``; the planner agent under
+        ``planner/<safe>`` (see ``_make_planner_runner``). The parent session id
+        is the agent id up to its first role marker — session ids carry no colons.
         """
         safe = agent_id.replace(":", "_")
-        # Parent session id is the agent id minus its worker/gather suffix.
-        parent = agent_id.split(":w:")[0].split(":gather")[0]
-        return MediaLibrary(os.path.join(self.store.session_dir(parent), "workers", safe))
+        parent = agent_id.split(":")[0]
+        subdir = "planner" if ":plan:" in agent_id else "workers"
+        return MediaLibrary(os.path.join(self.store.session_dir(parent), subdir, safe))
 
     def _register_worker(self, agent_id: str, engine: AgentEngine) -> None:
         self._workers[agent_id] = engine
