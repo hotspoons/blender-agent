@@ -173,6 +173,11 @@ class AgentConfig:
     # before the next worker runs, annotating the worker card with a QA note.
     # Off by default (an extra LLM pass per worker).
     autonomy_qa: bool = False
+    # When True (default), the planner/draft step runs as a tool-using sub-agent
+    # on the read-and-pose `planner` RBAC surface (see permissions.yaml): it
+    # inspects and poses the actual scene before decomposing, so plans are
+    # grounded in what exists rather than guessed. Off = a pure (blind) LLM call.
+    autonomy_planner_tools: bool = True
     # Where worker sub-agents run. "in_process" (default) = ChildSessionRunner
     # in this process; "swarm" = each worker a real subprocess with its own
     # headless Blender (RemoteWorkerStrategy). Default keeps everything local.
@@ -226,6 +231,7 @@ class AgentConfig:
             "autonomy_share_context": self.autonomy_share_context,
             "autonomy_audit": self.autonomy_audit,
             "autonomy_qa": self.autonomy_qa,
+            "autonomy_planner_tools": self.autonomy_planner_tools,
             "autonomy_workers": self.autonomy_workers,
             "autonomy_level": self.autonomy_level,
         }

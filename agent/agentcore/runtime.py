@@ -84,6 +84,22 @@ capture verb 'render') — this Blender is headless, so viewport screenshot
 tools do not work. If you could not finish, say so plainly and why.
 """
 
+# Prepended to the worker/QA system prompt when the orchestrator has already
+# fetched the session welcome (instructions + installed skills) once for the
+# whole run. Workers are fresh sessions, so each would otherwise re-call
+# `welcome` first thing — burning a round on identical, static content. We give
+# them the answer up front and tell them not to ask again.
+_WELCOME_BOOTSTRAP = """# Session bootstrap (already welcomed)
+You are part of an ongoing autonomy run. The `welcome` tool has ALREADY been
+called for this run — its working instructions and the installed skills are
+below. ADOPT them and do NOT call `welcome` again; begin your task directly.
+(Skills can still be read with `skills_search` / `skills_read`.)
+
+{welcome}
+
+---
+"""
+
 
 class ChildSessionRunner:
     """
@@ -112,6 +128,7 @@ class ChildSessionRunner:
             max_rounds: int = 8,
             context_tokens: int = 0,
             budget_review: bool = False,
+            bootstrap: str = "",
             register: "Callable[[str, AgentEngine], None] | None" = None,
             unregister: "Callable[[str], None] | None" = None,
     ) -> None:
@@ -130,6 +147,10 @@ class ChildSessionRunner:
         self._max_rounds = max_rounds
         self._context_tokens = context_tokens
         self._budget_review = budget_review
+        # Welcome (instructions + installed skills) fetched ONCE for the run and
+        # pinned in every worker's system prompt, so fresh worker sessions don't
+        # each re-call `welcome` first thing. Empty == workers welcome themselves.
+        self._bootstrap = bootstrap
         # Lets the runtime track the live worker engine by agent id so the
         # user can inject messages straight into it (voice of god).
         self._register = register
@@ -150,7 +171,8 @@ class ChildSessionRunner:
         context_block = ""
         if getattr(task, "context", ""):
             context_block = "\n## ORCHESTRATOR CONTEXT\n{:s}\n".format(task.context)
-        worker_system = self._system_prompt + _WORKER_MISSION.format(
+        bootstrap = _WELCOME_BOOTSTRAP.format(welcome=self._bootstrap) if self._bootstrap else ""
+        worker_system = bootstrap + self._system_prompt + _WORKER_MISSION.format(
             instruction=task.instruction,
             goal=getattr(task, "goal", "") or "(not specified)",
             acceptance=getattr(task, "acceptance", "") or "the task is accomplished and verifiable",
@@ -850,6 +872,88 @@ class AgentRuntime:
 
         return probe
 
+    async def _prefetch_welcome(self, session_id: str) -> str:
+        """Call the ``welcome`` tool ONCE for an autonomy run and format its
+        result (working instructions + installed skills) as a system-prompt
+        block. Every worker is a fresh session that would otherwise re-call
+        `welcome` first thing on identical, static content; we fetch it once
+        and pin it into their prompts instead. Returns "" when there is no
+        welcome tool (non-Blender backend) or the call fails — workers then
+        fall back to welcoming themselves."""
+        tool = self.registry.get("welcome")
+        if tool is None:
+            return ""
+        try:
+            ctx = ToolContext(media=self._get_or_load_session(session_id).media,
+                              session_id=session_id)
+            result = await tool.call(ctx, {})
+        except Exception as ex:  # pylint: disable=broad-except
+            _log.warning("welcome prefetch failed session=%s: %s", session_id, ex)
+            return ""
+        data = result.data if isinstance(result.data, dict) else {}
+        instructions = str(data.get("instructions", "")).strip()
+        skills = data.get("available_skills") or []
+        if not instructions and not skills:
+            return str(result.summary or "").strip()
+        parts = []
+        if instructions:
+            parts.append(instructions)
+        if skills:
+            parts.append("Installed skills ({:d}): {:s}".format(
+                len(skills), ", ".join(str(s) for s in skills)))
+        return "\n\n".join(parts)
+
+    def _make_planner_runner(
+            self, session_id: str,
+            emit: "Callable[[dict[str, Any]], Awaitable[None]]",
+            model: str, *, phase: str, max_rounds: int = 12,
+    ) -> "Callable[[str, str], Awaitable[str]]":
+        """A tool-using planning step: runs the planner/draft (system, user)
+        prompt in its OWN ``AgentEngine`` on the read-and-pose ``planner`` RBAC
+        surface (see permissions.yaml), so it inspects and poses the real scene
+        before decomposing. Surfaced as a sub-agent panel (``agent_spawned`` /
+        ``agent_done``) — its scene views, poses and screenshots render like a
+        worker's. Returns the final assistant text (the JSON the caller parses).
+        """
+        planner_registry = self.registry_for_role("planner")
+        counter = {"n": 0}   # keeps per-round planner panels distinct
+
+        async def run(system: str, user: str) -> str:
+            counter["n"] += 1
+            agent_id = "{:s}:plan:{:s}:{:d}".format(session_id, phase, counter["n"])
+            records: list[dict[str, Any]] = []
+
+            async def child_emit(event: dict[str, Any]) -> None:
+                await emit({**event, "parent_session_id": session_id, "role": "planner"})
+
+            media = MediaLibrary(os.path.join(
+                self.store.session_dir(session_id), "planner", agent_id.replace(":", "_")))
+            await emit({
+                "type": "agent_spawned", "session_id": session_id, "agent_id": agent_id,
+                "role": "planner",
+                "task": ("View/pose the scene, then decompose into worker tasks"
+                         if phase == "plan" else "View the scene, then draft objectives"),
+            })
+            engine = AgentEngine(
+                registry=planner_registry, media=media, system_prompt=system,
+                emit=child_emit, append_record=records.append,
+                trace_label="planner:{:s}".format(agent_id))
+            proof = ""
+            try:
+                await engine.run_turn(
+                    session_id=agent_id, user_text=user, llm=self._make_llm(),
+                    model=model, autonomy="auto", max_rounds=max_rounds)
+                proof = ChildSessionRunner._extract_proof(records)  # noqa: SLF001
+            except Exception as ex:  # pylint: disable=broad-except
+                _log.warning("planner agent %s failed: %s", agent_id, ex)
+            await emit({
+                "type": "agent_done", "session_id": session_id, "agent_id": agent_id,
+                "role": "planner", "ref": agent_id, "ok": bool(proof), "proof": proof,
+            })
+            return proof
+
+        return run
+
     def _make_orchestrator_ask(
             self, session_id: str,
             emit: "Callable[[dict[str, Any]], Awaitable[None]]",
@@ -909,7 +1013,7 @@ class AgentRuntime:
             emit: "Callable[[dict[str, Any]], Awaitable[None]]",
             probe: "Callable[[], Awaitable[str]]", model: str,
             *, qa_enabled: bool, media_factory: "Callable[[str], MediaLibrary]",
-            max_cycles: int = 3) -> "Callable[[Any], Awaitable[Any]]":
+            bootstrap: str = "", max_cycles: int = 3) -> "Callable[[Any], Awaitable[Any]]":
         """Wrap a worker runner with the per-worker review loop: the orchestrator
         is pinged with every result, optionally spawns a bounded QA inspector,
         then accepts or replenishes the worker's budget with guidance (capped).
@@ -924,11 +1028,11 @@ class AgentRuntime:
                     qa = ""
                     if qa_enabled and not stopped:
                         qa = await self._qa_inspect(session_id, task, result, emit, model,
-                                                    media_factory, attempt)
+                                                    media_factory, attempt, bootstrap)
                     decision = await self._review_worker(session_id, task, result, qa, stopped)
                     if decision.get("request_qa") and not qa and not stopped:
                         qa = await self._qa_inspect(session_id, task, result, emit, model,
-                                                    media_factory, attempt)
+                                                    media_factory, attempt, bootstrap)
                         decision = await self._review_worker(session_id, task, result, qa, stopped)
                     accept = bool(decision.get("accept")) or stopped
                     guidance = str(decision.get("guidance", "")).strip()
@@ -981,7 +1085,8 @@ class AgentRuntime:
     async def _qa_inspect(
             self, session_id: str, task: Any, result: Any,
             emit: "Callable[[dict[str, Any]], Awaitable[None]]", model: str,
-            media_factory: "Callable[[str], MediaLibrary]", attempt: int) -> str:
+            media_factory: "Callable[[str], MediaLibrary]", attempt: int,
+            bootstrap: str = "") -> str:
         """A bounded QA inspector sub-agent (full tool surface, few rounds): it
         inspects the scene to verify the worker's claim and reports findings.
         Spawns as its own qa-role agent card."""
@@ -995,7 +1100,8 @@ class AgentRuntime:
         async def qa_emit(event: dict[str, Any]) -> None:
             await emit({**event, "parent_session_id": session_id, "role": "qa"})
 
-        system = self._system_prompt + _QA_INSPECT_MISSION.format(
+        welcome = _WELCOME_BOOTSTRAP.format(welcome=bootstrap) if bootstrap else ""
+        system = welcome + self._system_prompt + _QA_INSPECT_MISSION.format(
             instruction=task.instruction,
             acceptance=getattr(task, "acceptance", "") or "(n/a)",
             proof=result.proof or "(no proof)")
@@ -1093,11 +1199,20 @@ class AgentRuntime:
         except Exception as ex:  # pylint: disable=broad-except
             _log.warning("persist draft goal failed session=%s: %s", session_id, ex)
 
+        # Tool-using draft (default): inspects the real scene before proposing
+        # objectives, surfaced as its own sub-agent panel. Off -> a blind LLM
+        # call streamed into the planner card.
+        draft_runner = (
+            self._make_planner_runner(session_id, persist_emit, self._model_name(),
+                                      phase="draft")
+            if self.store.config.autonomy_planner_tools else None)
+
         async def _run() -> None:
             await persist_emit({"type": "autonomy_goal", "session_id": session_id,
                                 "prompts": self._autonomy_prompts(session_id)})
-            await persist_emit({"type": "planner_stream", "session_id": session_id,
-                                "phase": "draft", "state": "start"})
+            if draft_runner is None:
+                await persist_emit({"type": "planner_stream", "session_id": session_id,
+                                    "phase": "draft", "state": "start"})
 
             async def on_delta(content: str, reasoning: str) -> None:
                 await persist_emit({"type": "planner_stream", "session_id": session_id,
@@ -1105,12 +1220,14 @@ class AgentRuntime:
                                     "content": content, "reasoning": reasoning})
             try:
                 objs = await _draft(self._make_llm(), self._model_name(), goal,
-                                    on_delta=on_delta, context=conversation)
+                                    on_delta=on_delta, context=conversation,
+                                    runner=draft_runner)
             except Exception as ex:  # pylint: disable=broad-except
                 _log.warning("draft_objectives failed: %s", ex)
                 objs = []
-            await persist_emit({"type": "planner_stream", "session_id": session_id,
-                                "phase": "draft", "state": "done"})
+            if draft_runner is None:
+                await persist_emit({"type": "planner_stream", "session_id": session_id,
+                                    "phase": "draft", "state": "done"})
             await self.emit({
                 "type": "objectives_draft", "session_id": session_id,
                 "goal": goal, "objectives": objs,
@@ -1219,6 +1336,7 @@ class AgentRuntime:
         # surface each), fanned out in parallel, exchanging artifacts via a
         # shared dir. Swarm needs a domain swarm_provider (the Blender build
         # supplies one); without it, fall back to in-process workers.
+        welcome_bootstrap = ""   # set in the in-process branch; swarm welcomes per subprocess
         if config.autonomy_workers == "swarm" and config.endpoint and self.swarm_provider is not None:
             from .autonomy import ParallelScheduler
 
@@ -1236,6 +1354,9 @@ class AgentRuntime:
         else:
             swarm_strategy = None
             probe = self._make_probe(session_id)
+            # Fetch the session welcome ONCE and pin it into every worker (and the
+            # QA inspector), so fresh worker sessions skip re-calling `welcome`.
+            welcome_bootstrap = await self._prefetch_welcome(session_id)
             worker_registry = ToolRegistry(
                 list(self.registry_for_role("worker"))
                 + [AskOrchestratorTool(self._make_orchestrator_ask(session_id, persist_emit))])
@@ -1251,6 +1372,7 @@ class AgentRuntime:
                 max_rounds=config.max_rounds,
                 context_tokens=config.context_tokens,
                 budget_review=config.budget_review,
+                bootstrap=welcome_bootstrap,
                 register=self._register_worker,
                 unregister=self._unregister_worker,
             )
@@ -1263,10 +1385,16 @@ class AgentRuntime:
         if swarm_strategy is None:
             review_runner = self._make_reviewing_runner(
                 session_id, runner, persist_emit, probe, model,
-                qa_enabled=config.autonomy_qa, media_factory=media_factory)
+                qa_enabled=config.autonomy_qa, media_factory=media_factory,
+                bootstrap=welcome_bootstrap)
+        # Tool-using planner (default): decomposes against the real scene (view +
+        # pose) as its own sub-agent panel. Off -> a blind LLM decomposer.
+        planner_runner = (
+            self._make_planner_runner(session_id, persist_emit, model, phase="plan")
+            if config.autonomy_planner_tools else None)
         orchestrator = AutonomyOrchestrator(
             planner=LlmPlanner(llm, model, emit=persist_emit, session_id=session_id,
-                               context=conversation),
+                               context=conversation, runner=planner_runner),
             scheduler=scheduler,
             evaluator=StateAwareEvaluator(llm, model, probe=probe),
             policy=policy,
@@ -1531,6 +1659,8 @@ class AgentRuntime:
             config.autonomy_audit = bool(updates["autonomy_audit"])
         if "autonomy_qa" in updates:
             config.autonomy_qa = bool(updates["autonomy_qa"])
+        if "autonomy_planner_tools" in updates:
+            config.autonomy_planner_tools = bool(updates["autonomy_planner_tools"])
         if "autonomy_workers" in updates:
             config.autonomy_workers = str(updates["autonomy_workers"])
         if "autonomy_level" in updates:

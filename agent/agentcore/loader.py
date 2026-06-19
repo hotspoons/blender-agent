@@ -79,6 +79,7 @@ def _apply_autonomy_config(store: AgentStore, block: dict[str, Any]) -> None:
         "policy": "autonomy_policy", "max_rounds": "max_autonomy_rounds",
         "audit": "autonomy_audit", "qa": "autonomy_qa", "workers": "autonomy_workers",
         "share_context": "autonomy_share_context", "level": "autonomy_level",
+        "planner_tools": "autonomy_planner_tools",
     }
     for key, attr in mapping.items():
         if key in block:

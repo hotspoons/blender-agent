@@ -33,9 +33,32 @@ roles:
       ask_user: disabled
 
   # Decomposes a goal / objectives into worker tasks (the draft step +
-  # LlmPlanner). A pure LLM call — no tools.
+  # LlmPlanner). Grounds the plan in the real scene: it may VIEW (inspect +
+  # screenshot/render) and POSE/manipulate to understand the layout and rig
+  # before decomposing — but NOT do the workers' construction (no rig/weights/
+  # blendfile authoring, no execute_blender_code, no meta/authoring tools).
   planner:
     default: disabled
+    tools:
+      "get_*": allow
+      "*summary*": allow
+      "*diagnostics*": allow
+      "jump_to_*": allow
+      "render_*": allow
+      "search_*_docs": allow
+      "skills_*": allow
+      scene: allow
+      blendfile: allow
+      capture: allow
+      viewport: allow
+      pose: allow
+      anim: allow
+      snap_fit: allow
+      measure_joints: allow
+      docs: allow
+      skills: allow
+      media_io: allow
+      welcome: allow
 
   # Context-blind budget adjudicator (reviewer.py): judges text, runs no tools.
   reviewer:

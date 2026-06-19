@@ -28,6 +28,7 @@ export class BaSettingsModal extends LitElement {
     _shareContext: { state: true },
     _audit: { state: true },
     _qa: { state: true },
+    _plannerTools: { state: true },
     _workers: { state: true },
   };
 
@@ -46,6 +47,7 @@ export class BaSettingsModal extends LitElement {
     this._shareContext = !!config.autonomy_share_context;
     this._audit = !!config.autonomy_audit;
     this._qa = !!config.autonomy_qa;
+    this._plannerTools = config.autonomy_planner_tools !== false;
     this._workers = config.autonomy_workers || "in_process";
     this._fetchTimer = null;
   }
@@ -159,6 +161,7 @@ export class BaSettingsModal extends LitElement {
       autonomy_share_context: this._shareContext,
       autonomy_audit: this._audit,
       autonomy_qa: this._qa,
+      autonomy_planner_tools: this._plannerTools,
       autonomy_workers: this._workers,
     };
     if (this._apiKey) updates.api_key = this._apiKey;
@@ -274,6 +277,16 @@ export class BaSettingsModal extends LitElement {
           <span>Share orchestrator context with workers
             <div class="sub">Off (default): workers run blind on just their task. On: each worker is
               seeded with the objective list - so blind vs informed can be compared.</div>
+          </span>
+        </div>
+
+        <div class="switchrow">
+          <ba-switch .on=${this._plannerTools}
+            @input=${(e) => { this._plannerTools = e.detail.value; }}></ba-switch>
+          <span>Planner views the scene
+            <div class="sub">On (default): the planner/draft step runs as a sub-agent that inspects
+              and poses the real scene before decomposing, so plans fit what actually exists. Off:
+              a blind LLM call that decomposes from the objectives text alone.</div>
           </span>
         </div>
 

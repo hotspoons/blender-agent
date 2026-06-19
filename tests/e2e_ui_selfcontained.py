@@ -271,6 +271,40 @@ def main():
             _check("scrolling back to bottom re-clamps (sticks again)",
                    atbot is not None and atbot < 40, "distFromBottom=%s" % atbot)
 
+            # --- REGRESSION: tear-off must follow the CARD, not a stale closure
+            #     key. The agent list is unkeyed, so lit REUSES one card's
+            #     .agent-activity DOM node for a different agent across renders.
+            #     The scroll listener used to capture its latch-key once at bind
+            #     time, so scrolling the reused node recorded tear-off under the
+            #     PREVIOUS agent's key — and the card the user was watching could
+            #     no longer hold its scroll (it kept snapping to the bottom). The
+            #     single-card checks above can't catch this; node reuse is needed.
+            def tall_worker(wid, n):
+                calls = {"c%d" % i: {"name": "get_objects_summary", "state": "done"} for i in range(n)}
+                return {wid: {"id": wid, "role": "worker", "task": "x", "state": "running",
+                              "timeline": [{"kind": "call", "call_id": "c%d" % i} for i in range(n)],
+                              "calls": calls, "media": [], "stream": "", "proof": "", "ok": None}}
+            # Worker A renders first -> the latch listener binds on its node (key act:A).
+            push_view(view(tall_worker("orch-1:w:tA", 30), ["orch-1:w:tA"]))
+            page.wait_for_timeout(400)
+            # A is replaced by B -> lit reuses A's .agent-activity node for B
+            # (data-latch-key flips to act:B; the bound listener keeps running),
+            # and the freshly-rendered card is pinned to the bottom.
+            push_view(view(tall_worker("orch-1:w:tB", 30), ["orch-1:w:tB"]))
+            page.wait_for_timeout(400)
+            reused_to_b = page.evaluate("""() => { let k=null; const w=(r)=>{const el=r.querySelector&&r.querySelector('.agent-activity.latch'); if(el)k=el.dataset.latchKey; r.querySelectorAll&&r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)w(e.shadowRoot)})}; w(document); return k; }""")
+            _check("latch node reused for the new card (data-latch-key flipped to B)",
+                   reused_to_b == "act:orch-1:w:tB", "key=%s" % reused_to_b)
+            # The user scrolls the reused node (now showing B) up to read earlier output.
+            page.evaluate("""() => { const f=(r)=>{const el=r.querySelector&&r.querySelector('.agent-activity.latch'); if(el){el.scrollTop=0; el.dispatchEvent(new Event('scroll'));} r.querySelectorAll&&r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)f(e.shadowRoot)})}; f(document); }""")
+            # More output streams into B. With the stale-key bug, tear-off was
+            # recorded under act:A, so B's pin still fires and yanks to the bottom.
+            push_view(view(tall_worker("orch-1:w:tB", 31), ["orch-1:w:tB"]))
+            page.wait_for_timeout(300)
+            top_b = page.evaluate("""() => { let a=null; const w=(r)=>{const el=r.querySelector&&r.querySelector('.agent-activity.latch'); if(el)a=el; r.querySelectorAll&&r.querySelectorAll('*').forEach(e=>{if(e.shadowRoot)w(e.shadowRoot)})}; w(document); return a ? a.scrollTop : null; }""")
+            _check("tear-off follows the reused card, not a stale key (B holds its scroll)",
+                   top_b is not None and top_b < 80, "scrollTop=%s" % top_b)
+
             # --- worker→orchestrator Q&A renders on the work timeline ---
             qna_worker = {"orch-1:w:t1": {
                 "id": "orch-1:w:t1", "role": "worker", "task": "do x", "state": "running",

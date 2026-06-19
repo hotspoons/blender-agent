@@ -155,8 +155,13 @@ export class BaChatStage extends LitElement {
         if (!n.dataset.latchBound) {
           n.dataset.latchBound = "1";
           n.addEventListener("scroll", () => {
-            if (n.scrollHeight - n.scrollTop - n.clientHeight > 40) this._latchTorn.set(key, true);
-            else this._latchTorn.delete(key);   // back at the bottom -> re-clamp
+            // Read the key LIVE: lit reuses this DOM node across different agents
+            // (the list isn't keyed), so the node's latch-key changes under us.
+            // Capturing it in the closure would record tear-off under a stale
+            // key and strand another card's pin. (cf. pin below, same live key.)
+            const k = n.dataset.latchKey;
+            if (n.scrollHeight - n.scrollTop - n.clientHeight > 40) this._latchTorn.set(k, true);
+            else this._latchTorn.delete(k);   // back at the bottom -> re-clamp
           });
         }
         if (!this._latchTorn.get(key)) n.scrollTop = n.scrollHeight;
@@ -1056,7 +1061,7 @@ export class BaChatStage extends LitElement {
     }
     // Current draft / planning (the scratch live view), if any.
     const d = this._autonomy || {};
-    if (d.planner || d.prompts?.length) out.push(this._renderAutonomyView(d, "draft"));
+    if (d.planner || d.prompts?.length || d.agentOrder?.length) out.push(this._renderAutonomyView(d, "draft"));
     return out;
   }
 

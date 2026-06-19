@@ -250,6 +250,46 @@ class TestAutonomyLoop(unittest.TestCase):
         tasks = _run(a.LlmPlanner(llm, "m").plan([a.Objective(id="o1", text="g", acceptance="a")]))
         self.assertEqual(len(tasks), 1)
 
+    def test_planner_uses_tool_runner_instead_of_blind_llm(self) -> None:
+        a = _import_autonomy()
+        # A runner stands in for the tool-using sub-agent: it returns the final
+        # assistant text (the JSON). The blind LLM must NOT be consulted.
+        seen: dict[str, str] = {}
+
+        async def runner(system: str, user: str) -> str:
+            seen["system"], seen["user"] = system, user
+            return 'looked at the scene\n{"tasks": [{"objective_id": "o1", "instruction": "pose it"}]}'
+
+        class ExplodingLlm:
+            async def stream(self, request: Any) -> Any:
+                raise AssertionError("blind LLM must not be called when a runner is set")
+                yield  # pragma: no cover
+
+        events: list[dict[str, Any]] = []
+
+        async def emit(event: dict[str, Any]) -> None:
+            events.append(event)
+
+        planner = a.LlmPlanner(ExplodingLlm(), "m", emit=emit, session_id="s1", runner=runner)
+        tasks = _run(planner.plan([a.Objective(id="o1", text="goal", acceptance="ac")]))
+
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0].instruction, "pose it")
+        # Tool-enabled prompt steers it to view/pose first; runner got it.
+        self.assertIn("pose", seen["system"].lower())
+        # No planner_stream card when tools are on (the sub-agent panel shows it).
+        self.assertFalse([e for e in events if e["type"] == "planner_stream"])
+
+    def test_draft_uses_tool_runner(self) -> None:
+        a = _import_autonomy()
+
+        async def runner(system: str, user: str) -> str:
+            return '{"objectives": [{"text": "model a chair", "acceptance": "1 mesh named Chair"}]}'
+
+        objs = _run(a.draft_objectives(None, "m", "build a chair", runner=runner))
+        self.assertEqual(len(objs), 1)
+        self.assertEqual(objs[0]["text"], "model a chair")
+
     def test_orchestrator_emits_no_qa_on_its_own(self) -> None:
         a = _import_autonomy()
         llm = self._scripted_llm([
@@ -530,6 +570,44 @@ class TestChildSessionRunner(unittest.TestCase):
         self.assertIn("assemble the arm", sysmsg)
         self.assertIn("peg mates with socket", sysmsg)
         self.assertIn("not in a conversation", sysmsg.lower())
+
+    def test_worker_bootstrap_pins_welcome_and_suppresses_recall(self) -> None:
+        for path in (os.path.join(_REPO_DIR, "mcp"), os.path.join(_REPO_DIR, "agent")):
+            if path not in sys.path:
+                sys.path.insert(0, path)
+        from agentcore.autonomy import WorkerTask
+        from agentcore.llm import LlmChunk, LlmClient
+        from agentcore.media import MediaLibrary
+        from agentcore.runtime import ChildSessionRunner
+        from agentcore.tools import ToolRegistry
+
+        seen: dict[str, Any] = {}
+
+        class FakeLlm(LlmClient):
+            async def stream(self, request: dict[str, Any]) -> Any:
+                seen.setdefault("system", request["messages"][0]["content"])
+                yield LlmChunk(content="PROOF OF WORK: done.")
+
+        async def emit(_e: dict[str, Any]) -> None:
+            pass
+
+        tmp = tempfile.mkdtemp(prefix="worker_boot_")
+        runner = ChildSessionRunner(
+            registry=ToolRegistry([]),
+            make_llm=lambda: FakeLlm(),
+            model="m",
+            emit=emit,
+            system_prompt="BASE PROMPT.",
+            media_factory=lambda agent_id: MediaLibrary(os.path.join(tmp, agent_id.replace(":", "_"))),
+            parent_session_id="orch1",
+            bootstrap="WELCOME TEXT + skills: rigging, render",
+        )
+        _run(runner(WorkerTask(id="t1", objective_id="o1", instruction="go", goal="g", acceptance="a")))
+        sysmsg = seen["system"]
+        # The prefetched welcome is pinned, and the worker is told not to re-call it.
+        self.assertIn("WELCOME TEXT + skills: rigging, render", sysmsg)
+        self.assertIn("already welcomed", sysmsg.lower())
+        self.assertIn("do not call", sysmsg.lower())
 
 
 if __name__ == "__main__":

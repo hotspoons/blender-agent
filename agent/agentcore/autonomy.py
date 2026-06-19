@@ -205,24 +205,46 @@ _DRAFT_SYSTEM = (
     'ONLY a JSON object: {"objectives": [{"text": "<goal>", "acceptance": "<done-when>"}]}'
 )
 
+# Tool-enabled variant (when a *runner* is given): the same contract, but the
+# step first looks at the real scene so objectives fit what's actually there.
+_DRAFT_SYSTEM_TOOLED = (
+    _DRAFT_SYSTEM
+    + "\n\nYou have Blender tools. BEFORE drafting, briefly inspect the current "
+      "scene to ground the objectives in what actually exists — view it "
+      "(summarize objects, screenshot/render a viewport) and pose/adjust only if "
+      "that clarifies the work. A few tool calls, not the work itself. Then end "
+      "your turn with ONLY the JSON object."
+)
+
+# Async tool-using planning step: (system, user) -> final assistant text.
+# Injected by the runtime; lets the planner/draft inspect + pose the real scene
+# on the `planner` RBAC surface. autonomy.py stays decoupled from the engine.
+PlannerRunner = Callable[[str, str], Awaitable[str]]
+
 
 async def draft_objectives(
         llm: LlmClient, model: str, goal: str,
         on_delta: "Callable[[str, str], Awaitable[None]] | None" = None,
-        context: str = "") -> list[dict[str, str]]:
+        context: str = "",
+        runner: "PlannerRunner | None" = None) -> list[dict[str, str]]:
     """
     Propose objectives (each {text, acceptance}) for *goal*. The user edits/
     confirms before a run starts (guided intake, with an explicit-edit fallback).
     *on_delta* streams the draft's reasoning/content to the UI as it decomposes.
     *context* is the recent conversation (the user's notes + agent replies) so
     the objectives reflect what was actually discussed, not just the bare goal.
+    *runner*, when given, runs the draft as a tool-using sub-agent that inspects
+    (and may pose) the real scene first; otherwise it is a single blind LLM call.
     """
     user = "GOAL: " + goal
     if context:
         user = ("CONVERSATION SO FAR (the user's notes and your replies — fold any "
                 "relevant intent into the objectives):\n{:s}\n\n{:s}".format(context, user))
-    text = await _complete(llm, model, _DRAFT_SYSTEM, user, on_delta=on_delta,
-                           trace_label="draft")
+    if runner is not None:
+        text = await runner(_DRAFT_SYSTEM_TOOLED, user)
+    else:
+        text = await _complete(llm, model, _DRAFT_SYSTEM, user, on_delta=on_delta,
+                               trace_label="draft")
     data = _extract_json_object(text)
     out: list[dict[str, str]] = []
     for raw in data.get("objectives", []) or []:
@@ -248,16 +270,31 @@ _PLANNER_SYSTEM = (
     '{"tasks": [{"objective_id": "<id>", "instruction": "<imperative task>"}]}'
 )
 
+# Tool-enabled variant (when a *runner* is given): decompose against the real
+# scene rather than blind. View + pose to understand it, then emit the JSON.
+_PLANNER_SYSTEM_TOOLED = (
+    _PLANNER_SYSTEM
+    + "\n\nYou have Blender tools. BEFORE decomposing, look at the actual scene "
+      "so the tasks fit reality — view it (summarize objects, screenshot/render "
+      "a viewport) and, where it clarifies the work, pose or adjust the scene to "
+      "understand the layout and rig. Keep it brief: a few tool calls to see "
+      "what you're planning against, NOT to do the workers' construction. Then "
+      "end your turn with ONLY the JSON object."
+)
+
 
 class LlmPlanner:
     """Default planner: asks the LLM to decompose unmet objectives. When given
     an *emit* + *session_id* it streams its "looking around" (reasoning/content)
     to the UI as ``planner_stream`` events, so a run shows decomposition
-    feedback between a round starting and its workers spawning."""
+    feedback between a round starting and its workers spawning. When given a
+    *runner* it instead decomposes as a tool-using sub-agent that views and
+    poses the real scene first (surfaced by the runtime as its own panel)."""
 
     def __init__(self, llm: LlmClient, model: str,
                  emit: "Callable[[dict[str, Any]], Awaitable[None]] | None" = None,
-                 session_id: str = "", context: str = "") -> None:
+                 session_id: str = "", context: str = "",
+                 runner: "PlannerRunner | None" = None) -> None:
         self._llm = llm
         self._model = model
         self._emit = emit
@@ -265,6 +302,7 @@ class LlmPlanner:
         # Recent conversation (user notes + agent replies) so task instructions
         # carry the user's actual intent to workers, not just the objective text.
         self._context = context
+        self._runner = runner
 
     async def _planner_event(self, state: str, content: str = "", reasoning: str = "") -> None:
         if self._emit is None:
@@ -283,14 +321,19 @@ class LlmPlanner:
         if self._context:
             user = ("CONVERSATION SO FAR (the user's notes and the agent's replies — let it "
                     "inform the task instructions):\n{:s}\n\n{:s}".format(self._context, user))
-        await self._planner_event("start")
+        if self._runner is not None:
+            # Tool-using planner: it views/poses the scene; the runtime surfaces
+            # that as its own sub-agent panel, so no planner_stream card here.
+            text = await self._runner(_PLANNER_SYSTEM_TOOLED, user)
+        else:
+            await self._planner_event("start")
 
-        async def on_delta(content: str, reasoning: str) -> None:
-            await self._planner_event("delta", content, reasoning)
+            async def on_delta(content: str, reasoning: str) -> None:
+                await self._planner_event("delta", content, reasoning)
 
-        text = await _complete(self._llm, self._model, _PLANNER_SYSTEM, user,
-                               on_delta=on_delta, trace_label="planner")
-        await self._planner_event("done")
+            text = await _complete(self._llm, self._model, _PLANNER_SYSTEM, user,
+                                   on_delta=on_delta, trace_label="planner")
+            await self._planner_event("done")
         data = _extract_json_object(text)
         by_id = {o.id: o for o in unmet}
         tasks: list[WorkerTask] = []
