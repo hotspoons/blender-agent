@@ -8,7 +8,11 @@ name: Build and publish container
 
 on:
   push:
-    branches: ["main"]
+    # Feature branches build + publish too, tagged with their branch slug
+    # (type=ref,event=branch below) — e.g. `feature/overhaul` -> the image tag
+    # `feature-overhaul`, so a feature build is identifiable and never clobbers
+    # the default-branch-only `latest` / version tags.
+    branches: ["main", "feature/**"]
     tags: ["v*"]
   workflow_dispatch:
 
