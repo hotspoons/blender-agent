@@ -24,6 +24,9 @@ Tools:
 
 __all__ = ("CONDUCTOR_SYSTEM", "build_conductor_tools")
 
+# NB: when you add/remove a tool here, update build_conductor_tools + the
+# runtime callbacks in AgentRuntime._ensure_conductor.
+
 from typing import Any, Awaitable, Callable
 
 from agentcore.tools import Tool, ToolContext, ToolError, ToolResult
@@ -45,10 +48,17 @@ How you work:
    `complete_objective`. If not, delegate a follow-up (be specific about the
    fix). Use `read_worker` to re-read details and `search_transcript` to recall
    earlier context.
-5. The user may send a message AT ANY TIME — treat it as steering: update the
-   objectives (`post_objectives` again to add/remove/reword), delegate a
-   correction, or answer. NEVER start over; you keep all prior context.
+5. The user may send a message AT ANY TIME — treat it as steering, NEVER start
+   over (you keep all prior context). If a `delegate` (or `await_workers`)
+   returns "interrupted", the user messaged WHILE a worker is running: read what
+   they said and decide — `steer_worker` to inject guidance straight into that
+   running worker, `post_objectives` to adjust the plan, or `await_workers` to
+   let it finish. Steer the worker only if the feedback is worth interrupting it.
 6. When every objective is met, give a short final summary. Don't loop idly.
+
+`delegate` blocks until the worker finishes and returns its proof — UNLESS the
+user interrupts, in which case it returns immediately with the worker still
+running (use steer_worker / await_workers as above).
 
 Be decisive and concrete. Prefer one clear delegated task at a time so you can
 review it before the next. Keep the objective list honest — only complete an
@@ -168,7 +178,7 @@ class ReadWorkerTool(Tool):
     description = ("Re-read a worker's proof and recent activity (by its agent id) to review its "
                    "work in detail before judging an objective.")
 
-    def __init__(self, on_read: "Callable[[str], Awaitable[dict[str, Any]]]") -> None:
+    def __init__(self, on_read: "Callable[[str], Awaitable[dict[str, Any] | None]]") -> None:
         self._on_read = on_read
 
     def input_schema(self) -> dict[str, Any]:
@@ -208,19 +218,72 @@ class SearchTranscriptTool(Tool):
         return ToolResult(summary="{:d} match(es) for {!r}".format(len(hits), query), data={"hits": hits})
 
 
+class SteerWorkerTool(Tool):
+    name = "steer_worker"
+    group = "orchestrator"
+    description = ("Inject a guidance message straight into a RUNNING worker's context (it lands "
+                   "at the worker's next step). Use to course-correct a worker mid-task — e.g. when "
+                   "the user gives feedback while it works. Returns whether the worker was live.")
+
+    def __init__(self, on_steer: "Callable[[str, str], Awaitable[bool]]") -> None:
+        self._on_steer = on_steer
+
+    def input_schema(self) -> dict[str, Any]:
+        return {"type": "object",
+                "properties": {"agent_id": {"type": "string"}, "message": {"type": "string"}},
+                "required": ["agent_id", "message"]}
+
+    async def call(self, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+        aid = str(args.get("agent_id", "")).strip()
+        msg = str(args.get("message", "")).strip()
+        if not aid or not msg:
+            raise ToolError("steer_worker needs 'agent_id' and 'message'")
+        ok = await self._on_steer(aid, msg)
+        return ToolResult(summary="steer {:s}: {:s}".format(aid, "delivered" if ok else "not live"),
+                          data={"agent_id": aid, "delivered": ok})
+
+
+class AwaitWorkersTool(Tool):
+    name = "await_workers"
+    group = "orchestrator"
+    read_only = True
+    description = ("Wait for currently-running delegated worker(s) to finish and return their "
+                   "proofs. Returns early as 'interrupted' if the user sends a message while you "
+                   "wait — read it and decide. Use after a delegate was interrupted, or when you "
+                   "spawned work and want to collect it.")
+
+    def __init__(self, on_await: "Callable[[], Awaitable[dict[str, Any]]]") -> None:
+        self._on_await = on_await
+
+    def input_schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {}}
+
+    async def call(self, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
+        data = await self._on_await()
+        if data.get("interrupted"):
+            return ToolResult(summary="interrupted: the user sent a message", data=data)
+        fin = data.get("finished") or {}
+        return ToolResult(summary="{:d} worker(s) finished, {:d} still running".format(
+            len(fin), len(data.get("still_running") or [])), data=data)
+
+
 def build_conductor_tools(
         *,
         on_post: "Callable[[list[dict[str, Any]]], Awaitable[list[dict[str, Any]]]]",
         on_complete: "Callable[[str, str], Awaitable[bool]]",
         on_delegate: "Callable[[str, str, str], Awaitable[dict[str, Any]]]",
-        on_read: "Callable[[str], Awaitable[dict[str, Any]]]",
+        on_read: "Callable[[str], Awaitable[dict[str, Any] | None]]",
         on_search: "Callable[[str, int], Awaitable[list[dict[str, Any]]]]",
+        on_steer: "Callable[[str, str], Awaitable[bool]]",
+        on_await: "Callable[[], Awaitable[dict[str, Any]]]",
 ) -> "list[Tool]":
     """The conductor's meta-tool set, wired to the runtime's live-run callbacks."""
     return [
         PostObjectivesTool(on_post),
         CompleteObjectiveTool(on_complete),
         DelegateTool(on_delegate),
+        SteerWorkerTool(on_steer),
+        AwaitWorkersTool(on_await),
         ReadWorkerTool(on_read),
         SearchTranscriptTool(on_search),
     ]

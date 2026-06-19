@@ -396,6 +396,10 @@ class AgentRuntime:
         self._conductor_runs: dict[str, str] = {}
         self._conductor_runners: dict[str, "Callable[[Any], Awaitable[Any]]"] = {}
         self._delegate_n: dict[str, int] = {}
+        # Delegated workers running in the background (agent_id -> task) and their
+        # collected results, so delegate can be interrupted + await_workers reaps.
+        self._conductor_pending: dict[str, dict[str, "asyncio.Task[Any]"]] = {}
+        self._conductor_results: dict[str, dict[str, dict[str, Any]]] = {}
         self._view_emit_at: dict[str, float] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._system_prompt = self._load_system_prompt()
@@ -1559,6 +1563,27 @@ class AgentRuntime:
                     return True
             return False
 
+        async def _run_worker(wt: Any, agent_id: str, objective_id: str) -> Any:
+            from .autonomy import WorkerResult
+            # The conductor (not AutonomyOrchestrator) owns the worker lifecycle
+            # here, so it emits the spawn/done that build the worker card; the
+            # reviewing runner streams its activity + QA + review onto that card.
+            await persist_emit({"type": "agent_spawned", "session_id": session_id,
+                                "agent_id": agent_id, "role": "worker", "task": wt.instruction,
+                                "objective_id": objective_id})
+            try:
+                result = await self._conductor_runners[session_id](wt)
+            except Exception as ex:  # pylint: disable=broad-except
+                result = WorkerResult(task_id=wt.id, objective_id=objective_id,
+                                      proof="worker errored: {:s}".format(str(ex)), ok=False)
+            await persist_emit({"type": "agent_done", "session_id": session_id,
+                                "agent_id": agent_id, "role": "worker", "ok": bool(result.ok),
+                                "proof": result.proof or "", "artifacts": result.artifacts or []})
+            self._conductor_results.setdefault(session_id, {})[agent_id] = {
+                "agent_id": agent_id, "ok": bool(result.ok),
+                "proof": result.proof or "(worker produced no report)"}
+            return result
+
         async def on_delegate(task: str, objective_id: str, acceptance: str) -> dict[str, Any]:
             self._delegate_n[session_id] = self._delegate_n.get(session_id, 0) + 1
             wt = WorkerTask(id="task-{:d}".format(self._delegate_n[session_id]),
@@ -1566,21 +1591,51 @@ class AgentRuntime:
                             goal="(delegated by the orchestrator)",
                             acceptance=acceptance or "the task is accomplished and verifiable")
             agent_id = "{:s}:w:{:s}".format(session_id, wt.id)
-            # The conductor (not AutonomyOrchestrator) owns the worker lifecycle
-            # here, so it emits the spawn/done that build the worker card; the
-            # reviewing runner streams its activity + QA + review onto that card.
-            await persist_emit({"type": "agent_spawned", "session_id": session_id,
-                                "agent_id": agent_id, "role": "worker", "task": task,
-                                "objective_id": objective_id})
-            result = await self._conductor_runners[session_id](wt)
-            await persist_emit({"type": "agent_done", "session_id": session_id,
-                                "agent_id": agent_id, "role": "worker", "ok": bool(result.ok),
-                                "proof": result.proof or "", "artifacts": result.artifacts or []})
-            return {"agent_id": agent_id, "ok": bool(result.ok),
-                    "proof": result.proof or "(worker produced no report)"}
+            task_obj = asyncio.create_task(_run_worker(wt, agent_id, objective_id))
+            self._conductor_pending.setdefault(session_id, {})[agent_id] = task_obj
+            # Block on the worker, but yield if the user interrupts (a message
+            # mid-run sets the conductor engine's _interrupt) so the conductor can
+            # steer it instead of being stuck waiting.
+            eng = self._conductors.get(session_id)
+            intr = asyncio.ensure_future(eng._interrupt.wait()) if eng is not None else None  # noqa: SLF001
+            waits: set[Any] = {task_obj} | ({intr} if intr is not None else set())
+            await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+            if intr is not None and not intr.done():
+                intr.cancel()
+            if task_obj.done():
+                self._conductor_pending.get(session_id, {}).pop(agent_id, None)
+                res = self._conductor_results.get(session_id, {}).get(agent_id, {"agent_id": agent_id, "ok": False, "proof": ""})
+                return res
+            return {"agent_id": agent_id, "status": "running", "interrupted": True,
+                    "note": ("the user sent a message while this worker runs — read it and decide: "
+                             "steer_worker('{:s}', ...) to guide THIS worker, or await_workers to "
+                             "let it finish.".format(agent_id))}
+
+        async def on_steer(agent_id: str, message: str) -> bool:
+            return self.inject_into_worker(agent_id, message, now=True)
+
+        async def on_await() -> dict[str, Any]:
+            pending = self._conductor_pending.setdefault(session_id, {})
+            if not pending:
+                return {"finished": {}, "still_running": [], "note": "no workers running"}
+            eng = self._conductors.get(session_id)
+            intr = asyncio.ensure_future(eng._interrupt.wait()) if eng is not None else None  # noqa: SLF001
+            waits: set[Any] = set(pending.values()) | ({intr} if intr is not None else set())
+            await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+            if intr is not None and not intr.done():
+                intr.cancel()
+            if intr is not None and intr.done() and not any(t.done() for t in pending.values()):
+                return {"interrupted": True,
+                        "note": "the user sent a message; worker(s) still running — read it and decide."}
+            finished = {aid: self._conductor_results.get(session_id, {}).get(aid, {"ok": False, "proof": "(no result)"})
+                        for aid, t in list(pending.items()) if t.done()}
+            for aid in finished:
+                pending.pop(aid, None)
+            return {"finished": finished, "still_running": list(pending)}
 
         async def on_read(agent_id: str) -> "dict[str, Any] | None":
-            ag = (self._views.get(session_id).snapshot()["agents"] if self._views.get(session_id) else {}).get(agent_id)
+            view = self._views.get(session_id)
+            ag = (view.snapshot()["agents"] if view is not None else {}).get(agent_id)
             if ag is None:
                 return None
             tail = [e.get("content", "") for e in ag.get("timeline", []) if e.get("kind") == "text"][-3:]
@@ -1603,7 +1658,8 @@ class AgentRuntime:
             return hits[:max_results]
 
         ctools = build_conductor_tools(on_post=on_post, on_complete=on_complete,
-                                       on_delegate=on_delegate, on_read=on_read, on_search=on_search)
+                                       on_delegate=on_delegate, on_read=on_read, on_search=on_search,
+                                       on_steer=on_steer, on_await=on_await)
         registry = ToolRegistry(
             list(self.registry_for_role("qa")) + ctools + [ContinueWorkingTool()])
 
