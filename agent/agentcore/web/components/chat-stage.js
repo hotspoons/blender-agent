@@ -99,6 +99,9 @@ export class BaChatStage extends LitElement {
     // DOM node, so it survives re-renders): true == the user scrolled up, so we
     // stop auto-pinning that area to the bottom until they return to it.
     this._latchTorn = new Map();
+    // Keys whose NEXT scroll event was caused by our own programmatic pin — so
+    // we don't mistake it for the user scrolling and never fight a real scroll.
+    this._latchSuppress = new Set();
   }
 
   updated() {
@@ -157,14 +160,22 @@ export class BaChatStage extends LitElement {
           n.addEventListener("scroll", () => {
             // Read the key LIVE: lit reuses this DOM node across different agents
             // (the list isn't keyed), so the node's latch-key changes under us.
-            // Capturing it in the closure would record tear-off under a stale
-            // key and strand another card's pin. (cf. pin below, same live key.)
             const k = n.dataset.latchKey;
-            if (n.scrollHeight - n.scrollTop - n.clientHeight > 40) this._latchTorn.set(k, true);
-            else this._latchTorn.delete(k);   // back at the bottom -> re-clamp
+            // Ignore the scroll event OUR OWN pin just fired — otherwise a pin
+            // would re-evaluate as "at bottom" and we could fight a real scroll.
+            if (this._latchSuppress.has(k)) { this._latchSuppress.delete(k); return; }
+            // ANY genuine scroll off the bottom tears off (small epsilon, so even
+            // a nudge up holds while streaming); returning to the bottom re-clamps.
+            this._latchTorn.set(k, n.scrollHeight - n.scrollTop - n.clientHeight > 8);
           });
         }
-        if (!this._latchTorn.get(key)) n.scrollTop = n.scrollHeight;
+        if (!this._latchTorn.get(key)) {
+          const target = n.scrollHeight - n.clientHeight;
+          if (target - n.scrollTop > 1) {
+            this._latchSuppress.add(key);   // the scroll event this write fires is ours
+            n.scrollTop = target;
+          }
+        }
       });
     });
   }
