@@ -94,6 +94,10 @@ def _classify(messages: list[dict[str, Any]]) -> str:
         return "auditor"
     if "evaluator" in system:
         return "evaluator"
+    # The persistent conductor (orchestrator-as-agent) — classify before the
+    # worker/draft branches (its prompt also mentions blender/objectives).
+    if "conductor" in system:
+        return "conductor"
     # Per-worker review loop (these mention blender/worker too, so classify
     # before the worker/draft branches).
     if "qa inspector" in system:
@@ -112,6 +116,22 @@ def _classify(messages: list[dict[str, Any]]) -> str:
 async def completions(request: Request) -> StreamingResponse:
     body = await request.json()
     kind = _classify(body.get("messages", []))
+    if kind == "conductor":
+        # Stateful by inspecting what's already been done (only assistant/tool
+        # turns — the system prompt MENTIONS every tool name, so don't scan it).
+        done = json.dumps([m for m in body.get("messages", []) if m.get("role") in ("assistant", "tool")])
+        if "post_objectives" not in done:
+            gen = _stream_tool_call("post_objectives", {"objectives": [
+                {"text": "Add a UV sphere named Ball", "acceptance": "a MESH named Ball exists"}]})
+        elif "delegate" not in done:
+            gen = _stream_tool_call("delegate", {
+                "task": "Add a UV sphere named 'Ball' at the origin.",
+                "objective_id": "obj-0", "acceptance": "a MESH named Ball exists"})
+        elif "complete_objective" not in done:
+            gen = _stream_tool_call("complete_objective", {"id": "obj-0", "evidence": "Ball sphere created"})
+        else:
+            gen = _stream_text("Done.", "PROOF OF WORK: all objectives met — the Ball sphere is in the scene.")
+        return StreamingResponse(gen, media_type="text/event-stream")
     if kind == "draft":
         gen = _stream_text("Let me break the goal into objectives.", json.dumps(_DRAFT_OBJECTIVES))
     elif kind == "planner":
