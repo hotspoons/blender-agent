@@ -19,6 +19,8 @@
 #
 #   ./scripts/install.sh                 full install
 #   ./scripts/install.sh --uninstall     remove everything again
+#   ./scripts/install.sh --reinstall     uninstall + purge wheel cache + install
+#                                        (a clean slate - guarantees current code)
 #   ./scripts/install.sh --packages-only    pip packages, skip the add-on
 #   ./scripts/install.sh --extension-only   add-on, skip the pip packages
 #
@@ -45,21 +47,24 @@ REF="${BLENDER_AGENT_REF:-main}"
 DO_PACKAGES=1
 DO_EXTENSION=1
 UNINSTALL=0
+REINSTALL=0
 for arg in "$@"; do
 	case "$arg" in
 		--packages-only) DO_EXTENSION=0 ;;
 		--extension-only) DO_PACKAGES=0 ;;
 		--uninstall) UNINSTALL=1 ;;
+		--reinstall) REINSTALL=1 ;;
 		-h|--help)
 			cat <<'EOF'
 Install the Blender MCP plugin (Linux / macOS / WSL).
 
   curl -fsSL https://raw.githubusercontent.com/hotspoons/blender-agent/main/scripts/install.sh | bash
   ... | bash -s -- --uninstall        remove everything again
+  ... | bash -s -- --reinstall        clean slate: uninstall + purge cache + install
   ... | bash -s -- --packages-only    pip packages, skip the add-on
   ... | bash -s -- --extension-only   add-on, skip the pip packages
 
-From a checkout: ./scripts/install.sh [--uninstall|--packages-only|--extension-only]
+From a checkout: ./scripts/install.sh [--uninstall|--reinstall|--packages-only|--extension-only]
 Env: BLENDER_BIN, BLENDER_PYTHON, BLENDER_AGENT_REF (branch/tag), BLENDER_AGENT_REPO.
 EOF
 			exit 0 ;;
@@ -137,28 +142,58 @@ if [ "$DO_PACKAGES" = 1 ]; then
 	BLPY="$(BLENDER_BIN="$BLENDER" sh "$REPO_DIR/_misc/find_blender_python.sh")" \
 		|| die "could not locate Blender's bundled Python (see message above)"
 	note "Blender Python: $BLPY"
-	if [ "$UNINSTALL" = 1 ]; then
+	if [ "$UNINSTALL" = 1 ] || [ "$REINSTALL" = 1 ]; then
 		note "Removing python packages"
 		"$BLPY" -m pip uninstall -y blender-mcp-extensions blender-mcp-agent blender-mcp || true
-	else
+	fi
+	if [ "$UNINSTALL" != 1 ]; then
 		note "Installing python packages (mcp, agent, mcp_ext)"
 		"$BLPY" -m ensurepip --upgrade >/dev/null 2>&1 || true
-		# Force wheels for the compiled deps: the newest cryptography (pulled in
-		# via mcp -> pyjwt[crypto]) has no win_arm64 wheel, so plain pip builds it
-		# from source and fails on ARM. --only-binary makes pip backtrack to a
-		# version that ships an arm64 wheel. Harmless on x86 / Linux / macOS.
+		# Scrub the in-tree setuptools build dirs FIRST. setuptools' build_py
+		# copies sources into build/lib but never PRUNES files that have since
+		# been deleted from source, so a file removed from the tree (e.g. an
+		# old blagent/web overlay component that was consolidated into
+		# agentcore) lingers in build/lib and gets re-packaged into every wheel
+		# - shadowing the current code at runtime. Removing build/ guarantees a
+		# wheel that matches the source exactly. Must run on every install, not
+		# just --reinstall: a normal install rebuilds from the same stale dir.
+		note "Removing stale build dirs (mcp, agent, mcp_ext)"
+		rm -rf "$REPO_DIR/mcp/build" "$REPO_DIR/agent/build" "$REPO_DIR/mcp_ext/build"
+		if [ "$REINSTALL" = 1 ]; then
+			# A stale same-version (0.1.0) wheel in the cache would defeat the
+			# point of a clean reinstall - drop it so the source is rebuilt.
+			note "Purging pip wheel cache"
+			"$BLPY" -m pip cache purge || true
+		fi
+		# Pass 1: resolve + install dependencies. Force wheels for the compiled
+		# deps: the newest cryptography (pulled in via mcp -> pyjwt[crypto]) has
+		# no win_arm64 wheel, so plain pip builds it from source and fails on
+		# ARM. --only-binary makes pip backtrack to a version that ships an
+		# arm64 wheel. Harmless on x86 / Linux / macOS.
 		"$BLPY" -m pip install --upgrade --only-binary=cryptography,cffi \
+			"$REPO_DIR/mcp" "$REPO_DIR/agent" "$REPO_DIR/mcp_ext"
+		# Pass 2: our package versions are static (0.1.0), so pass 1 treats an
+		# unchanged version as "already satisfied" and may NOT copy in fresh
+		# local edits. Force-reinstall just our three packages (--no-deps keeps
+		# it fast) so the current source on disk always lands.
+		"$BLPY" -m pip install --force-reinstall --no-deps \
 			"$REPO_DIR/mcp" "$REPO_DIR/agent" "$REPO_DIR/mcp_ext"
 	fi
 fi
 
 # --- 2. The add-on, as a Blender extension ----------------------------------
 if [ "$DO_EXTENSION" = 1 ]; then
-	if [ "$UNINSTALL" = 1 ]; then
+	if [ "$UNINSTALL" = 1 ] || [ "$REINSTALL" = 1 ]; then
 		note "Removing the add-on extension"
-		"$BLENDER" --command extension remove user_default.mcp \
-			|| die "extension removal failed (was it installed?)"
-	else
+		if ! "$BLENDER" --command extension remove user_default.mcp; then
+			if [ "$REINSTALL" = 1 ]; then
+				note "(add-on was not installed; continuing to a fresh install)"
+			else
+				die "extension removal failed (was it installed?)"
+			fi
+		fi
+	fi
+	if [ "$UNINSTALL" != 1 ]; then
 		note "Building the add-on extension"
 		mkdir -p "$DIST_DIR"
 		"$BLENDER" --command extension build \
@@ -175,6 +210,7 @@ fi
 if [ "$UNINSTALL" = 1 ]; then
 	note "Done. Restart Blender to drop any already-loaded modules."
 else
+	[ "$REINSTALL" = 1 ] && note "Clean reinstall complete - relaunch Blender to load the fresh code."
 	note "Done. Start Blender - the MCP bridge starts automatically"
 	note "(Edit > Preferences > Add-ons > MCP to configure ports, agent, skills)."
 fi

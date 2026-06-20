@@ -29,10 +29,15 @@ Dev install (no make needed - these just call the scripts below)
                         Override discovery with BLENDER_PYTHON
                         (interpreter path) or BLENDER_BIN (Blender binary).
    * uninstall-dev:     Remove the packages and the add-on again.
+   * repl:              Clean reinstall: uninstall, purge the pip wheel
+                        cache, then install the current source fresh - use
+                        when changes don't seem to land. Relaunch Blender
+                        afterwards to load the new code.
 
      Without make:      Linux / macOS / WSL2:  ./scripts/install.sh
                         Windows PowerShell:    scripts\install.ps1
                         Both take --uninstall / -Uninstall,
+                        --reinstall / -Reinstall,
                         --packages-only / -PackagesOnly,
                         --extension-only / -ExtensionOnly.
 
@@ -131,6 +136,9 @@ install-dev:
 
 uninstall-dev:
 	@bash scripts/install.sh --uninstall
+
+repl:
+	@bash scripts/install.sh --reinstall
 
 check_license:
 	@$(PYTHON) _misc/check_license.py

@@ -22,7 +22,8 @@
 #   scripts\install.cmd                 (double-click friendly; no policy change)
 #   powershell -ExecutionPolicy Bypass -File scripts\install.ps1
 #
-# Options: -Uninstall  -PackagesOnly  -ExtensionOnly
+# Options: -Uninstall  -Reinstall  -PackagesOnly  -ExtensionOnly
+#          -Reinstall           clean slate: uninstall + purge wheel cache + install
 #          -BlenderBin <path>   pin blender.exe (else: registry + PATH discovery)
 #          -Ref <branch|tag>    which revision to fetch when bootstrapping (default: main)
 #
@@ -34,6 +35,7 @@
 
 param(
     [switch]$Uninstall,
+    [switch]$Reinstall,
     [switch]$PackagesOnly,
     [switch]$ExtensionOnly,
     [string]$BlenderBin,
@@ -279,16 +281,35 @@ Note "Blender: $Blender"
 if (-not $ExtensionOnly) {
     $BlPy = Find-BlenderPython $Blender
     Note "Blender Python: $BlPy"
-    if ($Uninstall) {
+    if ($Uninstall -or $Reinstall) {
         Note "Removing python packages"
         & $BlPy -m pip uninstall -y blender-mcp-extensions blender-mcp-agent blender-mcp
-    } else {
+    }
+    if (-not $Uninstall) {
         Note "Installing python packages (mcp, agent, mcp_ext)"
         & $BlPy -m ensurepip --upgrade 2>$null | Out-Null
-        # Force wheels for the compiled deps. The newest `cryptography` (pulled
-        # in transitively via mcp -> pyjwt[crypto]) ships no win_arm64 wheel, so
-        # plain pip tries to BUILD it from source (Rust + MSVC) and fails on ARM.
-        # --only-binary makes pip backtrack to a version that has an arm64 wheel.
+        # Scrub the in-tree setuptools build dirs FIRST. setuptools' build_py
+        # copies sources into build/lib but never PRUNES files deleted from
+        # source, so a removed file (e.g. an old blagent/web overlay component
+        # consolidated into agentcore) lingers in build/lib and is re-packaged
+        # into every wheel - shadowing the current code at runtime. Must run on
+        # every install, not just -Reinstall.
+        Note "Removing stale build dirs (mcp, agent, mcp_ext)"
+        foreach ($d in @("mcp","agent","mcp_ext")) {
+            $bd = Join-Path $RepoDir (Join-Path $d "build")
+            if (Test-Path $bd) { Remove-Item -Recurse -Force $bd }
+        }
+        if ($Reinstall) {
+            # A stale same-version (0.1.0) wheel in the cache would defeat the
+            # point of a clean reinstall - drop it so the source is rebuilt.
+            Note "Purging pip wheel cache"
+            & $BlPy -m pip cache purge 2>$null | Out-Null
+        }
+        # Pass 1: resolve + install dependencies. Force wheels for the compiled
+        # deps. The newest `cryptography` (pulled in transitively via mcp ->
+        # pyjwt[crypto]) ships no win_arm64 wheel, so plain pip tries to BUILD it
+        # from source (Rust + MSVC) and fails on ARM. --only-binary makes pip
+        # backtrack to a version that has an arm64 wheel.
         & $BlPy -m pip install --upgrade --only-binary=cryptography,cffi `
             (Join-Path $RepoDir "mcp") (Join-Path $RepoDir "agent") (Join-Path $RepoDir "mcp_ext")
         if ($LASTEXITCODE -ne 0) {
@@ -297,16 +318,27 @@ if (-not $ExtensionOnly) {
                   "Blender lives under Program Files - a write-protected bundled Python " +
                   "(re-run from an Administrator PowerShell).")
         }
+        # Pass 2: our package versions are static (0.1.0), so pass 1 treats an
+        # unchanged version as "already satisfied" and may NOT copy in fresh
+        # local edits. Force-reinstall just our three packages (--no-deps keeps
+        # it fast) so the current source on disk always lands.
+        & $BlPy -m pip install --force-reinstall --no-deps `
+            (Join-Path $RepoDir "mcp") (Join-Path $RepoDir "agent") (Join-Path $RepoDir "mcp_ext")
+        if ($LASTEXITCODE -ne 0) { Fail "pip force-reinstall of the local packages failed (see the log above)." }
     }
 }
 
 # --- 2. The add-on, as a Blender extension ----------------------------------
 if (-not $PackagesOnly) {
-    if ($Uninstall) {
+    if ($Uninstall -or $Reinstall) {
         Note "Removing the add-on extension"
         & $Blender --command extension remove user_default.mcp
-        if ($LASTEXITCODE -ne 0) { Fail "extension removal failed (was it installed?)" }
-    } else {
+        if ($LASTEXITCODE -ne 0) {
+            if ($Reinstall) { Note "(add-on was not installed; continuing to a fresh install)" }
+            else { Fail "extension removal failed (was it installed?)" }
+        }
+    }
+    if (-not $Uninstall) {
         Note "Building the add-on extension"
         New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
         & $Blender --command extension build --source-dir $AddonDir --output-dir $DistDir
@@ -323,6 +355,7 @@ if (-not $PackagesOnly) {
 if ($Uninstall) {
     Note "Done. Restart Blender to drop any already-loaded modules."
 } else {
+    if ($Reinstall) { Note "Clean reinstall complete - relaunch Blender to load the fresh code." }
     Note "Done. Start Blender - the MCP bridge starts automatically"
     Note "(Edit > Preferences > Add-ons > MCP to configure ports, agent, skills)."
 }
