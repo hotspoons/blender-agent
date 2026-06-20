@@ -554,7 +554,66 @@ class AgentRuntime:
         return os.path.join(self.store.session_dir(session_id), "autonomy_view.json")
 
     def _run_view_path(self, session_id: str, run_id: str) -> str:
+        return os.path.join(self.store.session_dir(session_id), "runs", "{:s}.jsonl".format(run_id))
+
+    def _legacy_run_view_path(self, session_id: str, run_id: str) -> str:
+        # Pre-JSONL per-run files: one compact JSON snapshot blob.
         return os.path.join(self.store.session_dir(session_id), "runs", "{:s}.json".format(run_id))
+
+    @staticmethod
+    def _run_view_to_jsonl(snap: "dict[str, Any]") -> str:
+        """Serialize a run-view snapshot as greppable JSONL: one line for run
+        meta, one per objective, one per agent header, and one per timeline entry
+        / tool call (so e.g. `grep welcome runs/<id>.jsonl` finds that one call).
+        Round-trips losslessly via ``_run_view_from_jsonl``."""
+        lines: list[dict[str, Any]] = []
+        meta = {k: v for k, v in snap.items() if k not in ("objectives", "agents")}
+        lines.append({"k": "meta", "v": meta})
+        for obj in snap.get("objectives") or []:
+            lines.append({"k": "objective", "v": obj})
+        for aid, ag in (snap.get("agents") or {}).items():
+            header = dict(ag)
+            timeline = header.get("timeline")
+            calls = header.get("calls")
+            # Externalize the two big collections into their own lines; leave an
+            # empty container in the header so reconstruction is exact.
+            if isinstance(timeline, list):
+                header["timeline"] = []
+            if isinstance(calls, dict):
+                header["calls"] = {}
+            lines.append({"k": "agent", "id": aid, "v": header})
+            if isinstance(timeline, list):
+                for entry in timeline:
+                    lines.append({"k": "tl", "id": aid, "v": entry})
+            if isinstance(calls, dict):
+                for cid, call in calls.items():
+                    lines.append({"k": "call", "id": aid, "cid": cid, "v": call})
+        return "".join(json.dumps(ln, default=str) + "\n" for ln in lines)
+
+    @staticmethod
+    def _run_view_from_jsonl(text: str) -> "dict[str, Any]":
+        """Reconstruct a run-view snapshot from the JSONL written above."""
+        snap: dict[str, Any] = {"objectives": [], "agents": {}}
+        agents: dict[str, Any] = snap["agents"]
+        for raw in text.splitlines():
+            raw = raw.strip()
+            if not raw:
+                continue
+            ln = json.loads(raw)
+            k = ln.get("k")
+            if k == "meta":
+                for mk, mv in ln["v"].items():
+                    if mk not in ("objectives", "agents"):
+                        snap[mk] = mv
+            elif k == "objective":
+                snap["objectives"].append(ln["v"])
+            elif k == "agent":
+                agents[ln["id"]] = ln["v"]
+            elif k == "tl":
+                agents[ln["id"]]["timeline"].append(ln["v"])
+            elif k == "call":
+                agents[ln["id"]]["calls"][ln["cid"]] = ln["v"]
+        return snap
 
     def _reset_view(self, session_id: str) -> "OrchestratorView":
         """Fresh live/scratch view for a new draft or the next run. Does NOT
@@ -640,7 +699,7 @@ class AgentRuntime:
             path = self._run_view_path(session_id, rid)
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8") as fh:
-                json.dump(view.snapshot(), fh, default=str)
+                fh.write(self._run_view_to_jsonl(view.snapshot()))
         except Exception as ex:  # pylint: disable=broad-except
             _log.warning("persist autonomy run view failed session=%s run=%s: %s", session_id, rid, ex)
 
@@ -685,12 +744,16 @@ class AgentRuntime:
                 snap = live.snapshot()
             elif rid:
                 path = self._run_view_path(session_id, str(rid))
-                if os.path.isfile(path):
-                    try:
+                legacy = self._legacy_run_view_path(session_id, str(rid))
+                try:
+                    if os.path.isfile(path):
                         with open(path, encoding="utf-8") as fh:
+                            snap = self._run_view_from_jsonl(fh.read())
+                    elif os.path.isfile(legacy):
+                        with open(legacy, encoding="utf-8") as fh:
                             snap = json.load(fh)
-                    except Exception as ex:  # pylint: disable=broad-except
-                        _log.warning("read run view failed session=%s run=%s: %s", session_id, rid, ex)
+                except Exception as ex:  # pylint: disable=broad-except
+                    _log.warning("read run view failed session=%s run=%s: %s", session_id, rid, ex)
             if snap is None and not legacy_used:
                 legacy = self._read_legacy_view(session_id)
                 if legacy and (legacy.get("agentOrder") or legacy.get("done") or legacy.get("objectives")):
