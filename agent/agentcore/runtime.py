@@ -1555,7 +1555,7 @@ class AgentRuntime:
         session.task = asyncio.create_task(_run())
         return session_id
 
-    def _ensure_conductor(self, session_id: str) -> AgentEngine:
+    async def _ensure_conductor(self, session_id: str) -> AgentEngine:
         """Build (once) the persistent conductor engine for *session_id*: its
         transcript IS the session, its tools own the objective list + delegate
         to workers + read/search, and it streams as the main turn. One ongoing
@@ -1578,6 +1578,10 @@ class AgentRuntime:
             return MediaLibrary(os.path.join(
                 self.store.session_dir(session_id), "workers", agent_id.replace(":", "_")))
 
+        # Fetch the session welcome ONCE and pin it into the delegated workers
+        # (and the QA inspector), so each fresh worker session skips re-calling
+        # `welcome` on identical, static content — same as the round-loop path.
+        welcome_bootstrap = await self._prefetch_welcome(session_id)
         worker_registry = ToolRegistry(
             list(self.registry_for_role("worker"))
             + [AskOrchestratorTool(self._make_orchestrator_ask(session_id, persist_emit))])
@@ -1586,10 +1590,11 @@ class AgentRuntime:
             system_prompt=self._system_prompt, media_factory=media_factory,
             parent_session_id=session_id, autonomy="auto", max_rounds=config.max_rounds,
             context_tokens=config.context_tokens, budget_review=config.budget_review,
+            bootstrap=welcome_bootstrap,
             register=self._register_worker, unregister=self._unregister_worker)
         self._conductor_runners[session_id] = self._make_reviewing_runner(
             session_id, base_runner, persist_emit, self._make_probe(session_id), model,
-            qa_enabled=config.autonomy_qa, media_factory=media_factory)
+            qa_enabled=config.autonomy_qa, media_factory=media_factory, bootstrap=welcome_bootstrap)
 
         async def _emit_objectives() -> None:
             await persist_emit({"type": "objectives_update", "session_id": session_id,
@@ -1754,7 +1759,7 @@ class AgentRuntime:
             return session_id
         if session.busy:
             raise RuntimeError("a turn is already running in this session")
-        engine = self._ensure_conductor(session_id)
+        engine = await self._ensure_conductor(session_id)
         config = self.store.config
         llm, model = self._make_llm(), self._model_name()
 
