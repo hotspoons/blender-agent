@@ -50,7 +50,14 @@ def run_blender_cli(
     wrapper = (
         "import json\n"
         "try:\n"
-        "    _ns = {{'result': {{}}}}\n"
+        # Seed the exec namespace with bpy + common mathutils types so
+        # LLM-generated code can use them without an import (matches the
+        # interactive path's _new_exec_namespace).
+        "    import bpy, mathutils\n"
+        "    _ns = {{'result': {{}}, 'bpy': bpy, 'mathutils': mathutils,\n"
+        "           'Matrix': mathutils.Matrix, 'Vector': mathutils.Vector,\n"
+        "           'Euler': mathutils.Euler, 'Quaternion': mathutils.Quaternion,\n"
+        "           'Color': mathutils.Color}}\n"
         "    exec({!r}, _ns)\n"
         "    _result = _ns['result']\n"
         "    if not isinstance(_result, dict):\n"

@@ -227,6 +227,23 @@ def send_response(conn: socket.socket, response: dict[str, object]) -> None:
     conn.sendall(_encode_response(response))
 
 
+# Common Blender types seeded into every LLM exec namespace, so generated code
+# can use them WITHOUT an import. LLMs routinely write `Matrix(...)` /
+# `Vector(...)` and forget `from mathutils import ...`; seeding the names beats a
+# prompt rule, which is unreliable (see weak_sandbox.py's note on prompts).
+_MATHUTILS_SEED = ("Matrix", "Vector", "Euler", "Quaternion", "Color")
+
+
+def _new_exec_namespace() -> dict[str, object]:
+    """A fresh exec namespace pre-seeded with ``bpy`` + common ``mathutils`` types."""
+    import bpy  # pylint: disable=import-error
+    import mathutils  # pylint: disable=import-error,no-name-in-module
+    namespace: dict[str, object] = {"result": {}, "bpy": bpy, "mathutils": mathutils}
+    for _name in _MATHUTILS_SEED:
+        namespace[_name] = getattr(mathutils, _name)
+    return namespace
+
+
 def _execute_code(
         code: str,
         strict_json: bool,
@@ -245,7 +262,7 @@ def _execute_code(
     from .capture_output import CaptureOutput
     from .weak_sandbox import WeakSandboxForLLM
 
-    namespace: dict[str, object] = {"result": {}}
+    namespace: dict[str, object] = _new_exec_namespace()
     with CaptureOutput() as captured, WeakSandboxForLLM():
         try:
             exec(code, namespace)
