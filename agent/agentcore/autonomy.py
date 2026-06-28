@@ -124,6 +124,12 @@ class WorkerTask:
     # depends_on has completed, so an "assemble" task waits for its parts and a
     # "validate" task waits for the assembly. (Ported from zip-ties' DAG model.)
     depends_on: list[str] = dataclasses.field(default_factory=list)
+    # Optional dynamic fan-out (nested sub-graph): a list of per-instance
+    # assignments ({label, context}). The DagScheduler expands this task into one
+    # parallel instance per entry ("{id}_{i}", zip-ties' clone /
+    # replace_node_with_fan), each tagged with its iteration_tree position in the
+    # step store; any dependent fans in over ALL instances.
+    fan_out: list[dict] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -311,9 +317,14 @@ _PLANNER_SYSTEM = (
     "integration/'assemble' task that depends_on the part tasks (and a single "
     "validate task that depends_on the assemble). Do not invent dependencies "
     "between genuinely independent parts — that just serializes them.\n\n"
+    "For repeated per-item work (e.g. 'build each of these N props'), instead of "
+    "listing N near-identical tasks you MAY give one task a 'fan_out': a list of "
+    "per-item briefs [{\"label\": ..., \"context\": ...}] — it runs as N parallel "
+    "instances and any dependent fans in over all of them.\n\n"
     "Reply with ONLY a JSON object:\n"
     '{"tasks": [{"id": "<short unique id>", "objective_id": "<id>", '
-    '"instruction": "<imperative task>", "depends_on": ["<task id>", ...]}]}'
+    '"instruction": "<imperative task>", "depends_on": ["<task id>", ...], '
+    '"fan_out": [{"label": "<item>", "context": "<per-item brief>"}]}]}'
 )
 
 # Tool-enabled variant (when a *runner* is given): decompose against the real
@@ -401,13 +412,14 @@ class LlmPlanner:
             if pid:
                 id_map[pid] = safe
             obj = by_id.get(str(raw.get("objective_id", "")).strip()) or unmet[0]
+            fan = [a for a in (raw.get("fan_out") or []) if isinstance(a, dict)]
             specs.append((safe, obj, str(raw.get("instruction", "")).strip(),
-                          raw.get("depends_on") or []))
+                          raw.get("depends_on") or [], fan))
 
         # Pass 2: build tasks, resolving depends_on (planner id OR final id) and
         # dropping self/dangling references (the DagScheduler also guards these).
         tasks: list[WorkerTask] = []
-        for fid, obj, instruction, raw_deps in specs:
+        for fid, obj, instruction, raw_deps, fan in specs:
             deps = []
             for d in raw_deps:
                 d = str(d).strip()
@@ -416,7 +428,7 @@ class LlmPlanner:
                     deps.append(resolved)
             tasks.append(WorkerTask(
                 id=fid, objective_id=obj.id, instruction=instruction,
-                goal=obj.text, acceptance=obj.acceptance, depends_on=deps))
+                goal=obj.text, acceptance=obj.acceptance, depends_on=deps, fan_out=fan))
 
         if not tasks:
             # Degrade to one task per unmet objective rather than stalling.
@@ -865,7 +877,38 @@ class DagScheduler:
         self._sem = asyncio.Semaphore(max(1, max_concurrency))
         self._graph = graph
 
+    @staticmethod
+    def _expand_fanout(tasks: list[WorkerTask]) -> "tuple[list[WorkerTask], dict[str, list[int]]]":
+        """Expand any fan-out task into N parallel instances ("{id}_{i}"), each
+        carrying its assignment context and an iteration_tree position; rewire
+        dependents to fan in over all instances. Returns (tasks, iter_tree)."""
+        fan_map: dict[str, list[str]] = {}
+        iter_tree: dict[str, list[int]] = {}
+        expanded: list[WorkerTask] = []
+        for t in tasks:
+            if t.fan_out:
+                for i, assign in enumerate(t.fan_out):
+                    iid = "{:s}_{:d}".format(t.id, i)
+                    actx = str((assign or {}).get("context", "")).strip()
+                    ctx = (t.context + "\n\n" + actx).strip() if actx else t.context
+                    expanded.append(dataclasses.replace(
+                        t, id=iid, context=ctx, fan_out=[], depends_on=list(t.depends_on)))
+                    iter_tree[iid] = [i]
+                    fan_map.setdefault(t.id, []).append(iid)
+            else:
+                expanded.append(t)
+                iter_tree.setdefault(t.id, [])
+        # A dependent of a fanned template now depends on ALL its instances.
+        for t in expanded:
+            if any(d in fan_map for d in t.depends_on):
+                new_deps: list[str] = []
+                for d in t.depends_on:
+                    new_deps.extend(fan_map[d]) if d in fan_map else new_deps.append(d)
+                t.depends_on = new_deps
+        return expanded, iter_tree
+
     async def run(self, tasks: list[WorkerTask], run_worker: WorkerRunner) -> list[WorkerResult]:
+        tasks, iter_tree = self._expand_fanout(tasks)
         by_id = {t.id: t for t in tasks}
         dag = DAG()
         for t in tasks:
@@ -886,7 +929,7 @@ class DagScheduler:
                 self._graph.put_data(StepData(
                     agent_id=r.task_id, success=bool(r.ok), text=r.proof or "",
                     output_data={"proof": r.proof, "ok": r.ok, "artifacts": r.artifacts},
-                    end=datetime.now()))
+                    iteration_tree=iter_tree.get(r.task_id, []), end=datetime.now()))
 
         def _inject_upstream(task: WorkerTask) -> None:
             # Hand the task what its prerequisites produced, read from the store.

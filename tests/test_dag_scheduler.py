@@ -213,6 +213,35 @@ def test_handoff_compaction_uses_compactor_else_falls_back():
     assert "build a body" in tasks2[0].context
 
 
+def test_fanout_expands_to_instances_with_iteration_tree():
+    ran = []
+
+    async def run_worker(task):
+        ran.append((task.id, task.context))
+        return WorkerResult(task_id=task.id, objective_id=task.objective_id,
+                            proof="did {}".format(task.id), ok=True)
+
+    graph = InMemoryGraphData()
+    tasks = [
+        WorkerTask(id="trees", objective_id="obj-0", instruction="plant a tree",
+                   fan_out=[{"context": "tree A"}, {"context": "tree B"}, {"context": "tree C"}]),
+        WorkerTask(id="assemble", objective_id="obj-1", instruction="assemble", depends_on=["trees"]),
+    ]
+    results = asyncio.run(DagScheduler(graph=graph).run(tasks, run_worker))
+    ids = {r.task_id for r in results}
+    assert ids == {"trees_0", "trees_1", "trees_2", "assemble"}
+    # each instance got its assignment context
+    ctx = dict(ran)
+    assert "tree A" in ctx["trees_0"] and "tree C" in ctx["trees_2"]
+    # iteration_tree recorded per instance in the step store
+    assert graph.fetch_data("trees_1", [1]) is not None
+    assert graph.fetch_data("trees_0", [0]) is not None
+    # fan-in: assemble depended on the template -> rewired to ALL instances,
+    # so its context carries every instance's result
+    asm_ctx = ctx["assemble"]
+    assert "did trees_0" in asm_ctx and "did trees_1" in asm_ctx and "did trees_2" in asm_ctx
+
+
 def test_pre_eval_runs_before_evaluation():
     from agentcore.autonomy import GoalVerdict, AutoUntilDonePolicy
 
