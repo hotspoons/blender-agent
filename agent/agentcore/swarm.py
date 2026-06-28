@@ -543,7 +543,7 @@ class RemoteWorkerStrategy:
                 _log.warning("worker %s chat failed: %s", task.id, ex)
                 return WorkerResult(
                     task_id=task.id, objective_id=task.objective_id,
-                    proof="worker chat failed: {:s}".format(ex), ok=False,
+                    proof="worker chat failed: {:s}".format(str(ex)), ok=False,
                     transcript_ref=worker.base_url)
             if cancel.is_set():
                 return WorkerResult(

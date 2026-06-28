@@ -274,6 +274,22 @@ def test_pre_eval_runs_before_evaluation():
     assert order[:3] == ["workers", "pre_eval", "eval"]
 
 
+def test_worker_exception_does_not_crash_run():
+    # A worker that RAISES (not returns ok=False) must not tear down the
+    # generation via asyncio.gather — it becomes a failed result and its
+    # siblings still complete. Regression for the swarm 1011 server crash.
+    async def run_worker(task):
+        if task.id == "boom":
+            raise ValueError("kaboom")          # non-string-formattable too
+        return WorkerResult(task_id=task.id, objective_id=task.objective_id, proof="ok", ok=True)
+
+    tasks = [_task("boom"), _task("fine")]
+    results = asyncio.run(DagScheduler(max_concurrency=2).run(tasks, run_worker))
+    by = {r.task_id: r for r in results}
+    assert by["boom"].ok is False and "kaboom" in by["boom"].proof
+    assert by["fine"].ok is True               # sibling unaffected
+
+
 def test_legacy_share_context_maps_to_handoff_mode():
     orch = AutonomyOrchestrator(planner=None, scheduler=None, evaluator=None, policy=None,
                                 worker_runner=None, emit=_noop, share_context=True)

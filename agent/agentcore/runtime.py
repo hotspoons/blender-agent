@@ -207,7 +207,7 @@ class ChildSessionRunner:
             _log.warning("worker %s failed: %s", task.id, ex)
             return WorkerResult(
                 task_id=task.id, objective_id=task.objective_id,
-                proof="worker errored: {:s}".format(ex), ok=False, transcript_ref=agent_id)
+                proof="worker errored: {:s}".format(str(ex)), ok=False, transcript_ref=agent_id)
         proof = self._extract_proof(records)
         return WorkerResult(
             task_id=task.id, objective_id=task.objective_id,

@@ -952,7 +952,16 @@ class DagScheduler:
                                         ", ".join(failed_deps)), ok=False)
             _inject_upstream(task)
             async with self._sem:
-                return await run_worker(task)
+                # A worker runner must never crash the whole generation/run:
+                # asyncio.gather propagates the first exception and would tear
+                # down every sibling task (and the server). Convert any escape
+                # into a failed result so the evaluator handles it as a miss.
+                try:
+                    return await run_worker(task)
+                except Exception as ex:  # pylint: disable=broad-except
+                    return WorkerResult(
+                        task_id=task.id, objective_id=task.objective_id,
+                        proof="worker errored: {:s}".format(str(ex)), ok=False)
 
         for generation in dag.topological_generations():
             gen_tasks = [by_id[nid] for nid in generation if nid in by_id]
@@ -1103,7 +1112,7 @@ class AutonomyOrchestrator:
             _log.warning("worker %s failed: %s", task.id, ex)
             result = WorkerResult(
                 task_id=task.id, objective_id=task.objective_id,
-                proof="worker errored: {:s}".format(ex), ok=False)
+                proof="worker errored: {:s}".format(str(ex)), ok=False)
         if not result.transcript_ref:
             result.transcript_ref = agent_id
         await self._emit({
