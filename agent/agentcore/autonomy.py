@@ -36,6 +36,8 @@ __all__ = (
     "StateAwareEvaluator",
     "SequentialScheduler",
     "ParallelScheduler",
+    "DAG",
+    "DagScheduler",
     "AutoUntilDonePolicy",
     "AutoPauseWhenBlockedPolicy",
     "AutonomyOrchestrator",
@@ -45,6 +47,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+from collections import deque
 from typing import Any, Awaitable, Callable
 
 from agentcore.llm import LlmClient
@@ -89,6 +92,11 @@ class WorkerTask:
     # orchestrator when share_context is on, so blind vs informed workers
     # can be compared on the same problem.
     context: str = ""
+    # IDs of the tasks this one depends on. Empty == no prerequisites (runs in
+    # the first generation). The DagScheduler runs a task only once every id in
+    # depends_on has completed, so an "assemble" task waits for its parts and a
+    # "validate" task waits for the assembly. (Ported from zip-ties' DAG model.)
+    depends_on: list[str] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -589,6 +597,137 @@ class ParallelScheduler:
                 return await run_worker(task)
 
         return list(await asyncio.gather(*(_guarded(t) for t in tasks)))
+
+
+class DAG:
+    """Lightweight directed acyclic graph: nodes, dependency edges, topological
+    generations, cycle detection, and dynamic fan-out.
+
+    Ported from zip-ties (``zip_ties_core.automata.dag.DAG``) and kept API-
+    compatible on purpose, so the local copy can later be swapped for the
+    upstream package with a light refactor. ONE documented edge convention
+    (zip-ties carried two conflicting ones): ``add_edge(dep, node)`` means
+    "*dep* must finish before *node*" — edges point from prerequisite to
+    dependent, and ``topological_generations`` yields prerequisites first
+    (networkx ``topological_generations`` semantics).
+    """
+
+    def __init__(self, name: str = "") -> None:
+        self.name = name
+        self._nodes: set[str] = set()
+        self._deps: dict[str, set[str]] = {}       # node -> its prerequisites
+        self._dependents: dict[str, set[str]] = {}  # node -> nodes waiting on it
+
+    def add_node(self, node_id: str) -> None:
+        self._nodes.add(node_id)
+        self._deps.setdefault(node_id, set())
+        self._dependents.setdefault(node_id, set())
+
+    def add_edge(self, dep: str, node: str) -> None:
+        """Record that *node* depends on *dep* (dep runs first)."""
+        self.add_node(dep)
+        self.add_node(node)
+        self._deps[node].add(dep)
+        self._dependents[dep].add(node)
+
+    def is_dag(self) -> bool:
+        indeg = {n: len(self._deps[n]) for n in self._nodes}
+        queue = deque(n for n, d in indeg.items() if d == 0)
+        seen = 0
+        while queue:
+            n = queue.popleft()
+            seen += 1
+            for m in self._dependents[n]:
+                indeg[m] -= 1
+                if indeg[m] == 0:
+                    queue.append(m)
+        return seen == len(self._nodes)
+
+    def topological_generations(self) -> "list[set[str]]":
+        """Nodes grouped into generations: each generation's prerequisites all
+        live in earlier generations, so a generation can run concurrently."""
+        indeg = {n: len(self._deps[n]) for n in self._nodes}
+        gen = {n for n, d in indeg.items() if d == 0}
+        generations: list[set[str]] = []
+        while gen:
+            generations.append(gen)
+            nxt: set[str] = set()
+            for n in gen:
+                for m in self._dependents[n]:
+                    indeg[m] -= 1
+                    if indeg[m] == 0:
+                        nxt.add(m)
+            gen = nxt
+        return generations
+
+    def replace_node_with_fan(self, template_id: str, instance_ids: "list[str]") -> None:
+        """Replace one node with N parallel instances: each instance inherits
+        the template's prerequisites, and every dependent now waits on ALL
+        instances (fan-out then fan-in). Used for dynamic per-item expansion."""
+        if template_id not in self._nodes:
+            raise ValueError("node {!r} not in graph".format(template_id))
+        deps = set(self._deps.get(template_id, set()))
+        dependents = set(self._dependents.get(template_id, set()))
+        self._remove(template_id)
+        for inst in instance_ids:
+            self.add_node(inst)
+            for d in deps:
+                self.add_edge(d, inst)
+            for dep_node in dependents:
+                self.add_edge(inst, dep_node)
+
+    def _remove(self, node_id: str) -> None:
+        self._nodes.discard(node_id)
+        for d in self._deps.pop(node_id, set()):
+            self._dependents.get(d, set()).discard(node_id)
+        for m in self._dependents.pop(node_id, set()):
+            self._deps.get(m, set()).discard(node_id)
+
+
+class DagScheduler:
+    """Dependency-aware scheduler: runs tasks by topological generation, up to
+    ``max_concurrency`` at once within a generation, so a downstream task (e.g.
+    an ``assemble`` node) only starts once every task in its ``depends_on`` has
+    finished. Implements the same ``run(tasks, run_worker)`` seam as the other
+    schedulers, so it is a drop-in. A task whose dependency failed is skipped
+    with a failed result (the failure propagates instead of running blind).
+
+    This is the executor half of the ported zip-ties DAG model; the planner
+    supplies ``WorkerTask.depends_on`` (the edges)."""
+
+    def __init__(self, max_concurrency: int = 4) -> None:
+        self._sem = asyncio.Semaphore(max(1, max_concurrency))
+
+    async def run(self, tasks: list[WorkerTask], run_worker: WorkerRunner) -> list[WorkerResult]:
+        by_id = {t.id: t for t in tasks}
+        dag = DAG()
+        for t in tasks:
+            dag.add_node(t.id)
+            for dep in t.depends_on:
+                if dep in by_id:            # ignore dangling deps the planner invented
+                    dag.add_edge(dep, t.id)
+        if not dag.is_dag():
+            # A cycle would deadlock the generations — fall back to a flat run
+            # rather than hang, and let the evaluator sort it out.
+            return await ParallelScheduler(self._sem._value).run(tasks, run_worker)
+
+        results: dict[str, WorkerResult] = {}
+
+        async def _guarded(task: WorkerTask) -> WorkerResult:
+            failed_deps = [d for d in task.depends_on if d in results and not results[d].ok]
+            if failed_deps:
+                return WorkerResult(task_id=task.id, objective_id=task.objective_id,
+                                    proof="skipped: prerequisite task(s) failed: {:s}".format(
+                                        ", ".join(failed_deps)), ok=False)
+            async with self._sem:
+                return await run_worker(task)
+
+        for generation in dag.topological_generations():
+            gen_tasks = [by_id[nid] for nid in generation if nid in by_id]
+            done = await asyncio.gather(*(_guarded(t) for t in gen_tasks))
+            for r in done:
+                results[r.task_id] = r
+        return [results[t.id] for t in tasks if t.id in results]
 
 
 # --------------------------------------------------------------------------
