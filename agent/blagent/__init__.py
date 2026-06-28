@@ -170,8 +170,14 @@ async def run_server(
 
     servers = []
     if port is not None:
+        # ws_ping_interval=None: disable the protocol-level keepalive ping.
+        # Its background write_frame()/drain() races with our event-stream
+        # pump (both write the same socket), tripping websockets' concurrent-
+        # drain AssertionError and killing the connection (1011). We run our
+        # own JSON {"type":"ping"}/{"type":"pong"} heartbeat instead.
         servers.append(uvicorn.Server(uvicorn.Config(
-            app, host=host, port=port, log_level="warning")))
+            app, host=host, port=port, log_level="warning",
+            ws_ping_interval=None, ws_ping_timeout=None)))
 
     if mcp_port is not None:
         from mcp.server.fastmcp.server import TransportSecuritySettings  # type: ignore[attr-defined]

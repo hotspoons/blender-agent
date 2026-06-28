@@ -178,12 +178,26 @@ def create_app(
         await ws.accept()
         queue = runtime.subscribe()
 
+        import asyncio
+
+        # Serialize every send: the pump task (event stream) and the
+        # request handler both write this socket, and two concurrent
+        # send_json -> drain() trip websockets' concurrent-drain
+        # AssertionError, killing the connection. One lock = one writer
+        # draining at a time.
+        send_lock = asyncio.Lock()
+        _raw_send = ws.send_json
+
+        async def _locked_send(event: Any) -> None:
+            async with send_lock:
+                await _raw_send(event)
+
+        ws.send_json = _locked_send  # type: ignore[method-assign]
+
         async def pump() -> None:
             while True:
                 event = await queue.get()
                 await ws.send_json(event)
-
-        import asyncio
 
         pump_task = asyncio.create_task(pump())
         try:
