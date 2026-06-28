@@ -16,7 +16,19 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from agentcore.autonomy import (  # noqa: E402
     DAG, DagScheduler, WorkerTask, WorkerResult, InMemoryGraphData, StepData,
-    LlmPlanner, Objective)
+    LlmPlanner, Objective, AutonomyOrchestrator,
+    HANDOFF_BLIND, HANDOFF_HANDOFF, HANDOFF_COMPACTION, HANDOFF_FULL)
+
+
+async def _noop(_e):
+    return None
+
+
+def _orch(handoff, compactor=None, context=""):
+    return AutonomyOrchestrator(
+        planner=None, scheduler=None, evaluator=None, policy=None,
+        worker_runner=None, emit=_noop, session_id="s",
+        handoff=handoff, compactor=compactor, context=context)
 
 
 def test_topological_generations_dep_runs_first():
@@ -165,6 +177,48 @@ def test_planner_sanitizes_ids_and_drops_self_dep():
     tasks = asyncio.run(planner.plan([Objective(id="obj-0", text="t", acceptance="a")]))
     assert tasks[0].id == "build-chars"      # sanitized to a safe id
     assert tasks[0].depends_on == []          # self-dependency dropped
+
+
+def _objs():
+    return [Objective(id="obj-0", text="build a body", acceptance="Body mesh exists")]
+
+
+def test_handoff_blind_injects_nothing():
+    tasks = [_task("t")]
+    asyncio.run(_orch(HANDOFF_BLIND)._apply_handoff(tasks, _objs()))
+    assert tasks[0].context == ""
+
+
+def test_handoff_handoff_injects_objectives():
+    tasks = [_task("t")]
+    asyncio.run(_orch(HANDOFF_HANDOFF)._apply_handoff(tasks, _objs()))
+    assert "build a body" in tasks[0].context and "done-when" in tasks[0].context
+
+
+def test_handoff_full_includes_conversation():
+    tasks = [_task("t")]
+    asyncio.run(_orch(HANDOFF_FULL, context="USER: make a robot")._apply_handoff(tasks, _objs()))
+    assert "Full orchestrator context" in tasks[0].context and "make a robot" in tasks[0].context
+
+
+def test_handoff_compaction_uses_compactor_else_falls_back():
+    async def compactor(objectives, ctx):
+        return "BRIEF: build the body, nothing done yet."
+    tasks = [_task("t")]
+    asyncio.run(_orch(HANDOFF_COMPACTION, compactor=compactor)._apply_handoff(tasks, _objs()))
+    assert tasks[0].context == "BRIEF: build the body, nothing done yet."
+    # no compactor wired -> falls back to the concise handoff
+    tasks2 = [_task("t")]
+    asyncio.run(_orch(HANDOFF_COMPACTION)._apply_handoff(tasks2, _objs()))
+    assert "build a body" in tasks2[0].context
+
+
+def test_legacy_share_context_maps_to_handoff_mode():
+    orch = AutonomyOrchestrator(planner=None, scheduler=None, evaluator=None, policy=None,
+                                worker_runner=None, emit=_noop, share_context=True)
+    tasks = [_task("t")]
+    asyncio.run(orch._apply_handoff(tasks, _objs()))
+    assert "build a body" in tasks[0].context   # share_context=True == handoff mode
 
 
 if __name__ == "__main__":

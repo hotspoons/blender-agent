@@ -26,6 +26,14 @@ __all__ = (
     "CONTINUE",
     "PAUSE",
     "DONE",
+    "HANDOFF_BLIND",
+    "HANDOFF_HANDOFF",
+    "HANDOFF_COMPACTION",
+    "HANDOFF_FULL",
+    "HANDOFF_MODES",
+    "GATHER_PLANNER",
+    "GATHER_ALWAYS",
+    "GATHER_OFF",
     "Objective",
     "WorkerTask",
     "WorkerResult",
@@ -64,6 +72,19 @@ _log = logging.getLogger(__name__)
 CONTINUE = "continue"   # run another round
 PAUSE = "pause"         # stop and wait for the user
 DONE = "done"           # objectives met (or budget reached); finish
+
+# Context-handoff modes for spawned workers (autonomy_handoff). zip-ties only
+# ever ran 'blind' — see zip-ties-dag-port memory.
+HANDOFF_BLIND = "blind"          # instruction + acceptance only
+HANDOFF_HANDOFF = "handoff"      # + concise objectives/status (cheap)
+HANDOFF_COMPACTION = "compaction"  # + a dense brief from a compactor pass
+HANDOFF_FULL = "full"            # + the orchestrator's full conversation
+HANDOFF_MODES = (HANDOFF_BLIND, HANDOFF_HANDOFF, HANDOFF_COMPACTION, HANDOFF_FULL)
+
+# Gather/assemble policy for swarm (autonomy_gather).
+GATHER_PLANNER = "planner"   # only if the planner emits an assemble node
+GATHER_ALWAYS = "always"     # always run a final gather-all before review
+GATHER_OFF = "off"           # never gather (components stay separate)
 
 
 # --------------------------------------------------------------------------
@@ -957,6 +978,9 @@ class AutonomyOrchestrator:
             emit: Callable[[dict[str, Any]], Awaitable[None]],
             session_id: str = "",
             share_context: bool = False,
+            handoff: str = "",
+            compactor: "Callable[[list[Objective], str], Awaitable[str]] | None" = None,
+            context: str = "",
     ) -> None:
         self._planner = planner
         self._scheduler = scheduler
@@ -965,7 +989,11 @@ class AutonomyOrchestrator:
         self._worker_runner = worker_runner
         self._emit = emit
         self._session_id = session_id
-        self._share_context = share_context
+        # Context-handoff mode for spawned workers (the knob zip-ties lacked —
+        # it only ever ran 'blind'). Legacy share_context bool maps onto it.
+        self._handoff = handoff or (HANDOFF_HANDOFF if share_context else HANDOFF_BLIND)
+        self._compactor = compactor
+        self._context = context     # the orchestrator's conversation, for 'full'
 
     def _shared_context(self, objectives: list[Objective]) -> str:
         """The orchestrator's objective view, shared with informed workers."""
@@ -980,6 +1008,33 @@ class AutonomyOrchestrator:
             "Do your assigned task; the orchestrator will verify the result "
             "against these objectives.")
         return "\n".join(lines)
+
+    async def _apply_handoff(self, tasks: list[WorkerTask], objectives: list[Objective]) -> None:
+        """Set each task's shared context per the handoff mode (DagScheduler then
+        layers each task's upstream node results on top). The per-worker fork is
+        assembled once here; tools are restated per worker at spawn downstream.
+          blind      — nothing (worker runs on its instruction + acceptance only)
+          handoff    — concise objectives + status (cheap)
+          compaction — a dense brief from the injected compactor (one pass), else
+                       falls back to handoff
+          full       — objectives + status + the orchestrator's conversation"""
+        mode = self._handoff
+        if mode == HANDOFF_BLIND:
+            return
+        if mode == HANDOFF_COMPACTION and self._compactor is not None:
+            try:
+                brief = await self._compactor(objectives, self._context)
+            except Exception as ex:  # pylint: disable=broad-except
+                _log.warning("handoff compaction failed (%s); using concise handoff", ex)
+                brief = self._shared_context(objectives)
+        elif mode == HANDOFF_FULL:
+            brief = self._shared_context(objectives)
+            if self._context:
+                brief = "Full orchestrator context:\n{:s}\n\n{:s}".format(self._context, brief)
+        else:   # handoff, or compaction with no compactor wired
+            brief = self._shared_context(objectives)
+        for task in tasks:
+            task.context = (task.context + "\n\n" + brief).strip() if task.context else brief
 
     def _objectives_payload(self, objectives: list[Objective]) -> list[dict[str, Any]]:
         return [dataclasses.asdict(o) for o in objectives]
@@ -1043,10 +1098,7 @@ class AutonomyOrchestrator:
                 break
 
             tasks = await self._planner.plan(unmet)
-            if self._share_context:
-                shared = self._shared_context(objectives)
-                for task in tasks:
-                    task.context = shared
+            await self._apply_handoff(tasks, objectives)
             results = await self._scheduler.run(tasks, self._run_one_worker)
             verdicts = await self._evaluator.evaluate(objectives, results)
 

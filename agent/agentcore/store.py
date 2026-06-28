@@ -163,6 +163,13 @@ class AgentConfig:
     # (informed worker); when False (default), workers run blind on just
     # their task — so the two can be compared on the same problem.
     autonomy_share_context: bool = False
+    # Context-handoff mode for spawned workers (supersedes the share_context
+    # bool; empty derives from it: "handoff" if share_context else "blind").
+    #   blind | handoff | compaction | full  (see autonomy.HANDOFF_MODES)
+    autonomy_handoff: str = ""
+    # Swarm gather/assemble policy: planner (only if the planner emits an
+    # assemble node) | always (force a gather-all before review) | off.
+    autonomy_gather: str = "planner"
     # Opt-in independent audit: after the orchestrator finishes, a FRESH LLM
     # context (no shared history) re-checks every objective against the real
     # project state and calls out reward-hacking / overclaims. Off by default
@@ -229,6 +236,8 @@ class AgentConfig:
             "autonomy_policy": self.autonomy_policy,
             "max_autonomy_rounds": self.max_autonomy_rounds,
             "autonomy_share_context": self.autonomy_share_context,
+            "autonomy_handoff": self.autonomy_handoff,
+            "autonomy_gather": self.autonomy_gather,
             "autonomy_audit": self.autonomy_audit,
             "autonomy_qa": self.autonomy_qa,
             "autonomy_planner_tools": self.autonomy_planner_tools,

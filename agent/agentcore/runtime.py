@@ -1479,6 +1479,22 @@ class AgentRuntime:
         planner_runner = (
             self._make_planner_runner(session_id, persist_emit, model, phase="plan")
             if config.autonomy_planner_tools else None)
+        async def _handoff_compactor(objectives: "list[Any]", ctx: str) -> str:
+            # 'compaction' handoff: one pass that compresses the plan + conversation
+            # into a tight, act-now brief for workers (vs vague instructions).
+            from .autonomy import _complete
+            listing = "\n".join(
+                "- [{:s}] {:s} (done-when: {:s})".format(
+                    "met" if getattr(o, "status", "") == "met" else "unmet", o.text, o.acceptance)
+                for o in objectives)
+            user = "PLAN (objectives):\n{:s}\n\nCONVERSATION:\n{:s}".format(listing, ctx or "(none)")
+            return await _complete(
+                llm, model,
+                "Compress this autonomy run into a TIGHT brief a worker can act on "
+                "immediately: the goal, what's already done, what's left, and the key "
+                "constraints. Concrete, no preamble, a few short lines.",
+                user, trace_label="handoff_compaction")
+
         orchestrator = AutonomyOrchestrator(
             planner=LlmPlanner(llm, model, emit=persist_emit, session_id=session_id,
                                context=conversation, runner=planner_runner),
@@ -1489,6 +1505,9 @@ class AgentRuntime:
             emit=persist_emit,
             session_id=session_id,
             share_context=config.autonomy_share_context,
+            handoff=config.autonomy_handoff,
+            compactor=_handoff_compactor,
+            context=conversation,
         )
         rounds = rounds_cap
 
