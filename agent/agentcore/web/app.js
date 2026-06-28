@@ -36,6 +36,8 @@ export class BaApp extends LitElement {
     _showLeft: { state: true },
     _railCollapsed: { state: true },
     _showRight: { state: true },
+    _leftW: { state: true },
+    _rightW: { state: true },
     _showSettings: { state: true },
     _theme: { state: true },
     _connected: { state: true },
@@ -51,6 +53,9 @@ export class BaApp extends LitElement {
     // fully disappears - same semantics as the right panel toggle);
     // narrow viewports use the overlay drawer instead.
     this._railCollapsed = localStorage.getItem("blender-agent.rail-collapsed") === "true";
+    // User-resizable pane widths (drag the divider); persisted.
+    this._leftW = this._loadW("blender-agent.left-w", 248, 180, 520);
+    this._rightW = this._loadW("blender-agent.right-w", 320, 240, 640);
     this._showRight = window.innerWidth > 1200;
     this._showSettings = false;
     this._theme = getTheme();
@@ -107,8 +112,31 @@ export class BaApp extends LitElement {
       display: flex;
       flex-direction: column;
       min-height: 0;
+      position: relative;
       background: var(--surface-elevated);
     }
+    /* Drag-to-resize divider, pinned to the pane's inner edge. */
+    .resizer {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 8px;
+      z-index: 6;
+      cursor: col-resize;
+      touch-action: none;
+    }
+    aside.left .resizer { right: 0; }
+    aside.right .resizer { left: 0; }
+    .resizer::after {
+      content: "";
+      position: absolute;
+      top: 0; bottom: 0; left: 3px;
+      width: 2px;
+      background: transparent;
+      transition: background 0.15s ease;
+    }
+    .resizer:hover::after, aside.noanim .resizer::after { background: var(--accent); }
+    aside.noanim { transition: none !important; }
     /* Both side panels animate their width; inner wrappers keep a
        fixed width so content clips cleanly instead of reflowing
        mid-transition. */
@@ -133,7 +161,11 @@ export class BaApp extends LitElement {
       flex: none;
     }
     .left-inner { width: 248px; }
-    .right-inner { width: 320px; }
+    /* The right pane scrolls when its artifacts exceed the height. Mirror the
+       sessions rail: a flex:1 / min-height:0 child of the flex-column aside is
+       height-bounded, so overflow-y actually scrolls (height:100% here was not
+       bounded and grew instead). */
+    .right-inner { width: 320px; flex: 1; min-height: 0; overflow-y: auto; }
     .rail-inner { width: 56px; align-items: center; }
 
     /* Collapsed rail: a slim icon strip - the sidebar never fully
@@ -346,6 +378,43 @@ export class BaApp extends LitElement {
     localStorage.setItem("blender-agent.rail-collapsed", String(collapsed));
   }
 
+  _loadW(key, def, min, max) {
+    const v = parseInt(localStorage.getItem(key) || "", 10);
+    return Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : def;
+  }
+
+  // Drag a divider to resize a pane. `side` is "left" or "right"; the left
+  // divider grows the pane as you drag right, the right divider as you drag
+  // left. Width is clamped and persisted; the width transition is suppressed
+  // during the drag so it tracks the pointer.
+  _startResize(side, ev) {
+    ev.preventDefault();
+    const startX = ev.clientX;
+    const isLeft = side === "left";
+    const startW = isLeft ? this._leftW : this._rightW;
+    const [min, max] = isLeft ? [180, 520] : [240, 640];
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    this._resizing = true;
+    const onMove = (e) => {
+      const delta = isLeft ? (e.clientX - startX) : (startX - e.clientX);
+      const w = Math.min(max, Math.max(min, startW + delta));
+      if (isLeft) this._leftW = w; else this._rightW = w;
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      this._resizing = false;
+      localStorage.setItem(isLeft ? "blender-agent.left-w" : "blender-agent.right-w",
+        String(isLeft ? this._leftW : this._rightW));
+      this.requestUpdate();
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
   /** Slim icon-strip content shown when the rail is collapsed. */
   _renderRailContent() {
     return html`
@@ -370,9 +439,9 @@ export class BaApp extends LitElement {
       </div>`;
   }
 
-  _renderFullRailContent(narrow) {
+  _renderFullRailContent(narrow, innerStyle = "") {
     return html`
-      <div class="left-inner">
+      <div class="left-inner" style=${innerStyle}>
         <div class="brand">
           <span class="mark">${getProfile().mark}</span>
           <span><span class="word">${getProfile().brand.word}</span>${getProfile().brand.rest}</span>
@@ -401,14 +470,25 @@ export class BaApp extends LitElement {
     // Both asides stay mounted so width/transform changes animate;
     // the inner wrappers keep fixed widths so content clips instead
     // of reflowing mid-transition.
+    const noanim = this._resizing ? "noanim" : "";
     const leftClass = narrow
-      ? `left ${this._showLeft ? "" : "off"}`
-      : `left ${collapsed ? "collapsed" : ""}`;
+      ? `left ${this._showLeft ? "" : "off"} ${noanim}`
+      : `left ${collapsed ? "collapsed" : ""} ${noanim}`;
+    // Inline width drives the resizable panes; collapsed/narrow states fall
+    // back to their CSS-class widths (56px / drawer). The inner wrapper always
+    // carries the expanded width so it clips cleanly when the rail collapses.
+    const leftResizable = !narrow && !collapsed;
+    const leftAsideStyle = leftResizable ? `width:${this._leftW}px` : "";
+    const leftInnerStyle = `width:${this._leftW}px`;
+    const rightAsideStyle = this._showRight ? `width:${this._rightW}px` : "";
+    const rightInnerStyle = `width:${this._rightW}px`;
     return html`
       ${narrow && this._showLeft ? html`
         <div class="backdrop" @click=${() => { this._showLeft = false; }}></div>` : nothing}
-      <aside class=${leftClass}>
-        ${collapsed ? this._renderRailContent() : this._renderFullRailContent(narrow)}
+      <aside class=${leftClass} style=${leftAsideStyle}>
+        ${collapsed ? this._renderRailContent() : this._renderFullRailContent(narrow, leftInnerStyle)}
+        ${leftResizable ? html`<div class="resizer" title="Drag to resize"
+          @pointerdown=${(e) => this._startResize("left", e)}></div>` : nothing}
       </aside>
 
       <div class="stage">
@@ -425,8 +505,10 @@ export class BaApp extends LitElement {
         <ba-composer></ba-composer>
       </div>
 
-      <aside class="right ${this._showRight ? "" : "closed"}">
-        <div class="right-inner"><ba-artifact-panel></ba-artifact-panel></div>
+      <aside class="right ${this._showRight ? "" : "closed"} ${noanim}" style=${rightAsideStyle}>
+        ${this._showRight && !narrow ? html`<div class="resizer" title="Drag to resize"
+          @pointerdown=${(e) => this._startResize("right", e)}></div>` : nothing}
+        <div class="right-inner" style=${rightInnerStyle}><ba-artifact-panel></ba-artifact-panel></div>
       </aside>
 
       ${this._showSettings ? html`
