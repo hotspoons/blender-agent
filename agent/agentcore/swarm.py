@@ -266,6 +266,7 @@ class RemoteWorkerStrategy:
             task_timeout: float = 900.0,
             emit: "Callable[[dict[str, Any]], Awaitable[None]] | None" = None,
             session_id: str = "",
+            welcome: str = "",
             register_stop: "Callable[[str, Callable[[], None]], None] | None" = None,
             unregister_stop: "Callable[[str], None] | None" = None,
     ) -> None:
@@ -278,6 +279,10 @@ class RemoteWorkerStrategy:
         self._ready_timeout = ready_timeout
         self._task_timeout = task_timeout
         self._emit = emit
+        # Pre-fetched welcome block pinned into every worker/gather prompt so the
+        # fresh subprocess sessions skip re-calling `welcome` on identical,
+        # static content (the parent fetched it once). Empty == self-welcome.
+        self._welcome = welcome
         # Parent (orchestrator) session id: streamed worker events are tagged
         # with it so the UI files them under the matching bounded agent card.
         self._session_id = session_id
@@ -288,6 +293,10 @@ class RemoteWorkerStrategy:
     # --- domain hooks ------------------------------------------------------
     # A subclass MUST implement _make_worker (how to launch one for its
     # surface); the rest have generic defaults a domain can keep or override.
+
+    def _with_welcome(self, prompt: str) -> str:
+        """Pin the pre-fetched welcome block ahead of *prompt* (no-op if empty)."""
+        return "{:s}\n\n{:s}".format(self._welcome, prompt) if self._welcome else prompt
 
     def _make_worker(self, worker_id: str, api_port: int, data_dir: str) -> WorkerInstance:
         """Build (but don't start) a worker subprocess for this surface."""
@@ -303,17 +312,19 @@ class RemoteWorkerStrategy:
             acceptance=getattr(task, "acceptance", "") or "the task is accomplished and verifiable")
         if getattr(task, "context", ""):
             prompt = "Orchestrator context:\n{:s}\n\n{:s}".format(task.context, prompt)
-        return prompt
+        return self._with_welcome(prompt)
 
     def _gather_prompt(self, components: "list[str]", master: str) -> str:
         files = "\n".join("- {:s}".format(c) for c in components)
-        return (
+        return self._with_welcome((
             "You are the GATHER agent for a parallel assembly. Merge these "
             "component artifacts into ONE result, then export it as an artifact "
-            "named '{master}'. Component files (absolute paths on this "
+            "named '{master}'. If the same entity appears in more than one "
+            "component, keep it ONCE — the merged result must contain no "
+            "duplicates. Component files (absolute paths on this "
             "machine):\n{files}\n\n"
             "End with a PROOF OF WORK describing the merged result."
-        ).format(master=master + self._ARTIFACT_EXT, files=files)
+        ).format(master=master + self._ARTIFACT_EXT, files=files))
 
     def _is_artifact(self, path: str) -> bool:
         """True if *path* is a complete artifact (not a truncated stub)."""

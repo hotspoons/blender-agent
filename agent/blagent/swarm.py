@@ -162,22 +162,28 @@ class BlenderWorkerStrategy(RemoteWorkerStrategy):
             acceptance=getattr(task, "acceptance", "") or "the task is accomplished and verifiable")
         if getattr(task, "context", ""):
             prompt = "Orchestrator context:\n{:s}\n\n{:s}".format(task.context, prompt)  # type: ignore[attr-defined]
-        return prompt
+        return self._with_welcome(prompt)
 
     def _gather_prompt(self, components: "list[str]", master: str) -> str:
         files = "\n".join("- {:s}".format(c) for c in components)
-        return (
+        return self._with_welcome((
             "You are the GATHER agent for a parallel assembly. Start from a clean "
             "empty scene (delete the default Camera, Cube and Light). Merge these "
             "component Blender files into that ONE scene: for each file, append "
             "ONLY its MESH objects (use bpy, e.g. bpy.ops.wm.append from each "
             "file's Object directory) — SKIP any cameras, lights and empties, "
             "which are per-component render scaffolding, not part of the assembly. "
+            "DEDUPLICATE by object name: components may overlap (e.g. an "
+            "integration component re-exports parts another component already "
+            "owns). Append each uniquely-named object only ONCE — if an object's "
+            "base name already exists in the scene, SKIP it. The result must NOT "
+            "contain duplicate parts (no 'Body' AND 'Body.001'). "
             "Then export the merged scene as a Blender file via the media_io tool "
             "(export, format 'blend', filename '{master}.blend'). Component files "
             "(absolute paths on this machine):\n{files}\n\n"
-            "End with a PROOF OF WORK: the total object count in the merged scene."
-        ).format(master=master, files=files)
+            "End with a PROOF OF WORK: the total object count and the object names "
+            "in the merged scene (confirm no '.001' duplicates remain)."
+        ).format(master=master, files=files))
 
 
 class BlenderSwarmProvider:

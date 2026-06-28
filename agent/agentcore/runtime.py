@@ -1417,14 +1417,20 @@ class AgentRuntime:
         # surface each), fanned out in parallel, exchanging artifacts via a
         # shared dir. Swarm needs a domain swarm_provider (the Blender build
         # supplies one); without it, fall back to in-process workers.
-        welcome_bootstrap = ""   # set in the in-process branch; swarm welcomes per subprocess
+        welcome_bootstrap = ""
         if config.autonomy_workers == "swarm" and config.endpoint and self.swarm_provider is not None:
             from .autonomy import ParallelScheduler
 
+            # Fetch the welcome ONCE in the parent and pin it into each subprocess
+            # worker/gather prompt, so they skip re-calling `welcome` (5+ workers
+            # would otherwise each burn a turn on identical, static content).
+            raw_welcome = await self._prefetch_welcome(session_id)
+            swarm_welcome = _WELCOME_BOOTSTRAP.format(welcome=raw_welcome) if raw_welcome else ""
             exchange_dir = os.path.join(self.store.session_dir(session_id), "exchange")
             swarm_strategy: "Any" = self.swarm_provider.make_strategy(
                 endpoint=config.endpoint, model=model, exchange_dir=exchange_dir,
                 api_key=config.api_key, emit=persist_emit, session_id=session_id,
+                welcome=swarm_welcome,
                 register_stop=self._register_swarm_worker,
                 unregister_stop=self._unregister_swarm_worker)
             runner: "Callable[[Any], Awaitable[Any]]" = swarm_strategy
@@ -1897,12 +1903,36 @@ class AgentRuntime:
         if engine is not None:
             self._stopped_workers.add(agent_id)   # the review loop won't re-run it
             engine.abort()
+            self._mark_worker_stopping(agent_id)
             return True
         stop = self._swarm_stoppers.get(agent_id)
         if stop is not None:
             stop()
+            self._mark_worker_stopping(agent_id)
             return True
         return False
+
+    def _mark_worker_stopping(self, agent_id: str) -> None:
+        """Record the stop request in the backend view (the source of truth) and
+        re-emit the snapshot, so the worker card holds 'stopping…' until the
+        worker actually ends. Stopping a worker is cooperative/async — without
+        this, the next view snapshot would clobber the UI's optimistic flag and
+        the button would flip straight back to 'Stop worker'."""
+        session_id = agent_id.split(":", 1)[0]
+        view = self._views.get(session_id)
+        if view is None:
+            return
+        ag = view.agents.get(agent_id)
+        if ag is None or ag.get("state") != "running":
+            return
+        ag["stopping"] = True
+        run_id = self._conductor_runs.get(session_id) or self._active_run.get(session_id)
+        try:
+            asyncio.create_task(self.emit({
+                "type": "autonomy_view", "session_id": session_id,
+                "run_id": run_id, "view": view.snapshot()}))
+        except RuntimeError:
+            pass
 
     def confirm_tool(self, session_id: str, call_id: str, approve: bool) -> bool:
         session = self._sessions.get(session_id)
