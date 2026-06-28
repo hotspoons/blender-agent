@@ -274,6 +274,31 @@ def test_pre_eval_runs_before_evaluation():
     assert order[:3] == ["workers", "pre_eval", "eval"]
 
 
+def test_planner_collapses_duplicate_fanout_briefs():
+    # The planner mis-fanned a whole task into N identical instances (observed:
+    # one landscape task fanned into 6 clones, each rebuilding everything). The
+    # parser must collapse identical label+context briefs so it runs once.
+    async def stub_runner(system, user):
+        return ('{"tasks": [{"id": "landscape", "objective_id": "obj-0", '
+                '"instruction": "build terrain + trees", "fan_out": ['
+                '{"label": "x", "context": "build it all"},'
+                '{"label": "x", "context": "build it all"},'
+                '{"label": "x", "context": "build it all"}]}]}')
+    planner = LlmPlanner(llm=None, model="x", runner=stub_runner)
+    tasks = asyncio.run(planner.plan([Objective(id="obj-0", text="t", acceptance="a")]))
+    assert len(tasks) == 1
+    assert len(tasks[0].fan_out) == 1            # 3 identical briefs -> 1
+    # distinct briefs are preserved
+    async def stub_runner2(system, user):
+        return ('{"tasks": [{"id": "trees", "objective_id": "obj-0", '
+                '"instruction": "plant", "fan_out": ['
+                '{"label": "oak", "context": "Tree_1"},'
+                '{"label": "pine", "context": "Tree_2"}]}]}')
+    planner2 = LlmPlanner(llm=None, model="x", runner=stub_runner2)
+    tasks2 = asyncio.run(planner2.plan([Objective(id="obj-0", text="t", acceptance="a")]))
+    assert len(tasks2[0].fan_out) == 2
+
+
 def test_worker_exception_does_not_crash_run():
     # A worker that RAISES (not returns ok=False) must not tear down the
     # generation via asyncio.gather — it becomes a failed result and its

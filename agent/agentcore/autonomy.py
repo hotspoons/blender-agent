@@ -317,10 +317,18 @@ _PLANNER_SYSTEM = (
     "integration/'assemble' task that depends_on the part tasks (and a single "
     "validate task that depends_on the assemble). Do not invent dependencies "
     "between genuinely independent parts — that just serializes them.\n\n"
-    "For repeated per-item work (e.g. 'build each of these N props'), instead of "
-    "listing N near-identical tasks you MAY give one task a 'fan_out': a list of "
+    "For repeated per-item work you MAY give one task a 'fan_out': a list of "
     "per-item briefs [{\"label\": ..., \"context\": ...}] — it runs as N parallel "
-    "instances and any dependent fans in over all of them.\n\n"
+    "instances and any dependent fans in over all of them. CRITICAL: each "
+    "fan_out instance must produce a DIFFERENT, non-overlapping slice — name the "
+    "distinct output(s) each one owns in its context. GOOD: fan_out a 'trees' "
+    "task into [{label:'oak',context:'build Tree_1'},{label:'pine',context:'build "
+    "Tree_2'}] — instance i builds only Tree_i. BAD: three instances that each "
+    "'build the terrain and all the trees' — that is the SAME work done N times, "
+    "wasting workers and spawning duplicate objects. If you cannot give each "
+    "instance a distinct output, DO NOT fan out — use a single task. Never "
+    "fan_out an objective's whole scope; fan_out only the genuinely repeated unit "
+    "within it.\n\n"
     "Reply with ONLY a JSON object:\n"
     '{"tasks": [{"id": "<short unique id>", "objective_id": "<id>", '
     '"instruction": "<imperative task>", "depends_on": ["<task id>", ...], '
@@ -401,7 +409,7 @@ class LlmPlanner:
         # and remember the planner id -> final id mapping so depends_on resolves.
         id_map: dict[str, str] = {}
         used: set[str] = set()
-        specs: list[tuple[str, Objective, str, list]] = []
+        specs: list[tuple[str, Objective, str, list, list]] = []
         for i, raw in enumerate(raw_tasks):
             pid = str(raw.get("id", "")).strip()
             safe = re.sub(r"[^A-Za-z0-9_-]+", "-", pid).strip("-") or "task-{:d}".format(i)
@@ -412,7 +420,19 @@ class LlmPlanner:
             if pid:
                 id_map[pid] = safe
             obj = by_id.get(str(raw.get("objective_id", "")).strip()) or unmet[0]
-            fan = [a for a in (raw.get("fan_out") or []) if isinstance(a, dict)]
+            # Drop duplicate fan-out briefs: instances with identical
+            # label+context are the same work cloned N times (wasteful, spawns
+            # duplicate objects), not a real per-item split. Collapse them so a
+            # mis-fanned task runs once instead of N times.
+            fan, _fseen = [], set()
+            for a in (raw.get("fan_out") or []):
+                if not isinstance(a, dict):
+                    continue
+                key = (str(a.get("label", "")).strip(), str(a.get("context", "")).strip())
+                if key in _fseen:
+                    continue
+                _fseen.add(key)
+                fan.append(a)
             specs.append((safe, obj, str(raw.get("instruction", "")).strip(),
                           raw.get("depends_on") or [], fan))
 
