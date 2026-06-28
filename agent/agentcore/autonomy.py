@@ -38,6 +38,9 @@ __all__ = (
     "ParallelScheduler",
     "DAG",
     "DagScheduler",
+    "StepData",
+    "GraphData",
+    "InMemoryGraphData",
     "AutoUntilDonePolicy",
     "AutoPauseWhenBlockedPolicy",
     "AutonomyOrchestrator",
@@ -47,7 +50,10 @@ import asyncio
 import dataclasses
 import json
 import logging
-from collections import deque
+import re
+from abc import ABC, abstractmethod
+from collections import OrderedDict, deque
+from datetime import datetime
 from typing import Any, Awaitable, Callable
 
 from agentcore.llm import LlmClient
@@ -571,6 +577,107 @@ class IndependentAuditor:
 WorkerRunner = Callable[[WorkerTask], Awaitable[WorkerResult]]
 
 
+# --------------------------------------------------------------------------
+# Step store — ported faithfully from zip-ties
+# (``zip_ties_core.interfaces.graph_data``). It is the shared record of every
+# node's execution: downstream nodes read upstream outputs from HERE rather
+# than re-deriving them, which is how the orchestrator and its sub-agents stay
+# on the same page instead of looping. ``iteration_tree`` is the position in a
+# nested/fanned execution (top-level == ``[]``). Kept API-identical to the
+# upstream so it can later be swapped for the KV-backed store with a light
+# refactor — this in-memory impl mirrors ``KVGraphData``'s keying.
+# --------------------------------------------------------------------------
+
+@dataclasses.dataclass(kw_only=True)
+class StepData:
+    input_data: "dict | None" = None
+    output_data: "dict | None" = None
+    metadata: "dict | None" = None
+    text: str = ""
+    start: "datetime | None" = None
+    end: "datetime | None" = None
+    agent_id: str = ""
+    session_id: "str | None" = None
+    cell_id: "str | None" = None
+    iteration_tree: list[int] = dataclasses.field(default_factory=list)
+    success: bool = True
+
+
+class GraphData(ABC):
+    """Abstract step store. Same surface as zip-ties so a KV/Valkey-backed
+    implementation drops in unchanged later."""
+
+    @abstractmethod
+    def put_data(self, step_data: StepData) -> None: ...
+
+    @abstractmethod
+    def fetch_all_data(self) -> list[StepData]: ...
+
+    @abstractmethod
+    def fetch_all_data_dict(self) -> "OrderedDict[str, StepData]": ...
+
+    @abstractmethod
+    def fetch_data(self, node_id: str, iteration_tree: list[int]) -> "StepData | None": ...
+
+    @abstractmethod
+    def fetch_all_data_by_id(self, node_id: str) -> list[StepData]: ...
+
+    def fetch_datas(self, query_dict: dict[str, list[int]]) -> list[StepData]:
+        out: list[StepData] = []
+        for node_id, it in query_dict.items():
+            sd = self.fetch_data(node_id, it)
+            if sd is not None:
+                out.append(sd)
+        return out
+
+    def fetch_last_data_by_id(self, node_id: str) -> "StepData | None":
+        items = self.fetch_all_data_by_id(node_id)
+        return items[-1] if items else None
+
+    def fetch_first_data_by_id(self, node_id: str) -> "StepData | None":
+        items = self.fetch_all_data_by_id(node_id)
+        return items[0] if items else None
+
+    _FAN_IN_RE = re.compile(r"^(.+)_\d+$")
+
+    def fetch_fan_in_results(self, template_name: str) -> list[StepData]:
+        """Results from every cloned instance ``{template_name}_N`` of a fanned
+        node, sorted by id — the fan-in side of ``replace_node_with_fan``."""
+        pattern = re.compile(r"^{:s}_\d+$".format(re.escape(template_name)))
+        results = [sd for sd in self.fetch_all_data() if pattern.match(sd.agent_id)]
+        results.sort(key=lambda sd: sd.agent_id)
+        return results
+
+
+class InMemoryGraphData(GraphData):
+    """Process-local step store (no external KV). Keyed ``{agent_id}::{iteration_tree}``
+    exactly like ``KVGraphData`` so the swap is mechanical."""
+
+    def __init__(self) -> None:
+        self._steps: "OrderedDict[str, StepData]" = OrderedDict()
+
+    @staticmethod
+    def _format_id(node_id: str, iteration_tree: list[int]) -> str:
+        return "{:s}::{}".format(node_id, iteration_tree)
+
+    def put_data(self, step_data: StepData) -> None:
+        self._steps[self._format_id(step_data.agent_id, step_data.iteration_tree)] = step_data
+
+    def fetch_all_data(self) -> list[StepData]:
+        return list(self._steps.values())
+
+    def fetch_all_data_dict(self) -> "OrderedDict[str, StepData]":
+        return OrderedDict(self._steps)
+
+    def fetch_data(self, node_id: str, iteration_tree: list[int]) -> "StepData | None":
+        return self._steps.get(self._format_id(node_id, iteration_tree))
+
+    def fetch_all_data_by_id(self, node_id: str) -> list[StepData]:
+        out = [sd for sd in self._steps.values() if sd.agent_id == node_id]
+        out.sort(key=lambda sd: sd.start or datetime.min)
+        return out
+
+
 class SequentialScheduler:
     """One worker at a time — safe on a single shared Blender instance."""
 
@@ -693,10 +800,14 @@ class DagScheduler:
     with a failed result (the failure propagates instead of running blind).
 
     This is the executor half of the ported zip-ties DAG model; the planner
-    supplies ``WorkerTask.depends_on`` (the edges)."""
+    supplies ``WorkerTask.depends_on`` (the edges). When a ``GraphData`` step
+    store is provided, each node's result is recorded as a ``StepData`` and each
+    task is handed its upstream results (read from the store) — the shared-state
+    path that keeps downstream agents aligned with what ran before them."""
 
-    def __init__(self, max_concurrency: int = 4) -> None:
+    def __init__(self, max_concurrency: int = 4, graph: "GraphData | None" = None) -> None:
         self._sem = asyncio.Semaphore(max(1, max_concurrency))
+        self._graph = graph
 
     async def run(self, tasks: list[WorkerTask], run_worker: WorkerRunner) -> list[WorkerResult]:
         by_id = {t.id: t for t in tasks}
@@ -713,12 +824,34 @@ class DagScheduler:
 
         results: dict[str, WorkerResult] = {}
 
+        def _record(r: WorkerResult) -> None:
+            results[r.task_id] = r
+            if self._graph is not None:
+                self._graph.put_data(StepData(
+                    agent_id=r.task_id, success=bool(r.ok), text=r.proof or "",
+                    output_data={"proof": r.proof, "ok": r.ok, "artifacts": r.artifacts},
+                    end=datetime.now()))
+
+        def _inject_upstream(task: WorkerTask) -> None:
+            # Hand the task what its prerequisites produced, read from the store.
+            if self._graph is None or not task.depends_on:
+                return
+            lines = []
+            for dep in task.depends_on:
+                sd = self._graph.fetch_last_data_by_id(dep)
+                if sd is not None:
+                    lines.append("- {:s}: {:s}".format(dep, (sd.text or "(no report)")[:500]))
+            if lines:
+                upstream = "Upstream results you build on:\n" + "\n".join(lines)
+                task.context = (task.context + "\n\n" + upstream).strip() if task.context else upstream
+
         async def _guarded(task: WorkerTask) -> WorkerResult:
             failed_deps = [d for d in task.depends_on if d in results and not results[d].ok]
             if failed_deps:
                 return WorkerResult(task_id=task.id, objective_id=task.objective_id,
                                     proof="skipped: prerequisite task(s) failed: {:s}".format(
                                         ", ".join(failed_deps)), ok=False)
+            _inject_upstream(task)
             async with self._sem:
                 return await run_worker(task)
 
@@ -726,7 +859,7 @@ class DagScheduler:
             gen_tasks = [by_id[nid] for nid in generation if nid in by_id]
             done = await asyncio.gather(*(_guarded(t) for t in gen_tasks))
             for r in done:
-                results[r.task_id] = r
+                _record(r)
         return [results[t.id] for t in tasks if t.id in results]
 
 
