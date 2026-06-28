@@ -981,6 +981,7 @@ class AutonomyOrchestrator:
             handoff: str = "",
             compactor: "Callable[[list[Objective], str], Awaitable[str]] | None" = None,
             context: str = "",
+            pre_eval: "Callable[[list[WorkerTask], list[WorkerResult]], Awaitable[None]] | None" = None,
     ) -> None:
         self._planner = planner
         self._scheduler = scheduler
@@ -994,6 +995,10 @@ class AutonomyOrchestrator:
         self._handoff = handoff or (HANDOFF_HANDOFF if share_context else HANDOFF_BLIND)
         self._compactor = compactor
         self._context = context     # the orchestrator's conversation, for 'full'
+        # Runs after the workers finish but BEFORE evaluation (swarm uses it to
+        # gather components into the assembled master, so integration objectives
+        # are judged against the assembled scene, not loose parts).
+        self._pre_eval = pre_eval
 
     def _shared_context(self, objectives: list[Objective]) -> str:
         """The orchestrator's objective view, shared with informed workers."""
@@ -1100,6 +1105,8 @@ class AutonomyOrchestrator:
             tasks = await self._planner.plan(unmet)
             await self._apply_handoff(tasks, objectives)
             results = await self._scheduler.run(tasks, self._run_one_worker)
+            if self._pre_eval is not None:
+                await self._pre_eval(tasks, results)
             verdicts = await self._evaluator.evaluate(objectives, results)
 
             for verdict in verdicts:

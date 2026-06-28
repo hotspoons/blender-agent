@@ -213,6 +213,38 @@ def test_handoff_compaction_uses_compactor_else_falls_back():
     assert "build a body" in tasks2[0].context
 
 
+def test_pre_eval_runs_before_evaluation():
+    from agentcore.autonomy import GoalVerdict, AutoUntilDonePolicy
+
+    order = []
+
+    class StubPlanner:
+        async def plan(self, unmet):
+            return [WorkerTask(id="t", objective_id="obj-0", instruction="x")]
+
+    class StubScheduler:
+        async def run(self, tasks, run_worker):
+            order.append("workers")
+            return [WorkerResult(task_id="t", objective_id="obj-0", proof="p", ok=True)]
+
+    class StubEvaluator:
+        async def evaluate(self, objectives, results):
+            order.append("eval")
+            return [GoalVerdict(objective_id=o.id, met=True, evidence="ok", next_action="")
+                    for o in objectives]
+
+    async def pre_eval(tasks, results):
+        order.append("pre_eval")
+
+    orch = AutonomyOrchestrator(
+        planner=StubPlanner(), scheduler=StubScheduler(), evaluator=StubEvaluator(),
+        policy=AutoUntilDonePolicy(), worker_runner=None, emit=_noop, session_id="s",
+        pre_eval=pre_eval)
+    asyncio.run(orch.run([Objective(id="obj-0", text="g", acceptance="a")], max_rounds=2))
+    # gather (pre_eval) must happen after the workers and BEFORE evaluation
+    assert order[:3] == ["workers", "pre_eval", "eval"]
+
+
 def test_legacy_share_context_maps_to_handoff_mode():
     orch = AutonomyOrchestrator(planner=None, scheduler=None, evaluator=None, policy=None,
                                 worker_runner=None, emit=_noop, share_context=True)

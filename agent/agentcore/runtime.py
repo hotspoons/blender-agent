@@ -1347,7 +1347,7 @@ class AgentRuntime:
         """
         from .autonomy import (
             AutonomyOrchestrator, AutoPauseWhenBlockedPolicy, AutoUntilDonePolicy,
-            IndependentAuditor, LlmPlanner, Objective, SequentialScheduler,
+            IndependentAuditor, LlmPlanner, Objective,
             StateAwareEvaluator,
         )
 
@@ -1418,9 +1418,13 @@ class AgentRuntime:
         # shared dir. Swarm needs a domain swarm_provider (the Blender build
         # supplies one); without it, fall back to in-process workers.
         welcome_bootstrap = ""
+        from .autonomy import DagScheduler, InMemoryGraphData
+        # Shared step store: every node's result is recorded here and downstream
+        # nodes read their upstream results from it (the ported zip-ties model).
+        step_store = InMemoryGraphData()
+        pre_eval: "Callable[[Any, Any], Awaitable[None]] | None" = None
+        gathered: "dict[str, Any]" = {"path": None}   # master produced by the swarm pre-eval gather
         if config.autonomy_workers == "swarm" and config.endpoint and self.swarm_provider is not None:
-            from .autonomy import ParallelScheduler
-
             # Fetch the welcome ONCE in the parent and pin it into each subprocess
             # worker/gather prompt, so they skip re-calling `welcome` (5+ workers
             # would otherwise each burn a turn on identical, static content).
@@ -1434,10 +1438,36 @@ class AgentRuntime:
                 register_stop=self._register_swarm_worker,
                 unregister_stop=self._unregister_swarm_worker)
             runner: "Callable[[Any], Awaitable[Any]]" = swarm_strategy
-            scheduler: "Any" = ParallelScheduler(max_concurrency=4)
-            # No local compute surface in swarm mode: ground the evaluator on
-            # the artifacts the workers wrote to the exchange dir.
-            probe: "Callable[[], Awaitable[str]]" = self.swarm_provider.make_probe(exchange_dir)
+            # Dependency-gated, parallel within a generation: parts fan out, then
+            # the planner's assemble node, then validate.
+            scheduler: "Any" = DagScheduler(max_concurrency=4, graph=step_store)
+            # Master-aware probe: once a gather has assembled the components into
+            # master.blend, evaluate objectives against that ASSEMBLED scene
+            # (so an "assemble the village" objective is satisfiable) — else fall
+            # back to the loose component artifacts.
+            component_probe = self.swarm_provider.make_probe(exchange_dir)
+
+            async def _swarm_probe() -> str:
+                if gathered["path"] and os.path.isfile(gathered["path"]):
+                    objs = await self.swarm_provider.read_result_objects(gathered["path"])
+                    return "ASSEMBLED master scene — {:d} objects: {:s}".format(
+                        len(objs), ", ".join(objs))
+                return await component_probe()
+            probe: "Callable[[], Awaitable[str]]" = _swarm_probe
+
+            async def _swarm_pre_eval(tasks: "list[Any]", _results: "list[Any]") -> None:
+                # Assemble components into the master BEFORE evaluation. 'off' skips
+                # it; 'planner' only gathers when the planner emitted an assemble
+                # node (a task with dependencies); 'always' forces it every round.
+                gate = config.autonomy_gather
+                if gate == "off":
+                    return
+                if gate == "planner" and not any(getattr(t, "depends_on", None) for t in tasks):
+                    return
+                master = await swarm_strategy.gather()
+                if master:
+                    gathered["path"] = master
+            pre_eval = _swarm_pre_eval
         else:
             swarm_strategy = None
             probe = self._make_probe(session_id)
@@ -1463,7 +1493,9 @@ class AgentRuntime:
                 register=self._register_worker,
                 unregister=self._unregister_worker,
             )
-            scheduler = SequentialScheduler()
+            # One shared Blender -> concurrency 1 (effectively sequential), but
+            # still dependency-gated (topological order) + step-store wired.
+            scheduler = DagScheduler(max_concurrency=1, graph=step_store)
         # Per-worker review loop: the orchestrator is pinged with every worker
         # result, optionally spawns a bounded QA inspector, then accepts or
         # replenishes the worker's budget with guidance (capped). In-process
@@ -1508,6 +1540,7 @@ class AgentRuntime:
             handoff=config.autonomy_handoff,
             compactor=_handoff_compactor,
             context=conversation,
+            pre_eval=pre_eval,
         )
         rounds = rounds_cap
 
@@ -1532,10 +1565,12 @@ class AgentRuntime:
                         "met" if o.status == "met" else "unmet", o.text,
                         " — {:s}".format(o.evidence) if getattr(o, "evidence", "") else ""))
                 _persist("assistant", "\n".join(lines))
-                # Swarm: after workers finish, the gather agent merges their
-                # component artifacts into one master result.
+                # Swarm: the per-round pre-eval gather already assembled the
+                # master (so objectives were judged against the assembled scene);
+                # surface that result. Only gather here if pre-eval never did
+                # (e.g. gather 'off', or a planner run with no assemble node).
                 if swarm_strategy is not None:
-                    master = await swarm_strategy.gather()
+                    master = gathered.get("path") or await swarm_strategy.gather()
                     objects = (await self.swarm_provider.read_result_objects(master)
                                if master else [])
                     await self.emit({
