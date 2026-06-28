@@ -280,8 +280,19 @@ _PLANNER_SYSTEM = (
     "criteria). Decompose them into concrete, independently-executable worker "
     "tasks — one or a few per objective — that a capable worker agent with the "
     "full Blender tool surface can carry out and then prove. Be specific and "
-    "action-oriented. Reply with ONLY a JSON object:\n"
-    '{"tasks": [{"objective_id": "<id>", "instruction": "<imperative task>"}]}'
+    "action-oriented.\n\n"
+    "Model the work as a DAG. Give every task a short unique 'id'. Tasks with "
+    "no 'depends_on' run IN PARALLEL — keep independent parts (that build "
+    "different objects) dependency-free so they fan out. If a task needs the "
+    "OUTPUT of others — e.g. ASSEMBLING/positioning the parts the others built, "
+    "or VALIDATING the whole — list those task ids in 'depends_on' so it runs "
+    "only after them. When objectives require parts to come together, prefer ONE "
+    "integration/'assemble' task that depends_on the part tasks (and a single "
+    "validate task that depends_on the assemble). Do not invent dependencies "
+    "between genuinely independent parts — that just serializes them.\n\n"
+    "Reply with ONLY a JSON object:\n"
+    '{"tasks": [{"id": "<short unique id>", "objective_id": "<id>", '
+    '"instruction": "<imperative task>", "depends_on": ["<task id>", ...]}]}'
 )
 
 # Tool-enabled variant (when a *runner* is given): decompose against the real
@@ -350,18 +361,42 @@ class LlmPlanner:
             await self._planner_event("done")
         data = _extract_json_object(text)
         by_id = {o.id: o for o in unmet}
+        raw_tasks = [r for r in (data.get("tasks") or [])
+                     if isinstance(r, dict) and str(r.get("instruction", "")).strip()]
+
+        # Pass 1: assign each task a final id (the planner's own id, sanitized —
+        # it becomes a component filename / agent id downstream — else generated)
+        # and remember the planner id -> final id mapping so depends_on resolves.
+        id_map: dict[str, str] = {}
+        used: set[str] = set()
+        specs: list[tuple[str, Objective, str, list]] = []
+        for i, raw in enumerate(raw_tasks):
+            pid = str(raw.get("id", "")).strip()
+            safe = re.sub(r"[^A-Za-z0-9_-]+", "-", pid).strip("-") or "task-{:d}".format(i)
+            base, n = safe, 1
+            while safe in used:
+                safe, n = "{:s}-{:d}".format(base, n), n + 1
+            used.add(safe)
+            if pid:
+                id_map[pid] = safe
+            obj = by_id.get(str(raw.get("objective_id", "")).strip()) or unmet[0]
+            specs.append((safe, obj, str(raw.get("instruction", "")).strip(),
+                          raw.get("depends_on") or []))
+
+        # Pass 2: build tasks, resolving depends_on (planner id OR final id) and
+        # dropping self/dangling references (the DagScheduler also guards these).
         tasks: list[WorkerTask] = []
-        for i, raw in enumerate(data.get("tasks", []) or []):
-            if not isinstance(raw, dict):
-                continue
-            instruction = str(raw.get("instruction", "")).strip()
-            oid = str(raw.get("objective_id", "")).strip()
-            obj = by_id.get(oid) or unmet[0]  # mis-tagged task still belongs to the round
-            if instruction:
-                tasks.append(WorkerTask(
-                    id="task-{:d}-{:d}".format(len(tasks), i),
-                    objective_id=obj.id, instruction=instruction,
-                    goal=obj.text, acceptance=obj.acceptance))
+        for fid, obj, instruction, raw_deps in specs:
+            deps = []
+            for d in raw_deps:
+                d = str(d).strip()
+                resolved = id_map.get(d, d if d in used else "")
+                if resolved and resolved != fid and resolved not in deps:
+                    deps.append(resolved)
+            tasks.append(WorkerTask(
+                id=fid, objective_id=obj.id, instruction=instruction,
+                goal=obj.text, acceptance=obj.acceptance, depends_on=deps))
+
         if not tasks:
             # Degrade to one task per unmet objective rather than stalling.
             tasks = [
