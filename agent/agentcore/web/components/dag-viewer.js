@@ -169,44 +169,46 @@ export class BaDagViewer extends LitElement {
   }
 
   static styles = css`
-    :host { display: block; border: 1px solid var(--border, #2c3542);
-      border-radius: var(--radius-md, 10px); background: var(--surface-2, var(--surface, #1b212b));
+    /* All color comes from the app's theme tokens (set on html[data-theme]),
+       which inherit through the shadow boundary — so the viewer follows
+       light/dim/dark automatically. No hardcoded color fallbacks. */
+    :host { display: block; border: 1px solid var(--border);
+      border-radius: var(--radius-md); background: var(--surface-elevated);
       overflow: hidden; margin-bottom: 12px; }
     .hdr { display: flex; align-items: center; gap: 8px; padding: 6px 10px;
-      border-bottom: 1px solid var(--border, #2c3542); font-size: 12.5px; }
+      border-bottom: 1px solid var(--border); font-size: 12.5px; color: var(--text); }
     .hdr .title { font-weight: 600; letter-spacing: .02em; }
-    .hdr .count { color: var(--muted, #8893a5); font-size: 11.5px; }
+    .hdr .count { color: var(--text-muted); font-size: 11.5px; }
     .hdr .spacer { flex: 1; }
     .hdr button { display: inline-flex; align-items: center; background: none; border: none;
-      color: var(--muted, #8893a5); cursor: pointer; padding: 2px; border-radius: 5px; }
-    .hdr button:hover { color: var(--text, #e4e9f0); background: var(--surface-3, rgba(255,255,255,.05)); }
+      color: var(--text-muted); cursor: pointer; padding: 2px; border-radius: 5px; }
+    .hdr button:hover { color: var(--text); background: var(--surface-muted); }
     .hdr button svg, .hdr button :first-child { width: 15px; height: 15px; }
-    .canvas { height: 210px; cursor: grab; touch-action: none;
-      background: repeating-linear-gradient(0deg, transparent, transparent 23px, rgba(255,255,255,.018) 24px),
-                  repeating-linear-gradient(90deg, transparent, transparent 23px, rgba(255,255,255,.018) 24px); }
+    .canvas { height: 210px; cursor: grab; touch-action: none; background: var(--surface);
+      background-image: repeating-linear-gradient(0deg, transparent 0 23px,
+          color-mix(in srgb, var(--border) 55%, transparent) 23px 24px),
+        repeating-linear-gradient(90deg, transparent 0 23px,
+          color-mix(in srgb, var(--border) 55%, transparent) 23px 24px); }
     .canvas:active { cursor: grabbing; }
     svg { display: block; }
-    .edge { fill: none; stroke: var(--muted, #8893a5); stroke-width: 1.5; opacity: .5; }
+    .edge { fill: none; stroke: var(--text-muted); stroke-width: 1.5; opacity: .55; }
     .node { cursor: pointer; }
-    .node rect { fill: var(--surface-3, #222a36); stroke: var(--border, #3a4555); stroke-width: 1.5;
+    .node rect { fill: var(--surface-muted); stroke: var(--border); stroke-width: 1.5;
       transition: stroke .15s, fill .15s; }
-    .node text { fill: var(--text, #e4e9f0); font-size: 11px; pointer-events: none;
-      font-family: ui-monospace, "SF Mono", Menlo, monospace; }
-    .node text.role { fill: var(--muted, #8893a5); font-size: 9px; letter-spacing: .12em;
+    .node text { fill: var(--text); font-size: 11px; pointer-events: none;
+      font-family: var(--font-mono, ui-monospace, Menlo, monospace); }
+    .node text.role { fill: var(--text-muted); font-size: 9px; letter-spacing: .12em;
       text-transform: uppercase; }
     .node text.name { font-weight: 600; font-size: 11.5px; }
-    .node text.mark.ok { fill: var(--success, #7fb88b); font-size: 13px; }
-    .node text.mark.fail { fill: var(--danger, #d98b7e); font-size: 13px; }
-    /* role accents on the left edge via stroke color */
-    .node.worker rect { stroke-left: var(--accent); }
-    .node.worker.idle rect { stroke: var(--border, #3a4555); }
-    .node.running rect { stroke: var(--accent, #e8a06b); stroke-width: 2; }
-    .node.done rect { stroke: var(--success, #7fb88b); }
-    .node.fail rect { stroke: var(--danger, #d98b7e); }
-    .node.gather rect { fill: color-mix(in srgb, var(--accent-2, #6fa8c7) 14%, var(--surface-3, #222a36)); }
-    .node.qa rect { fill: color-mix(in srgb, var(--success, #7fb88b) 12%, var(--surface-3, #222a36)); }
-    .node.focused rect { stroke: var(--accent-2, #6fa8c7); stroke-width: 3; }
-    .pulse { fill: var(--accent, #e8a06b); animation: pulse 1.1s ease-in-out infinite; }
+    .node text.mark.ok { fill: var(--success); font-size: 13px; }
+    .node text.mark.fail { fill: var(--danger); font-size: 13px; }
+    .node.running rect { stroke: var(--accent); stroke-width: 2; }
+    .node.done rect { stroke: var(--success); }
+    .node.fail rect { stroke: var(--danger); }
+    .node.gather rect { fill: color-mix(in srgb, var(--accent-2) 16%, var(--surface-muted)); }
+    .node.qa rect { fill: color-mix(in srgb, var(--success) 14%, var(--surface-muted)); }
+    .node.focused rect { stroke: var(--accent-2); stroke-width: 3; }
+    .pulse { fill: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
     @media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
   `;

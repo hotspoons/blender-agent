@@ -116,6 +116,23 @@ def main():
             page.evaluate("() => %s.querySelector('.hdr .toggle').click()" % _DAG)
             page.wait_for_timeout(200)
             _check("collapse hides the canvas", q(_DAG, ".canvas") == 0)
+            page.evaluate("() => %s.querySelector('.hdr .toggle').click()" % _DAG)  # reopen
+            page.wait_for_timeout(150)
+
+            # --- theme: the viewer follows light/dark via inherited tokens ---
+            def host_bg():
+                return page.evaluate("() => getComputedStyle(%s.host).backgroundColor" % _DAG)
+            page.evaluate("() => document.documentElement.setAttribute('data-theme','dark')")
+            page.wait_for_timeout(120); dark_bg = host_bg()
+            page.evaluate("() => document.documentElement.setAttribute('data-theme','light')")
+            page.wait_for_timeout(120); light_bg = host_bg()
+            _check("viewer recolors for light theme", dark_bg != light_bg,
+                   "dark=%s light=%s" % (dark_bg, light_bg))
+            # light surface-elevated (#f8fafc) is near-white -> high RGB sum
+            import re as _re
+            nums = [int(x) for x in _re.findall(r"\d+", light_bg)[:3]]
+            _check("light theme uses a light surface", sum(nums) > 600, "rgb sum=%s" % sum(nums))
+            page.evaluate("() => document.documentElement.setAttribute('data-theme','dark')")
 
             _check("no fatal console errors", not errs, "; ".join(errs[:3]))
             browser.close()
