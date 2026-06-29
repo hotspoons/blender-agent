@@ -136,6 +136,27 @@ class TestRemoteWorkerStrategy(unittest.TestCase):
         self.assertEqual([os.path.basename(c) for c in comps],
                          ["component_a.blend", "component_b.blend"])  # sorted
 
+    def test_component_path_maps_task_id(self) -> None:
+        exch = tempfile.mkdtemp(prefix="exch_")
+        strat = self._strategy(exch)
+        self.assertEqual(strat.component_path("build_tower"),
+                         os.path.join(exch, "component_build_tower.blend"))
+
+    def test_gather_prompt_default_strips_defaults_no_base(self) -> None:
+        strat = self._strategy(tempfile.mkdtemp(prefix="exch_"))
+        p = strat._gather_prompt(["/x/component_a.blend", "/x/component_b.blend"], "master")
+        self.assertIn("Cube", p)                 # always strips default scaffolding
+        self.assertNotIn("AUTHORITATIVE BASE", p)
+
+    def test_gather_prompt_base_is_authoritative_layout(self) -> None:
+        strat = self._strategy(tempfile.mkdtemp(prefix="exch_"))
+        comps = ["/x/component_assemble.blend", "/x/component_house.blend"]
+        p = strat._gather_prompt(comps, "master", base="/x/component_assemble.blend")
+        self.assertIn("AUTHORITATIVE BASE", p)
+        self.assertIn("component_assemble.blend", p)
+        self.assertIn("LAYOUT", p)               # base positions are authoritative
+        self.assertIn("never move", p.lower())   # gaps filled, base never disturbed
+
 
 @unittest.skipUnless(_HAS_AGENT_DEPS, "agent dependencies not installed (optional feature)")
 class TestSwarmStreaming(unittest.TestCase):

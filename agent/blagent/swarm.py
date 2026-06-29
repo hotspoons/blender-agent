@@ -164,26 +164,48 @@ class BlenderWorkerStrategy(RemoteWorkerStrategy):
             prompt = "Orchestrator context:\n{:s}\n\n{:s}".format(task.context, prompt)  # type: ignore[attr-defined]
         return self._with_welcome(prompt)
 
-    def _gather_prompt(self, components: "list[str]", master: str) -> str:
+    def _gather_prompt(self, components: "list[str]", master: str,
+                       base: "str | None" = None) -> str:
         files = "\n".join("- {:s}".format(c) for c in components)
+        # When the planner already produced an assembled component, that file is
+        # the authoritative LAYOUT: its objects' POSITIONS are the village, and
+        # the part-builder components hold the same objects parked at the origin.
+        # Append the base FIRST and never move/replace an object it already
+        # placed — otherwise a later append drags a part back to origin (the
+        # regression this guards against).
+        if base:
+            order = (
+                "Start from a clean empty scene (delete the default Camera, Cube "
+                "and Light). FIRST append every MESH object from the authoritative "
+                "base file below — these carry the final LAYOUT (positions), keep "
+                "them and their transforms EXACTLY. THEN, from the remaining "
+                "component files, append ONLY mesh objects whose base name is NOT "
+                "already in the scene; never move or overwrite an object the base "
+                "already placed.\n\nAUTHORITATIVE BASE (layout):\n- {:s}\n\n"
+                "OTHER COMPONENTS (fill gaps only):\n{:s}\n\n".format(
+                    base, "\n".join("- {:s}".format(c) for c in components if c != base))
+            )
+        else:
+            order = (
+                "Start from a clean empty scene (delete the default Camera, Cube "
+                "and Light). Merge these component Blender files into that ONE "
+                "scene: for each file, append its MESH objects, DEDUPLICATING by "
+                "base name — if an object's base name already exists, SKIP it.\n\n"
+                "Component files (absolute paths on this machine):\n{:s}\n\n".format(files)
+            )
         return self._with_welcome((
-            "You are the GATHER agent for a parallel assembly. Start from a clean "
-            "empty scene (delete the default Camera, Cube and Light). Merge these "
-            "component Blender files into that ONE scene: for each file, append "
-            "ONLY its MESH objects (use bpy, e.g. bpy.ops.wm.append from each "
-            "file's Object directory) — SKIP any cameras, lights and empties, "
-            "which are per-component render scaffolding, not part of the assembly. "
-            "DEDUPLICATE by object name: components may overlap (e.g. an "
-            "integration component re-exports parts another component already "
-            "owns). Append each uniquely-named object only ONCE — if an object's "
-            "base name already exists in the scene, SKIP it. The result must NOT "
-            "contain duplicate parts (no 'Body' AND 'Body.001'). "
+            "You are the GATHER agent for a parallel assembly. {order}"
+            "Append mesh objects only via bpy (e.g. bpy.ops.wm.append from each "
+            "file's Object directory). NEVER append cameras, lights, empties, or "
+            "any DEFAULT object named 'Cube', 'Camera', 'Light' or 'Lamp' (and "
+            "their .001 variants) — these are per-component scaffolding, not part "
+            "of the assembly. The result must NOT contain duplicates (no 'Body' "
+            "AND 'Body.001') and NO stray default Cube. "
             "Then export the merged scene as a Blender file via the media_io tool "
-            "(export, format 'blend', filename '{master}.blend'). Component files "
-            "(absolute paths on this machine):\n{files}\n\n"
+            "(export, format 'blend', filename '{master}.blend').\n\n"
             "End with a PROOF OF WORK: the total object count and the object names "
-            "in the merged scene (confirm no '.001' duplicates remain)."
-        ).format(master=master, files=files))
+            "in the merged scene (confirm no '.001' duplicates and no default Cube)."
+        ).format(order=order, master=master))
 
 
 class BlenderSwarmProvider:

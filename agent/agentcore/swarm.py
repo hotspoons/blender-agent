@@ -305,6 +305,11 @@ class RemoteWorkerStrategy:
     def _artifact_name(self, task_id: str) -> str:
         return "component_{:s}".format(_safe(task_id))
 
+    def component_path(self, task_id: str) -> str:
+        """Absolute path of the component artifact a given task exports."""
+        return os.path.join(self._exchange_dir,
+                            self._artifact_name(task_id) + self._ARTIFACT_EXT)
+
     def _build_prompt(self, task: Any, component: str) -> str:
         prompt = _WORKER_TASK_TEMPLATE.format(
             instruction=task.instruction, component=component + self._ARTIFACT_EXT,
@@ -314,17 +319,20 @@ class RemoteWorkerStrategy:
             prompt = "Orchestrator context:\n{:s}\n\n{:s}".format(task.context, prompt)
         return self._with_welcome(prompt)
 
-    def _gather_prompt(self, components: "list[str]", master: str) -> str:
+    def _gather_prompt(self, components: "list[str]", master: str,
+                       base: "str | None" = None) -> str:
         files = "\n".join("- {:s}".format(c) for c in components)
+        base_line = ("\nAuthoritative base (keep its layout): {:s}\n".format(base)
+                     if base else "")
         return self._with_welcome((
             "You are the GATHER agent for a parallel assembly. Merge these "
             "component artifacts into ONE result, then export it as an artifact "
             "named '{master}'. If the same entity appears in more than one "
             "component, keep it ONCE — the merged result must contain no "
-            "duplicates. Component files (absolute paths on this "
+            "duplicates.{base_line} Component files (absolute paths on this "
             "machine):\n{files}\n\n"
             "End with a PROOF OF WORK describing the merged result."
-        ).format(master=master + self._ARTIFACT_EXT, files=files))
+        ).format(master=master + self._ARTIFACT_EXT, files=files, base_line=base_line))
 
     def _is_artifact(self, path: str) -> bool:
         """True if *path* is a complete artifact (not a truncated stub)."""
@@ -462,13 +470,19 @@ class RemoteWorkerStrategy:
     # --- run + gather ------------------------------------------------------
 
     async def gather(self, components: "list[str] | None" = None,
-                     master: str = "master") -> "str | None":
+                     master: str = "master", base: "str | None" = None) -> "str | None":
         """
         Spawn the final GATHER worker: it merges every component artifact into
         one result and exports ``<master>`` to the exchange dir. Returns the
         master path, or None if nothing to gather / it failed.
+
+        ``base`` (when given) is the authoritative assembled component whose
+        layout/positions must be preserved — the others only contribute objects
+        missing from it. Listed first so a name-collision keeps the base's copy.
         """
         components = components if components is not None else self.list_artifacts()
+        if base and base in components:        # base goes first: it wins collisions
+            components = [base] + [c for c in components if c != base]
         if not components:
             return None
         api_port = self._allocator.allocate()
@@ -479,7 +493,7 @@ class RemoteWorkerStrategy:
             if not await worker.wait_ready(self._ready_timeout):
                 _log.warning("gather worker failed to start:\n%s", worker.tail_log(800))
                 return None
-            prompt = self._gather_prompt(components, master)
+            prompt = self._gather_prompt(components, master, base=base)
             gather_id = "{:s}:gather".format(self._session_id)
             if self._emit is not None:
                 await self._emit({

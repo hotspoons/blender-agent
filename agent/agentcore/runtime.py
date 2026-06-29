@@ -1462,9 +1462,24 @@ class AgentRuntime:
                 gate = config.autonomy_gather
                 if gate == "off":
                     return
-                if gate == "planner" and not any(getattr(t, "depends_on", None) for t in tasks):
+                deps_tasks = [t for t in tasks if getattr(t, "depends_on", None)]
+                if gate == "planner" and not deps_tasks:
                     return
-                master = await swarm_strategy.gather()
+                # If the planner emitted an integration node, the one depending on
+                # the MOST parts is the assembled layout — make it the authoritative
+                # base (its positions win) and feed the gather only that base plus
+                # the leaf part-builders, NOT the other integration re-exports
+                # (validate/verify), which would otherwise drag parts back to origin.
+                base = parts = None
+                if deps_tasks:
+                    asm = max(deps_tasks, key=lambda t: len(getattr(t, "depends_on", []) or []))
+                    base_path = swarm_strategy.component_path(asm.id)
+                    if os.path.isfile(base_path):
+                        leaves = [swarm_strategy.component_path(t.id) for t in tasks
+                                  if not getattr(t, "depends_on", None)]
+                        parts = [base_path] + [p for p in leaves if os.path.isfile(p)]
+                        base = base_path
+                master = await swarm_strategy.gather(components=parts, base=base)
                 if master:
                     gathered["path"] = master
             pre_eval = _swarm_pre_eval
