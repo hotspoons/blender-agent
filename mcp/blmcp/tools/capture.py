@@ -79,8 +79,7 @@ def register(mcp: FastMCP) -> None:
           settings; "thumbnail" is a fast, low-quality preview.
 
         For deliverable files the user can download, prefer media_io(...)
-        if the media extension is installed. Run `welcome` first if you
-        have not this session.
+        if the media extension is installed.
         """
         a = args if isinstance(args, dict) else {}
         if verb == "screenshot":

@@ -66,8 +66,6 @@ def register(mcp: FastMCP) -> None:
           false for the raw base mesh.
         - scene("layout", {}) — JSON of the window layout, areas, active
           object, and selection (no pixels; use capture(...) for an image).
-
-        Run `welcome` first if you have not this session.
         """
         a = args if isinstance(args, dict) else {}
         if verb == "objects":

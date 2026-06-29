@@ -36,9 +36,15 @@ import sys
 _ENTRY_POINT_GROUP = "blender_mcp.extensions"
 
 # Core tools whose descriptions get the run-welcome-first nudge appended.
+# This is the SINGLE source of the nudge: it is for MCP CLIENTS, whose system
+# prompts we don't control, so we lean on tool descriptions to get them to read
+# `welcome`. Our own in-process agents strip it (see strip_welcome_nudge) — we
+# control their prompts and pre-inject the welcome, so the nudge only confuses
+# them (they have no `welcome` tool to call).
 _WELCOME_NUDGE_TOOLS = (
     "execute_blender_code",
     "scene",
+    "capture",
 )
 _WELCOME_NUDGE = (
     "\n\nFIRST ACTION this session: call the `welcome` tool before this one. "
@@ -46,6 +52,13 @@ _WELCOME_NUDGE = (
     "conventions these tools assume - skipping it means you won't know those "
     "skills exist or how this toolset expects to be driven."
 )
+
+
+def strip_welcome_nudge(description: str) -> str:
+    """Remove the client-facing run-welcome-first nudge from a tool description.
+    Used by the agent tool surface: agents are pre-welcomed and have no
+    `welcome` tool, so the nudge is a contradiction, not guidance."""
+    return (description or "").replace(_WELCOME_NUDGE, "")
 
 
 def _iter_extension_modules():

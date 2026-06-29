@@ -46,10 +46,30 @@ class TestRegistry(unittest.TestCase):
         self.assertFalse([n for n in names if n.startswith("rigging_")])
 
     def test_welcome_nudge_applied(self) -> None:
+        # MCP clients (whose prompts we don't control) get the run-welcome-first
+        # nudge on the key entry-point tools.
         mcp = FastMCP("test")
         register_all_tools(mcp)
         tools = {t.name: t for t in asyncio.run(mcp.list_tools())}
-        self.assertIn("welcome", tools["execute_blender_code"].description)
+        for name in ("execute_blender_code", "scene", "capture"):
+            self.assertIn("FIRST ACTION", tools[name].description or "",
+                          "%s should carry the client nudge" % name)
+
+    def test_strip_welcome_nudge_for_agents(self) -> None:
+        # Our agents are pre-welcomed and have no welcome tool, so the agent
+        # tool surface strips the nudge — without disturbing what clients see.
+        from blmcp.registry import strip_welcome_nudge
+        mcp = FastMCP("test")
+        register_all_tools(mcp)
+        tools = {t.name: t for t in asyncio.run(mcp.list_tools())}
+        client_desc = tools["scene"].description or ""
+        agent_desc = strip_welcome_nudge(client_desc)
+        self.assertIn("FIRST ACTION", client_desc)        # client keeps it
+        self.assertNotIn("FIRST ACTION", agent_desc)      # agent loses it
+        self.assertNotIn("call the `welcome`", agent_desc)
+        # idempotent + safe on tools that never had the nudge
+        self.assertEqual(strip_welcome_nudge(agent_desc), agent_desc)
+        self.assertEqual(strip_welcome_nudge(""), "")
 
     def test_env_extension_and_broken_extension(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

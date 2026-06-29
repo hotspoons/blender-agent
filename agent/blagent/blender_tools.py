@@ -196,6 +196,8 @@ async def build_blender_registry() -> tuple[FastMCP, list[Tool]]:
     for the agent registry. Async because tool listing is async in the
     SDK.
     """
+    from blmcp.registry import strip_welcome_nudge
+
     mcp = _build_fastmcp()
     tools: list[Tool] = []
     for spec in await mcp.list_tools():
@@ -210,7 +212,12 @@ async def build_blender_registry() -> tuple[FastMCP, list[Tool]]:
         tools.append(BlenderTool(
             mcp,
             name=spec.name,
-            description=spec.description or "",
+            # Strip the client-facing "call welcome first" nudge: our agents are
+            # pre-welcomed (the welcome content is injected into their prompt)
+            # and have no welcome tool, so the nudge is a contradiction. MCP
+            # clients still see it — they read the server's tool descriptions,
+            # not this wrapped copy.
+            description=strip_welcome_nudge(spec.description or ""),
             schema=spec.inputSchema,
             destructive=destructive,
             volatile=volatile,
