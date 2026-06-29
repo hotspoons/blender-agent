@@ -112,6 +112,7 @@ class OrchestratorView:
                 "proof": "", "ok": None, "timeline": [], "calls": {}, "stream": "",
                 "media": [], "queued": None, "stopping": False,
                 "reviews": ev.get("reviews"),   # qa agent -> worker id it reviews
+                "dependsOn": ev.get("depends_on") or [],   # DAG edges (agent ids)
                 "round": None if ev.get("role") == "gather" else self.current_round,
             }
             if aid not in self.agent_order:

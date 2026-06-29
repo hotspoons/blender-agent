@@ -14,6 +14,7 @@ import { getProfile } from "/static/core/profile.js";
 import { renderMediaThumb } from "/static/core/media-viewers.js";
 import { adoptHighlightStyles, ensureMarkdownReady, renderMarkdown } from "/static/core/markdown.js";
 import "/static/components/json-view.js";
+import "/static/components/dag-viewer.js";
 import "/static/core/widgets.js";
 
 function unsafeHtml(htmlText) {
@@ -69,6 +70,7 @@ export class BaChatStage extends LitElement {
     _autonomyRuns: { state: true },
     _openAgents: { state: true },
     _agentTab: { state: true },     // agent id -> "result" | "work"
+    _focusedAgent: { state: true }, // DAG-viewer node click -> isolate this agent
   };
 
   constructor() {
@@ -95,6 +97,7 @@ export class BaChatStage extends LitElement {
     this._autonomyRuns = store.state.autonomyRuns;
     this._openAgents = new Set();   // agent ids the user expanded
     this._agentTab = {};            // agent id -> active result/work tab
+    this._focusedAgent = "";        // agent isolated via a DAG-viewer node click
     // Scroll-latch tear-off state per nested area (keyed by a STABLE id, not the
     // DOM node, so it survives re-renders): true == the user scrolled up, so we
     // stop auto-pinning that area to the bottom until they return to it.
@@ -469,6 +472,10 @@ export class BaChatStage extends LitElement {
     .agent.gather { border-left-color: var(--accent-2); }
     .agent.qa { border-left-color: var(--success); }
     .agent.done { opacity: 0.92; }
+    /* DAG-viewer focus/isolate: spotlight the picked agent, fade the rest. */
+    .agent.dimmed { opacity: 0.32; filter: saturate(.6); transition: opacity .2s; }
+    .agent.focused { box-shadow: 0 0 0 2px var(--accent-2), 0 6px 24px rgba(0,0,0,.35);
+      border-left-color: var(--accent-2); opacity: 1; transition: box-shadow .2s; }
     /* Dedicated QA reviewer's verdict, pinned on the worker card it reviewed. */
     .qa-note { display: flex; align-items: baseline; gap: 7px; margin: 0 12px 10px 12px;
       padding: 7px 10px; font-size: 12.5px; border-radius: var(--radius-sm);
@@ -806,6 +813,20 @@ export class BaChatStage extends LitElement {
     this._openAgents = s;
   }
 
+  /** DAG-viewer node clicked: isolate that agent — expand it, dim the rest,
+   *  and scroll it into view. Clicking the background (node-clear) restores. */
+  _focusAgent(e) {
+    const id = e.detail?.id;
+    if (!id) return;
+    this._focusedAgent = id;
+    const open = new Set(this._openAgents); open.add(id); this._openAgents = open;
+    this.updateComplete.then(() => {
+      const el = this.renderRoot.querySelector(`[data-agent="${CSS.escape(id)}"]`);
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }
+  _clearFocus() { this._focusedAgent = ""; }
+
   _send(e, agentId) {
     const input = e.target.closest(".inject")?.querySelector("input");
     const v = (input?.value || "").trim();
@@ -918,8 +939,10 @@ export class BaChatStage extends LitElement {
       ? html`<span class="spin">${icon("arrow-path")}</span>`
       : (agent.ok === false ? "✗" : "✓");
     const canInject = store.state.autonomyLevel !== "swarm"; // in-process only
+    const focusC = this._focusedAgent === agent.id ? "focused"
+      : this._focusedAgent ? "dimmed" : "";
     return html`
-      <div class="agent ${roleClass} ${agent.state}">
+      <div class="agent ${roleClass} ${agent.state} ${focusC}" data-agent=${agent.id}>
         <div class="agent-head" @click=${() => this._toggleAgent(agent.id)}>
           <span class="role">${agent.role}</span>
           <span class="task">${agent.task || agent.id}</span>
@@ -976,7 +999,10 @@ export class BaChatStage extends LitElement {
     const sym = (s) => (s === "met" ? "✓" : "○");
     const done = a.done;
     return html`
-      <div class="auto">
+      <div class="auto ${this._focusedAgent ? "has-focus" : ""}">
+        ${a.agentOrder?.length ? html`
+        <ba-dag-viewer .view=${a} .focused=${this._focusedAgent}
+          @node-select=${this._focusAgent} @node-clear=${this._clearFocus}></ba-dag-viewer>` : nothing}
         ${a.recovered ? html`
         <div class="recovered-note">${icon("exclamation-triangle")} Recovered from history — worker
           details for this run were lost (older build); objectives shown below.</div>` : nothing}

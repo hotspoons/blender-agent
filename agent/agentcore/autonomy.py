@@ -1125,6 +1125,10 @@ class AutonomyOrchestrator:
             "role": "worker",
             "objective_id": task.objective_id,
             "task": task.instruction,
+            # DAG edges for the pipeline viewer: dependency task ids mapped to the
+            # same agent-id scheme this worker uses, so the UI can draw them.
+            "depends_on": ["{:s}:w:{:s}".format(self._session_id, d)
+                           for d in (getattr(task, "depends_on", None) or [])],
         })
         try:
             result = await self._worker_runner(task)
