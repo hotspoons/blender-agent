@@ -84,6 +84,21 @@ capture verb 'render') — this Blender is headless, so viewport screenshot
 tools do not work. If you could not finish, say so plainly and why.
 """
 
+# Appended to the worker system prompt on a full-context fork (handoff mode
+# 'full') INSTEAD of the per-task mission: every forked agent then shares one
+# byte-identical prefix (system + the parent conversation seeded behind it),
+# maximizing cross-worker/reviewer KV-cache reuse. The mission arrives as the
+# first user message after the seed, pinned against context trimming.
+_WORKER_FORK_PREAMBLE = """
+
+---
+# YOUR ROLE: autonomous worker sub-agent (forked context)
+The conversation that follows is the ORCHESTRATOR'S, shared with you verbatim
+so you start fully oriented. You are NOT the assistant in that conversation
+and NOT talking to a human. Your own assignment arrives as the first message
+after it — do only that task.
+"""
+
 # Prepended to the worker/QA system prompt when the orchestrator has already
 # fetched the session welcome (instructions + installed skills) once for the
 # whole run. Workers are fresh sessions, so each would otherwise re-call
@@ -129,6 +144,8 @@ class ChildSessionRunner:
             context_tokens: int = 0,
             budget_review: bool = False,
             bootstrap: str = "",
+            handoff: str = "",
+            seed: "Callable[[], list[dict[str, Any]]] | None" = None,
             register: "Callable[[str, AgentEngine], None] | None" = None,
             unregister: "Callable[[str], None] | None" = None,
     ) -> None:
@@ -151,6 +168,11 @@ class ChildSessionRunner:
         # pinned in every worker's system prompt, so fresh worker sessions don't
         # each re-call `welcome` first thing. Empty == workers welcome themselves.
         self._bootstrap = bootstrap
+        # Full-context fork ('full' handoff): *seed* snapshots the parent
+        # conversation, seeded into every worker engine behind an identical
+        # system prompt (see _WORKER_FORK_PREAMBLE). Other modes ignore it.
+        self._handoff = handoff
+        self._seed = seed
         # Lets the runtime track the live worker engine by agent id so the
         # user can inject messages straight into it (voice of god).
         self._register = register
@@ -172,12 +194,29 @@ class ChildSessionRunner:
         if getattr(task, "context", ""):
             context_block = "\n## ORCHESTRATOR CONTEXT\n{:s}\n".format(task.context)
         bootstrap = _WELCOME_BOOTSTRAP.format(welcome=self._bootstrap) if self._bootstrap else ""
-        worker_system = bootstrap + self._system_prompt + _WORKER_MISSION.format(
+        mission = _WORKER_MISSION.format(
             instruction=task.instruction,
             goal=getattr(task, "goal", "") or "(not specified)",
             acceptance=getattr(task, "acceptance", "") or "the task is accomplished and verifiable",
             context=context_block,
         )
+        from .autonomy import HANDOFF_FULL
+        seed_messages: "list[dict[str, Any]] | None" = None
+        if self._handoff == HANDOFF_FULL and self._seed is not None:
+            try:
+                seed_messages = self._seed()
+            except Exception as ex:  # pylint: disable=broad-except
+                _log.warning("full-context fork failed for %s (%s); spawning unseeded", agent_id, ex)
+        begin = "Begin now — execute your assigned task end to end, then report your proof of work."
+        if seed_messages:
+            # Full fork: keep the system prompt identical across workers (one
+            # shared prefix with the seeded parent conversation) and deliver
+            # the mission as the first user message, pinned against trimming.
+            worker_system = bootstrap + self._system_prompt + _WORKER_FORK_PREAMBLE
+            first_text = mission + "\n" + begin
+        else:
+            worker_system = bootstrap + self._system_prompt + mission
+            first_text = begin
         engine = AgentEngine(
             registry=self._registry,
             media=self._media_factory(agent_id),
@@ -185,6 +224,7 @@ class ChildSessionRunner:
             emit=child_emit,
             append_record=records.append,
             trace_label="worker:{:s}".format(agent_id),
+            seed_messages=seed_messages,
         )
         # Kept alive so the orchestrator can replenish the budget and continue
         # the SAME worker (continue_) after a review; released explicitly.
@@ -192,17 +232,18 @@ class ChildSessionRunner:
         if self._register is not None:
             self._register(agent_id, engine)
         return await self._turn(
-            agent_id, engine, records, task,
-            "Begin now — execute your assigned task end to end, then report your proof of work.")
+            agent_id, engine, records, task, first_text, pin_user=bool(seed_messages))
 
     async def _turn(self, agent_id: str, engine: "AgentEngine",
-                    records: list[dict[str, Any]], task: Any, user_text: str) -> Any:
+                    records: list[dict[str, Any]], task: Any, user_text: str,
+                    pin_user: bool = False) -> Any:
         from .autonomy import WorkerResult
         try:
             await engine.run_turn(
                 session_id=agent_id, user_text=user_text, llm=self._make_llm(),
                 model=self._model, autonomy=self._autonomy, max_rounds=self._max_rounds,
-                context_tokens=self._context_tokens, budget_review=self._budget_review)
+                context_tokens=self._context_tokens, budget_review=self._budget_review,
+                pin_user=pin_user)
         except Exception as ex:  # pylint: disable=broad-except
             _log.warning("worker %s failed: %s", task.id, ex)
             return WorkerResult(
@@ -843,18 +884,31 @@ class AgentRuntime:
     # ------------------------------------------------------------------
     # Turn entry points (called from the WS handler).
 
+    def seed_session(self, session_id: str, messages: "list[dict[str, Any]]") -> bool:
+        """
+        Seed a FRESH session's engine with a forked parent conversation —
+        the receiving side of the 'full' handoff for workers reached over
+        the chat API (swarm subprocesses, and any external harness that
+        accepts the ``seed_messages`` extension). Returns False once the
+        session has its own history.
+        """
+        return self._get_or_load_session(session_id).engine.seed(messages)
+
     async def send_user_message(
             self,
             session_id: str,
             content: str,
             media_ids: list[str] | None = None,
             autonomy: str | None = None,
+            pin_user: bool = False,
     ) -> str:
         """
         Start a turn. Returns the session id (a new one when blank).
         Raises ``RuntimeError`` when the session is already busy.
         *autonomy* overrides the configured mode for this turn (the chat
         API forces "auto": nobody can answer a confirm over that wire).
+        *pin_user* marks the message as never trimmed from context (a
+        forked worker's mission arriving over the chat API).
         """
         if not session_id:
             session_id = self.new_session()
@@ -886,6 +940,7 @@ class AgentRuntime:
                     media_ids=media_ids,
                     context_tokens=config.context_tokens,
                     budget_review=config.budget_review,
+                    pin_user=pin_user,
                 )
                 # Between-turns compaction: one bounded request that
                 # summarizes the older history when the projection has
@@ -1094,7 +1149,9 @@ class AgentRuntime:
             emit: "Callable[[dict[str, Any]], Awaitable[None]]",
             probe: "Callable[[], Awaitable[str]]", model: str,
             *, qa_enabled: bool, media_factory: "Callable[[str], MediaLibrary]",
-            bootstrap: str = "", max_cycles: int = 3) -> "Callable[[Any], Awaitable[Any]]":
+            bootstrap: str = "",
+            seed: "Callable[[], list[dict[str, Any]]] | None" = None,
+            max_cycles: int = 3) -> "Callable[[Any], Awaitable[Any]]":
         """Wrap a worker runner with the per-worker review loop: the orchestrator
         is pinged with every result, optionally spawns a bounded QA inspector,
         then accepts or replenishes the worker's budget with guidance (capped).
@@ -1109,12 +1166,12 @@ class AgentRuntime:
                     qa = ""
                     if qa_enabled and not stopped:
                         qa = await self._qa_inspect(session_id, task, result, emit, model,
-                                                    media_factory, attempt, bootstrap)
-                    decision = await self._review_worker(session_id, task, result, qa, stopped)
+                                                    media_factory, attempt, bootstrap, seed)
+                    decision = await self._review_worker(session_id, task, result, qa, stopped, seed)
                     if decision.get("request_qa") and not qa and not stopped:
                         qa = await self._qa_inspect(session_id, task, result, emit, model,
-                                                    media_factory, attempt, bootstrap)
-                        decision = await self._review_worker(session_id, task, result, qa, stopped)
+                                                    media_factory, attempt, bootstrap, seed)
+                        decision = await self._review_worker(session_id, task, result, qa, stopped, seed)
                     accept = bool(decision.get("accept")) or stopped
                     guidance = str(decision.get("guidance", "")).strip()
                     await emit({
@@ -1135,8 +1192,11 @@ class AgentRuntime:
 
     async def _review_worker(
             self, session_id: str, task: Any, result: Any,
-            qa_findings: str, stopped: bool) -> dict[str, Any]:
-        """The orchestrator's per-worker verdict: accept, or guidance to re-run."""
+            qa_findings: str, stopped: bool,
+            seed: "Callable[[], list[dict[str, Any]]] | None" = None) -> dict[str, Any]:
+        """The orchestrator's per-worker verdict: accept, or guidance to re-run.
+        With *seed* ('full' handoff) the verdict call carries the forked parent
+        conversation, so the outcome is checked against the actual asks."""
         from .autonomy import _complete, _extract_json_object
 
         state = "(no project-state probe configured)"
@@ -1154,7 +1214,8 @@ class AgentRuntime:
         )
         try:
             text = await _complete(self._make_llm(), self._model_name(), _REVIEW_SYSTEM, user,
-                                   trace_label="orchestrator_review")
+                                   trace_label="orchestrator_review",
+                                   prefix=seed() if seed is not None else None)
         except Exception as ex:  # pylint: disable=broad-except
             _log.warning("worker review failed session=%s: %s", session_id, ex)
             return {"accept": True, "guidance": "", "request_qa": False}
@@ -1167,7 +1228,8 @@ class AgentRuntime:
             self, session_id: str, task: Any, result: Any,
             emit: "Callable[[dict[str, Any]], Awaitable[None]]", model: str,
             media_factory: "Callable[[str], MediaLibrary]", attempt: int,
-            bootstrap: str = "") -> str:
+            bootstrap: str = "",
+            seed: "Callable[[], list[dict[str, Any]]] | None" = None) -> str:
         """A bounded QA inspector sub-agent (full tool surface, few rounds): it
         inspects the scene to verify the worker's claim and reports findings.
         Spawns as its own qa-role agent card."""
@@ -1182,21 +1244,38 @@ class AgentRuntime:
             await emit({**event, "parent_session_id": session_id, "role": "qa"})
 
         welcome = _WELCOME_BOOTSTRAP.format(welcome=bootstrap) if bootstrap else ""
-        system = welcome + self._system_prompt + _QA_INSPECT_MISSION.format(
+        mission = _QA_INSPECT_MISSION.format(
             instruction=task.instruction,
             acceptance=getattr(task, "acceptance", "") or "(n/a)",
             proof=result.proof or "(no proof)")
+        seed_messages: "list[dict[str, Any]] | None" = None
+        if seed is not None:
+            try:
+                seed_messages = seed()
+            except Exception as ex:  # pylint: disable=broad-except
+                _log.warning("qa fork failed session=%s (%s); inspecting unseeded", session_id, ex)
+        inspect_now = "Inspect now and report your QA findings."
+        if seed_messages:
+            # 'full' handoff: the inspector forks the same parent conversation
+            # as the workers, with its mission as a pinned user message — the
+            # system+seed prefix stays shared across the whole fleet.
+            system = welcome + self._system_prompt + _WORKER_FORK_PREAMBLE
+            user_text = mission + "\n" + inspect_now
+        else:
+            system = welcome + self._system_prompt + mission
+            user_text = inspect_now
         engine = AgentEngine(
             registry=self.registry_for_role("worker"),   # full surface (camera/render ok)
             media=media_factory(qa_id), system_prompt=system,
             emit=qa_emit, append_record=records.append,
-            trace_label="qa:{:s}".format(qa_id))
+            trace_label="qa:{:s}".format(qa_id),
+            seed_messages=seed_messages)
         findings = ""
         try:
             await engine.run_turn(
-                session_id=qa_id, user_text="Inspect now and report your QA findings.",
+                session_id=qa_id, user_text=user_text,
                 llm=self._make_llm(), model=model, autonomy="auto", max_rounds=2,
-                context_tokens=0, budget_review=False)
+                context_tokens=0, budget_review=False, pin_user=bool(seed_messages))
             for r in reversed(records):
                 if r.get("role") == "assistant":
                     c = _strip_thinking(str(r.get("content", ""))).strip()
@@ -1346,6 +1425,7 @@ class AgentRuntime:
         the UI. Returns the session id.
         """
         from .autonomy import (
+            HANDOFF_FULL,
             AutonomyOrchestrator, AutoPauseWhenBlockedPolicy, AutoUntilDonePolicy,
             IndependentAuditor, LlmPlanner, Objective,
             StateAwareEvaluator,
@@ -1363,6 +1443,13 @@ class AgentRuntime:
         # Prior conversation, captured before the objectives record is pushed,
         # so the planner's task instructions carry the user's actual intent.
         conversation = self._conversation_context(session_id)
+        # 'full' handoff: snapshot the parent conversation ONCE for the run.
+        # Every worker, QA inspector and evaluator forks this same seed, so
+        # their prompts share one byte-identical prefix (system + seed) that
+        # a prefix-caching server computes once and reuses across the fleet.
+        seed_snapshot = (session.engine.fork_messages()
+                         if config.autonomy_handoff == HANDOFF_FULL else None)
+        seed = (lambda: seed_snapshot) if seed_snapshot else None
 
         objs = [
             Objective(
@@ -1434,7 +1521,7 @@ class AgentRuntime:
             swarm_strategy: "Any" = self.swarm_provider.make_strategy(
                 endpoint=config.endpoint, model=model, exchange_dir=exchange_dir,
                 api_key=config.api_key, emit=persist_emit, session_id=session_id,
-                welcome=swarm_welcome,
+                welcome=swarm_welcome, seed=seed,
                 register_stop=self._register_swarm_worker,
                 unregister_stop=self._unregister_swarm_worker)
             runner: "Callable[[Any], Awaitable[Any]]" = swarm_strategy
@@ -1505,6 +1592,8 @@ class AgentRuntime:
                 context_tokens=config.context_tokens,
                 budget_review=config.budget_review,
                 bootstrap=welcome_bootstrap,
+                handoff=config.autonomy_handoff,
+                seed=seed,
                 register=self._register_worker,
                 unregister=self._unregister_worker,
             )
@@ -1520,7 +1609,7 @@ class AgentRuntime:
             review_runner = self._make_reviewing_runner(
                 session_id, runner, persist_emit, probe, model,
                 qa_enabled=config.autonomy_qa, media_factory=media_factory,
-                bootstrap=welcome_bootstrap)
+                bootstrap=welcome_bootstrap, seed=seed)
         # Tool-using planner (default): decomposes against the real scene (view +
         # pose) as its own sub-agent panel. Off -> a blind LLM decomposer.
         planner_runner = (
@@ -1546,7 +1635,7 @@ class AgentRuntime:
             planner=LlmPlanner(llm, model, emit=persist_emit, session_id=session_id,
                                context=conversation, runner=planner_runner),
             scheduler=scheduler,
-            evaluator=StateAwareEvaluator(llm, model, probe=probe),
+            evaluator=StateAwareEvaluator(llm, model, probe=probe, seed=seed),
             policy=policy,
             worker_runner=review_runner,
             emit=persist_emit,
@@ -1555,6 +1644,11 @@ class AgentRuntime:
             handoff=config.autonomy_handoff,
             compactor=_handoff_compactor,
             context=conversation,
+            # Both worker paths fork at message level now: in-process via
+            # seeded engines, swarm via the chat API's seed_messages
+            # extension — so 'full' never needs the text paste when a seed
+            # exists (an empty parent transcript falls back to it).
+            full_fork=seed is not None,
             pre_eval=pre_eval,
         )
         rounds = rounds_cap
@@ -1660,16 +1754,29 @@ class AgentRuntime:
         worker_registry = ToolRegistry(
             list(self.registry_for_role("worker"))
             + [AskOrchestratorTool(self._make_orchestrator_ask(session_id, persist_emit))])
+
+        def _conductor_seed() -> "list[dict[str, Any]]":
+            # 'full' handoff, conductor path: fork the conductor's LIVE
+            # transcript at delegation time — each worker's seed is a prefix
+            # of the conductor's own conversation, so the server-side cache
+            # chain extends rather than resets as the run grows.
+            eng = self._conductors.get(session_id)
+            return (eng or session.engine).fork_messages()
+
+        from .autonomy import HANDOFF_FULL
+        seed = _conductor_seed if config.autonomy_handoff == HANDOFF_FULL else None
         base_runner = ChildSessionRunner(
             registry=worker_registry, make_llm=self._make_llm, model=model, emit=persist_emit,
             system_prompt=self._system_prompt, media_factory=media_factory,
             parent_session_id=session_id, autonomy="auto", max_rounds=config.max_rounds,
             context_tokens=config.context_tokens, budget_review=config.budget_review,
             bootstrap=welcome_bootstrap,
+            handoff=config.autonomy_handoff, seed=seed,
             register=self._register_worker, unregister=self._unregister_worker)
         self._conductor_runners[session_id] = self._make_reviewing_runner(
             session_id, base_runner, persist_emit, self._make_probe(session_id), model,
-            qa_enabled=config.autonomy_qa, media_factory=media_factory, bootstrap=welcome_bootstrap)
+            qa_enabled=config.autonomy_qa, media_factory=media_factory,
+            bootstrap=welcome_bootstrap, seed=seed)
 
         async def _emit_objectives() -> None:
             await persist_emit({"type": "objectives_update", "session_id": session_id,
@@ -2066,6 +2173,15 @@ class AgentRuntime:
             config.max_autonomy_rounds = max(1, int(updates["max_autonomy_rounds"]))
         if "autonomy_share_context" in updates:
             config.autonomy_share_context = bool(updates["autonomy_share_context"])
+        if "autonomy_handoff" in updates:
+            from .autonomy import HANDOFF_MODES
+            value = str(updates["autonomy_handoff"])
+            if value in HANDOFF_MODES:
+                config.autonomy_handoff = value
+        if "autonomy_gather" in updates:
+            value = str(updates["autonomy_gather"])
+            if value in ("planner", "always", "off"):
+                config.autonomy_gather = value
         if "autonomy_audit" in updates:
             config.autonomy_audit = bool(updates["autonomy_audit"])
         if "autonomy_qa" in updates:

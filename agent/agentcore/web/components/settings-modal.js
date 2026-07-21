@@ -25,7 +25,8 @@ export class BaSettingsModal extends LitElement {
     _models: { state: true },
     _policy: { state: true },
     _maxAutoRounds: { state: true },
-    _shareContext: { state: true },
+    _handoff: { state: true },
+    _gather: { state: true },
     _audit: { state: true },
     _qa: { state: true },
     _plannerTools: { state: true },
@@ -44,7 +45,8 @@ export class BaSettingsModal extends LitElement {
     this._models = store.state.models;
     this._policy = config.autonomy_policy || "auto_until_done";
     this._maxAutoRounds = config.max_autonomy_rounds || 6;
-    this._shareContext = !!config.autonomy_share_context;
+    this._handoff = config.autonomy_handoff || "handoff";
+    this._gather = config.autonomy_gather || "planner";
     this._audit = !!config.autonomy_audit;
     this._qa = !!config.autonomy_qa;
     this._plannerTools = config.autonomy_planner_tools !== false;
@@ -158,7 +160,8 @@ export class BaSettingsModal extends LitElement {
       context_tokens: Math.max(2048, parseInt(this._contextTokens, 10) || 16384),
       autonomy_policy: this._policy,
       max_autonomy_rounds: Math.max(1, parseInt(this._maxAutoRounds, 10) || 6),
-      autonomy_share_context: this._shareContext,
+      autonomy_handoff: this._handoff,
+      autonomy_gather: this._gather,
       autonomy_audit: this._audit,
       autonomy_qa: this._qa,
       autonomy_planner_tools: this._plannerTools,
@@ -271,14 +274,34 @@ export class BaSettingsModal extends LitElement {
           .value=${String(this._maxAutoRounds)}
           @input=${(e) => { this._maxAutoRounds = e.target.value; }}>
 
-        <div class="switchrow">
-          <ba-switch .on=${this._shareContext}
-            @input=${(e) => { this._shareContext = e.detail.value; }}></ba-switch>
-          <span>Share orchestrator context with workers
-            <div class="sub">Off (default): workers run blind on just their task. On: each worker is
-              seeded with the objective list - so blind vs informed can be compared.</div>
-          </span>
-        </div>
+        <label>Context handoff to workers</label>
+        <ba-segmented
+          .options=${[
+            { value: "blind", label: "Blind" },
+            { value: "handoff", label: "Summary" },
+            { value: "compaction", label: "Compacted" },
+            { value: "full", label: "Full fork" },
+          ]}
+          .value=${this._handoff}
+          @input=${(e) => { this._handoff = e.detail.value; }}></ba-segmented>
+        <div class="hint">What each spawned worker inherits from the orchestrator. Blind: just its
+          task + acceptance. Summary (default): a concise objectives/status brief. Compacted: a dense
+          brief written by one extra compactor pass. Full fork: workers, QA and the evaluator are
+          seeded with the parent conversation itself - byte-identical across the fleet so a
+          prefix-caching server pays for it once; costs context and compacts earlier.</div>
+
+        <label>Gather / assemble</label>
+        <ba-segmented
+          .options=${[
+            { value: "planner", label: "Planner" },
+            { value: "always", label: "Always" },
+            { value: "off", label: "Off" },
+          ]}
+          .value=${this._gather}
+          @input=${(e) => { this._gather = e.detail.value; }}></ba-segmented>
+        <div class="hint">Swarm assembly before each evaluation. Planner (default): the planner's own
+          assemble node is the gather - no double merge. Always: force a gather-all even when the
+          planner omits one (belt and suspenders). Off: evaluate loose components only.</div>
 
         <div class="switchrow">
           <ba-switch .on=${this._plannerTools}

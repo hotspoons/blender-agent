@@ -373,11 +373,22 @@ def routes(runtime) -> list[Route]:
             for data, mime, name in attachments
         ]
 
+        # 'full' context handoff (extension fields): seed this fresh session
+        # with the caller's forked conversation before the turn — the engine
+        # then declares this session's own tool roster after the seed, and
+        # `pin_user` guards the mission (the newest user message) from ever
+        # being trimmed. Ignored once the session has its own history.
+        seed = body.get("seed_messages")
+        seeded = False
+        if isinstance(seed, list) and seed:
+            seeded = runtime.seed_session(session_id, seed)
+
         queue = runtime.subscribe()
         try:
             await runtime.send_user_message(
                 session_id, text or "(see attached media)",
-                media_ids=media_ids, autonomy="auto")
+                media_ids=media_ids, autonomy="auto",
+                pin_user=seeded or bool(body.get("pin_user")))
         except RuntimeError as ex:
             runtime.unsubscribe(queue)
             return _request_error(str(ex), status=409)

@@ -165,8 +165,13 @@ class AgentConfig:
     autonomy_share_context: bool = False
     # Context-handoff mode for spawned workers (supersedes the share_context
     # bool; empty derives from it: "handoff" if share_context else "blind").
-    #   blind | handoff | compaction | full  (see autonomy.HANDOFF_MODES)
-    autonomy_handoff: str = ""
+    #   blind      — instruction + acceptance only (zip-ties' original)
+    #   handoff    — + concise objectives/status brief (the default)
+    #   compaction — + a dense brief from one extra compactor pass
+    #   full       — fork the parent conversation: in-process workers/QA/
+    #                evaluator share one byte-identical seeded prefix
+    #                (KV-cache friendly); swarm workers get it as text
+    autonomy_handoff: str = "handoff"
     # Swarm gather/assemble policy: planner (only if the planner emits an
     # assemble node) | always (force a gather-all before review) | off.
     autonomy_gather: str = "planner"

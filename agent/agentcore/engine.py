@@ -24,6 +24,7 @@ __all__ = (
 )
 
 import asyncio
+import copy
 import json
 import logging
 import time
@@ -195,10 +196,18 @@ class AgentEngine:
             emit: EngineEvents,
             append_record: Callable[[dict[str, Any]], None],
             trace_label: str = "turn",
+            seed_messages: "list[dict[str, Any]] | None" = None,
     ) -> None:
         self._registry = registry
         self._media = media
         self._system_prompt = system_prompt
+        # Full-context fork: a parent conversation projected in front of this
+        # engine's own records (system prompt first, seed next, own records
+        # last — the stable-prefix layout that maximizes cross-worker KV/prefix
+        # cache reuse). Deep-copied because context fitting mutates messages in
+        # place and forks must not contaminate each other or the parent.
+        self._seed_messages: list[dict[str, Any]] = copy.deepcopy(seed_messages or [])
+        self._seed_roster = self._build_seed_roster() if self._seed_messages else None
         self._emit = emit
         self._append_record = append_record
         # Tags this engine's LLM calls for the context trace
@@ -298,6 +307,12 @@ class AgentEngine:
         that budget (see ``_fit_context``).
         """
         messages: list[dict[str, Any]] = [{"role": "system", "content": self._system_prompt}]
+        # Forked parent context precedes this engine's own records. The dicts
+        # are shared across calls on purpose: trims persist, keeping the
+        # projected prefix stable (and cache-friendly) between rounds.
+        messages.extend(self._seed_messages)
+        if self._seed_messages and self._seed_roster is not None:
+            messages.append(self._seed_roster)
         start = 0
         summary = self._latest_summary()
         if summary is not None:
@@ -326,9 +341,12 @@ class AgentEngine:
                     ).format(", ".join(media_ids))
                     media_ids = []
                 content = self._content_with_images(text, media_ids)
-                messages.append({"role": "user", "content": content})
+                message = {"role": "user", "content": content}
+                if record.get("pinned"):
+                    message["_pinned"] = True
+                messages.append(message)
             elif role == "assistant":
-                message: dict[str, Any] = {
+                message = {
                     "role": "assistant",
                     "content": _strip_thinking(str(record.get("content", ""))),
                 }
@@ -357,7 +375,52 @@ class AgentEngine:
         self._demote_old_images(messages)
         if context_tokens > 0:
             self._fit_context(messages, context_tokens)
+        for message in messages:
+            message.pop("_pinned", None)   # projection-internal, never on the wire
         return messages
+
+    def fork_messages(self) -> list[dict[str, Any]]:
+        """
+        This conversation as seedable messages (the projection minus the
+        system prompt): the parent-side half of a full-context fork, passed
+        to a child engine as ``seed_messages``. Media rides along as
+        self-contained data URIs, so the child needs no media library.
+        """
+        return self._llm_messages()[1:]
+
+    def seed(self, messages: list[dict[str, Any]]) -> bool:
+        """
+        Seed the forked parent conversation after construction — the
+        chat-API path, where the session engine already exists when the
+        seed arrives over the wire. Refused once the session has records
+        or a prior seed: seeding is a spawn-time act, not an injection
+        channel.
+        """
+        if self.records or self._seed_messages or not messages:
+            return False
+        self._seed_messages = copy.deepcopy(messages)
+        self._seed_roster = self._build_seed_roster()
+        return True
+
+    def _build_seed_roster(self) -> dict[str, Any]:
+        """
+        A seeded (forked) session declares its OWN tool surface right after
+        the foreign conversation: the parent may have used tools that do
+        not exist here — and across harness boundaries (zip-ties style
+        sub-agents) the surfaces can differ completely. Stable text, so it
+        extends the shared prefix rather than splitting it.
+        """
+        lines = [
+            "[Context handoff] The conversation above is your orchestrator's, "
+            "shared so you start fully oriented. It may mention tools that do "
+            "not exist in this session. The tools available HERE are exactly:"]
+        for tool in self._registry:
+            summary = str(tool.description or "").strip().split("\n", 1)[0]
+            lines.append("- {:s}{:s}".format(
+                tool.name, " — " + summary[:120] if summary else ""))
+        if len(lines) == 1:
+            lines.append("(none — work from reasoning alone)")
+        return {"role": "user", "content": "\n".join(lines)}
 
     def _demote_old_images(self, messages: list[dict[str, Any]]) -> None:
         """
@@ -452,6 +515,10 @@ class AgentEngine:
         dropped = False
         while self._estimate_tokens(messages) > budget:
             start = 2 if dropped else 1  # skip the notice once inserted
+            # A pinned message (a forked worker's mission) never drops — losing
+            # it would disorient the worker completely.
+            while start < len(messages) - 1 and messages[start].get("_pinned"):
+                start += 1
             if start >= len(messages) - 1:
                 break
             end = start + 1
@@ -595,16 +662,22 @@ class AgentEngine:
             media_ids: list[str] | None = None,
             context_tokens: int = 0,
             budget_review: bool = True,
+            pin_user: bool = False,
     ) -> None:
         """
         Run one full turn. Events are emitted through the runtime's
         broadcast callback; records are appended to the transcript.
         *media_ids* are user-attached images (pasted/dropped in the UI).
+        *pin_user* marks this user message as never trimmed from context
+        (a forked worker's mission, which rides as a user message instead
+        of in the shared system prompt).
         """
         _log.info("turn start session=%s model=%s attachments=%s", session_id, model, media_ids or [])
         user_record: dict[str, Any] = {"role": "user", "content": user_text}
         if media_ids:
             user_record["media_ids"] = media_ids
+        if pin_user:
+            user_record["pinned"] = True
         self.push_record(user_record)
         await self._emit({
             "type": "user_record",

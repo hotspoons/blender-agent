@@ -267,6 +267,7 @@ class RemoteWorkerStrategy:
             emit: "Callable[[dict[str, Any]], Awaitable[None]] | None" = None,
             session_id: str = "",
             welcome: str = "",
+            seed: "Callable[[], list[dict[str, Any]]] | None" = None,
             register_stop: "Callable[[str, Callable[[], None]], None] | None" = None,
             unregister_stop: "Callable[[str], None] | None" = None,
     ) -> None:
@@ -283,6 +284,12 @@ class RemoteWorkerStrategy:
         # fresh subprocess sessions skip re-calling `welcome` on identical,
         # static content (the parent fetched it once). Empty == self-welcome.
         self._welcome = welcome
+        # 'full' handoff: snapshots the parent conversation; sent to each
+        # worker's chat API as the `seed_messages` extension so the subprocess
+        # seeds its session engine with it (same fork the in-process workers
+        # get). All workers receive the same snapshot and share one identical
+        # system prompt, so the shared LLM endpoint sees one common prefix.
+        self._seed = seed
         # Parent (orchestrator) session id: streamed worker events are tagged
         # with it so the UI files them under the matching bounded agent card.
         self._session_id = session_id
@@ -383,7 +390,8 @@ class RemoteWorkerStrategy:
 
     async def _chat(self, base_url: str, prompt: str, user: str,
                     agent_id: "str | None" = None,
-                    cancel: "asyncio.Event | None" = None) -> str:
+                    cancel: "asyncio.Event | None" = None,
+                    seed_messages: "list[dict[str, Any]] | None" = None) -> str:
         """
         Drive a worker over its OpenAI endpoint and return its final text.
 
@@ -403,6 +411,11 @@ class RemoteWorkerStrategy:
             "user": user,
             "stream": stream,
         }
+        if seed_messages:
+            # Fork extension (see blagent.chat_api): the worker seeds its
+            # session with this conversation and pins the mission message.
+            body["seed_messages"] = seed_messages
+            body["pin_user"] = True
         if not stream:
             async with httpx.AsyncClient(timeout=self._task_timeout) as client:
                 resp = await client.post(base_url + "/chat/completions", json=body, headers=headers)
@@ -545,9 +558,17 @@ class RemoteWorkerStrategy:
                     proof="worker failed to start:\n" + worker.tail_log(800),
                     ok=False, transcript_ref=worker.base_url)
             prompt = self._build_prompt(task, component)
+            seed_messages: "list[dict[str, Any]] | None" = None
+            if self._seed is not None:
+                try:
+                    seed_messages = self._seed()
+                except Exception as ex:  # pylint: disable=broad-except
+                    _log.warning("swarm fork failed for %s (%s); running unseeded",
+                                 task.id, ex)
             try:
                 proof = await self._chat(worker.base_url, prompt, user=task.id,
-                                         agent_id=agent_id, cancel=cancel)
+                                         agent_id=agent_id, cancel=cancel,
+                                         seed_messages=seed_messages)
             except Exception as ex:  # pylint: disable=broad-except
                 if cancel.is_set():
                     return WorkerResult(

@@ -374,5 +374,63 @@ class TestEndToEnd(_ChatApiTestCase):
         self.assertEqual(response.status_code, 400)
 
 
+class TestSeedHandoff(_ChatApiTestCase):
+    """The 'full' context-handoff extension: a swarm orchestrator (or any
+    external harness) seeds the worker's fresh session with its forked
+    conversation via ``seed_messages``; the engine declares its own tool
+    roster after the seed and pins the mission against trimming."""
+
+    _SEED = [
+        {"role": "user", "content": "please build a fantasy village"},
+        {"role": "assistant", "content": "Planning the village."},
+    ]
+
+    def _capturing_llm(self, requests):
+        from agentcore.llm import LlmChunk, LlmClient
+
+        class FakeLlm(LlmClient):
+            async def stream(self, request):
+                requests.append(request)
+                yield LlmChunk(content="done — proof of work")
+
+        return FakeLlm
+
+    def test_seed_messages_fork_the_session(self) -> None:
+        requests: list = []
+        runtime, client = self._client(self._capturing_llm(requests))
+        response = client.post("/v1/chat/completions", json={
+            "user": "task-1",
+            "messages": [{"role": "user", "content": "your task: build the well"}],
+            "seed_messages": self._SEED,
+        })
+        self.assertEqual(response.status_code, 200)
+        wire = requests[0]["messages"]
+        # system, forked seed, this session's tool roster, pinned mission.
+        self.assertEqual([m["role"] for m in wire],
+                         ["system", "user", "assistant", "user", "user"])
+        self.assertEqual(wire[1]["content"], "please build a fantasy village")
+        self.assertIn("[Context handoff]", wire[3]["content"])
+        self.assertIn("build the well", wire[4]["content"])
+        session_id = next(str(s["id"]) for s in runtime.list_sessions()
+                          if str(s["id"]).startswith("api-task-1-"))
+        engine = runtime._get_or_load_session(session_id).engine  # pylint: disable=protected-access
+        self.assertTrue(engine.records[0].get("pinned"))
+
+    def test_seed_ignored_on_existing_session(self) -> None:
+        requests: list = []
+        _runtime, client = self._client(self._capturing_llm(requests))
+        body = {"user": "task-2",
+                "messages": [{"role": "user", "content": "first turn"}]}
+        self.assertEqual(client.post("/v1/chat/completions", json=body).status_code, 200)
+        body = {"user": "task-2",
+                "messages": [{"role": "user", "content": "second turn"}],
+                "seed_messages": self._SEED}
+        self.assertEqual(client.post("/v1/chat/completions", json=body).status_code, 200)
+        wire = requests[1]["messages"]
+        # Not an injection channel: the seed must NOT appear mid-history.
+        self.assertTrue(all("fantasy village" not in str(m.get("content", ""))
+                            for m in wire))
+
+
 if __name__ == "__main__":
     unittest.main()

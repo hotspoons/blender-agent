@@ -176,20 +176,41 @@ class RoundResult:
 _COMPLETE_TIMEOUT_SECONDS = 240.0
 
 
+def _text_only(messages: "list[dict[str, Any]]") -> "list[dict[str, Any]]":
+    """Forked messages with inline images flattened to placeholders — judge
+    completions carry no vision fallback, so an image part would hard-fail
+    the request on a text-only endpoint."""
+    out: list[dict[str, Any]] = []
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            text = "\n".join(
+                part.get("text", "") if part.get("type") == "text" else "[image omitted]"
+                for part in content)
+            message = {**message, "content": text}
+        out.append(message)
+    return out
+
+
 async def _complete(llm: LlmClient, model: str, system: str, user: str,
                     timeout: float = _COMPLETE_TIMEOUT_SECONDS,
                     on_delta: "Callable[[str, str], Awaitable[None]] | None" = None,
-                    trace_label: str = "complete") -> str:
+                    trace_label: str = "complete",
+                    prefix: "list[dict[str, Any]] | None" = None) -> str:
     """One completion; returns the content (falling back to the reasoning trace
     when a reasoning model answers there and leaves content empty). Bounded by
     *timeout* so a hang surfaces as a partial/empty result. When *on_delta* is
     given it is awaited per chunk with ``(content_delta, reasoning_delta)`` so a
     caller can stream the planner/draft "looking around" to the UI. *trace_label*
-    tags the call for the context trace (BLENDER_AGENT_TRACE_CONTEXT)."""
+    tags the call for the context trace (BLENDER_AGENT_TRACE_CONTEXT). *prefix*
+    interposes forked conversation messages between system and user ('full'
+    handoff: the evaluator/reviewer judges with the parent context in view, and
+    identical prefixes across calls share the server's KV cache)."""
     request = {
         "model": model,
         "messages": [
             {"role": "system", "content": system},
+            *_text_only(prefix or []),
             {"role": "user", "content": user},
         ],
         "_trace_label": trace_label,
@@ -489,10 +510,15 @@ class StateAwareEvaluator:
             llm: LlmClient,
             model: str,
             probe: Callable[[], Awaitable[str]] | None = None,
+            seed: "Callable[[], list[dict[str, Any]]] | None" = None,
     ) -> None:
         self._llm = llm
         self._model = model
         self._probe = probe
+        # 'full' handoff: the verdict call carries the forked parent
+        # conversation, so objectives are judged against the user's actual
+        # asks — not just the objective text.
+        self._seed = seed
 
     async def evaluate(
             self,
@@ -517,7 +543,8 @@ class StateAwareEvaluator:
             "OBJECTIVES:\n{:s}\n\nWORKER PROOFS (claims):\n{:s}\n\n"
             "PROJECT STATE (ground truth):\n{:s}".format(objs, proofs, state)
         )
-        text = await _complete(self._llm, self._model, _EVAL_SYSTEM, user, trace_label="evaluator")
+        text = await _complete(self._llm, self._model, _EVAL_SYSTEM, user, trace_label="evaluator",
+                               prefix=self._seed() if self._seed is not None else None)
         data = _extract_json_object(text)
         verdicts: list[GoalVerdict] = []
         seen: set[str] = set()
@@ -1053,6 +1080,7 @@ class AutonomyOrchestrator:
             handoff: str = "",
             compactor: "Callable[[list[Objective], str], Awaitable[str]] | None" = None,
             context: str = "",
+            full_fork: bool = False,
             pre_eval: "Callable[[list[WorkerTask], list[WorkerResult]], Awaitable[None]] | None" = None,
     ) -> None:
         self._planner = planner
@@ -1067,6 +1095,11 @@ class AutonomyOrchestrator:
         self._handoff = handoff or (HANDOFF_HANDOFF if share_context else HANDOFF_BLIND)
         self._compactor = compactor
         self._context = context     # the orchestrator's conversation, for 'full'
+        # True when the worker runner forks the parent conversation itself
+        # (message-level seed, KV-cache-shareable) — 'full' then skips the
+        # text paste here. False = paste fallback (e.g. subprocess swarm
+        # workers, which take a string brief but no message seed).
+        self._full_fork = full_fork
         # Runs after the workers finish but BEFORE evaluation (swarm uses it to
         # gather components into the assembled master, so integration objectives
         # are judged against the assembled scene, not loose parts).
@@ -1094,7 +1127,10 @@ class AutonomyOrchestrator:
           handoff    — concise objectives + status (cheap)
           compaction — a dense brief from the injected compactor (one pass), else
                        falls back to handoff
-          full       — objectives + status + the orchestrator's conversation"""
+          full       — objectives + status + the orchestrator's conversation
+                       (as text; when the runner forks the conversation at
+                       message level instead, only the concise brief rides
+                       here — the fork carries the rest)"""
         mode = self._handoff
         if mode == HANDOFF_BLIND:
             return
@@ -1104,7 +1140,7 @@ class AutonomyOrchestrator:
             except Exception as ex:  # pylint: disable=broad-except
                 _log.warning("handoff compaction failed (%s); using concise handoff", ex)
                 brief = self._shared_context(objectives)
-        elif mode == HANDOFF_FULL:
+        elif mode == HANDOFF_FULL and not self._full_fork:
             brief = self._shared_context(objectives)
             if self._context:
                 brief = "Full orchestrator context:\n{:s}\n\n{:s}".format(self._context, brief)
