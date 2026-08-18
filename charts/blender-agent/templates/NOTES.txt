@@ -24,6 +24,21 @@ browser UI and (optionally) MCP-over-HTTP are exposed.
 MCP-over-HTTP is exposed on port {{ .Values.service.mcpPort }}; point clients' .mcp.json at it
 ("type": "http", "url": "http://<host>:{{ .Values.service.mcpPort }}").
 {{- end }}
+{{- if .Values.agent.acp.enabled }}
+
+ACP (Agent Client Protocol - v2 draft, v1 compatible) is exposed on port
+{{ .Values.service.acpPort }}. Point an ACP client or orchestrator at the WebSocket endpoint:
+
+    ws://<host>:{{ .Values.service.acpPort }}/
+
+Version is negotiated on `initialize`: send protocolVersion 2 for the draft, or
+1 for the stable release; the agent answers with the version it will serve.
+{{- else }}
+
+ACP (Agent Client Protocol) is reachable at ws://<host>:{{ .Values.service.port }}/acp on the UI
+port. Set agent.acp.enabled=true to bind it a dedicated port instead, so an
+orchestrator can reach ACP without the UI being exposed.
+{{- end }}
 
 This pod spawns its own headless Blender as the compute surface, so no external
 Blender bridge is required.

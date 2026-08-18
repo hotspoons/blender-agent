@@ -62,6 +62,15 @@ Reference Data
 
      Usage: make update_reference_api API_DIR=/path/to/api
 
+   * update_acp_schema:
+     Re-vendor the pinned ACP v2 draft schema and regenerate the Pydantic
+     models in agent/agentcore/acp/models_v2.py. v2 is a DRAFT: read the
+     diff, and expect renamed types between alphas.
+     Requires: pip install datamodel-code-generator
+
+     Usage: make update_acp_schema           (regenerate from vendored)
+            make update_acp_schema FETCH=1   (re-download at the pinned sha)
+
 Environment Variables
    Variables may be set in a .env file (loaded automatically).
 
@@ -179,3 +188,6 @@ update_reference_manual:
 update_reference_api:
 	@test -n "$(API_DIR)" || { echo "Usage: make update_reference_api API_DIR=/path/to/api"; exit 1; }
 	$(PYTHON) _misc/update_reference_api.py "$(API_DIR)"
+
+update_acp_schema:
+	cd agent && $(PYTHON) -m agentcore.acp.schema.regen $(if $(FETCH),--fetch,)

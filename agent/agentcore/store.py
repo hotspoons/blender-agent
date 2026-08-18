@@ -194,6 +194,16 @@ class AgentConfig:
     # in this process; "swarm" = each worker a real subprocess with its own
     # headless Blender (RemoteWorkerStrategy). Default keeps everything local.
     autonomy_workers: str = "in_process"
+    # Which protocol the orchestrator drives SUBPROCESS workers over:
+    #   "chat" — the worker's OpenAI-compatible /v1/chat/completions + SSE, with
+    #            tool calls and media in non-standard delta fields. The original
+    #            wire; kept as the default until ACP has proven parity.
+    #   "acp"  — the Agent Client Protocol (v2 draft): cancellation, steering
+    #            and tool-call reporting are first-class rather than bolted on.
+    #            Steering a running worker in particular needs v2, which drops
+    #            v1's turn-based session semantics.
+    # No effect on in-process workers, which are called directly with no wire.
+    autonomy_wire: str = "chat"
     # The composer's autonomy slider position, escalating capability:
     #   "ask"          -> chat, confirm mutative tool calls (autonomy="ask")
     #   "yolo"         -> chat, no confirms (autonomy="auto")
@@ -247,6 +257,7 @@ class AgentConfig:
             "autonomy_qa": self.autonomy_qa,
             "autonomy_planner_tools": self.autonomy_planner_tools,
             "autonomy_workers": self.autonomy_workers,
+            "autonomy_wire": self.autonomy_wire,
             "autonomy_level": self.autonomy_level,
         }
 

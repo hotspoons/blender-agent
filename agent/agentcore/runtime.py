@@ -11,6 +11,7 @@ WebSocket client.
 
 __all__ = (
     "AgentRuntime",
+    "SessionSubscription",
 )
 
 import asyncio
@@ -344,6 +345,40 @@ up, and what is missing or wrong.
 """
 
 
+class SessionSubscription:
+    """
+    A per-session view of the event stream that reports its own overflow.
+
+    The broadcast queues behind ``AgentRuntime.subscribe`` drop a consumer that
+    falls behind, which is the right trade for the web UI: it re-renders from
+    the transcript and loses nothing that matters. A protocol client has no
+    such fallback -- a silently truncated stream reads as a complete
+    conversation that is missing the middle. So this records ``overflowed`` and
+    stops accepting, leaving the reader to force a resync.
+
+    Worker events are included: they carry the worker's own id in
+    ``session_id`` and the owning session in ``parent_session_id``, and a
+    client watching a session wants to see the work it delegated.
+    """
+
+    def __init__(self, session_id: str, maxsize: int = 4096) -> None:
+        self.session_id = session_id
+        self.queue: "asyncio.Queue[dict[str, Any]]" = asyncio.Queue(maxsize=maxsize)
+        self.overflowed = False
+
+    def matches(self, event: "dict[str, Any]") -> bool:
+        return (event.get("session_id") == self.session_id
+                or event.get("parent_session_id") == self.session_id)
+
+    def offer(self, event: "dict[str, Any]") -> None:
+        if self.overflowed or not self.matches(event):
+            return
+        try:
+            self.queue.put_nowait(event)
+        except asyncio.QueueFull:
+            self.overflowed = True
+
+
 class _Session:
     """
     One conversation: engine + media library + at most one running turn.
@@ -443,6 +478,9 @@ class AgentRuntime:
         self._conductor_results: dict[str, dict[str, dict[str, Any]]] = {}
         self._view_emit_at: dict[str, float] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
+        self._session_subscribers: set["SessionSubscription"] = set()
+        # session_id -> autonomy level, when that session has chosen its own.
+        self._autonomy_overrides: dict[str, str] = {}
         self._system_prompt = self._load_system_prompt()
 
     def _core_tools(self) -> list[Tool]:
@@ -502,6 +540,8 @@ class AgentRuntime:
         self._active_run = {}
         self._view_emit_at = {}
         self._subscribers = set()
+        self._session_subscribers = set()
+        self._autonomy_overrides = {}
         self._system_prompt = self._load_system_prompt()
         return self
 
@@ -521,6 +561,24 @@ class AgentRuntime:
     def unsubscribe(self, queue: "asyncio.Queue[dict[str, Any]]") -> None:
         self._subscribers.discard(queue)
 
+    def subscribe_session(self, session_id: str) -> "SessionSubscription":
+        """
+        Subscribe to one session's events, overflow-aware.
+
+        ``subscribe`` is right for the web UI, which can always re-render from
+        the transcript on disk, so dropping a slow consumer costs nothing. A
+        protocol client has no such fallback: silently discarding its stream
+        would leave it believing it had seen the whole conversation. This
+        subscription records the overflow instead, so the reader can tell the
+        client to resync rather than hand it a hole.
+        """
+        subscription = SessionSubscription(session_id)
+        self._session_subscribers.add(subscription)
+        return subscription
+
+    def unsubscribe_session(self, subscription: "SessionSubscription") -> None:
+        self._session_subscribers.discard(subscription)
+
     async def emit(self, event: dict[str, Any]) -> None:
         for queue in list(self._subscribers):
             try:
@@ -528,6 +586,8 @@ class AgentRuntime:
             except asyncio.QueueFull:
                 # Slow consumer; drop it rather than stall the engine.
                 self._subscribers.discard(queue)
+        for subscription in list(self._session_subscribers):
+            subscription.offer(event)
 
     # ------------------------------------------------------------------
     # Sessions.
@@ -916,15 +976,15 @@ class AgentRuntime:
         # delegates, owns objectives) — context carries across messages, and a
         # message mid-run steers it rather than starting over. Swarm still uses
         # the round-based run; ask/yolo use the plain chat turn below.
-        if autonomy is None and self.store.config.autonomy_level == "orchestrator" \
-                and self.store.config.autonomy_workers != "swarm":
+        level, session_autonomy, workers = self.autonomy_for(session_id)
+        if autonomy is None and level == "orchestrator" and workers != "swarm":
             return await self.run_conductor_turn(session_id, content, media_ids=media_ids)
         session = self._get_or_load_session(session_id)
         if session.busy:
             raise RuntimeError("a turn is already running in this session")
 
         config = self.store.config
-        turn_autonomy = autonomy if autonomy is not None else config.autonomy
+        turn_autonomy = autonomy if autonomy is not None else session_autonomy
         llm = self._make_llm()
         model = self._model_name()
 
@@ -997,6 +1057,20 @@ class AgentRuntime:
 
     # ------------------------------------------------------------------
     # Autonomy mode (blagent.autonomy).
+
+    def _worker_wire(self) -> "Any":
+        """
+        The wire subprocess workers are driven over (``autonomy_wire``).
+
+        ``None`` lets the strategy build its own chat-completions default from
+        its domain field names, so the original path stays byte-identical while
+        ACP is being proven. Only an explicit "acp" changes the protocol.
+        """
+        if self.store.config.autonomy_wire != "acp":
+            return None
+        from agentcore.acp.worker import AcpWire
+        _log.info("swarm: driving workers over ACP")
+        return AcpWire()
 
     def _make_probe(self, session_id: str) -> "Callable[[], Awaitable[str]]":
         """A read-only state snapshot for the goal evaluator (ground truth),
@@ -1438,6 +1512,9 @@ class AgentRuntime:
             raise RuntimeError("a turn is already running in this session")
 
         config = self.store.config
+        # This session's worker isolation, which may differ from the stored
+        # default when the session set its own level.
+        session_workers = self.autonomy_for(session_id)[2]
         llm = self._make_llm()
         model = self._model_name()
         # Prior conversation, captured before the objectives record is pushed,
@@ -1511,7 +1588,7 @@ class AgentRuntime:
         step_store = InMemoryGraphData()
         pre_eval: "Callable[[Any, Any], Awaitable[None]] | None" = None
         gathered: "dict[str, Any]" = {"path": None}   # master produced by the swarm pre-eval gather
-        if config.autonomy_workers == "swarm" and config.endpoint and self.swarm_provider is not None:
+        if session_workers == "swarm" and config.endpoint and self.swarm_provider is not None:
             # Fetch the welcome ONCE in the parent and pin it into each subprocess
             # worker/gather prompt, so they skip re-calling `welcome` (5+ workers
             # would otherwise each burn a turn on identical, static content).
@@ -1523,7 +1600,8 @@ class AgentRuntime:
                 api_key=config.api_key, emit=persist_emit, session_id=session_id,
                 welcome=swarm_welcome, seed=seed,
                 register_stop=self._register_swarm_worker,
-                unregister_stop=self._unregister_swarm_worker)
+                unregister_stop=self._unregister_swarm_worker,
+                wire=self._worker_wire())
             runner: "Callable[[Any], Awaitable[Any]]" = swarm_strategy
             # Dependency-gated, parallel within a generation: parts fan out, then
             # the planner's assemble node, then validate.
@@ -2043,6 +2121,26 @@ class AgentRuntime:
         """True only for in-process workers (a live engine to inject into)."""
         return agent_id in self._workers
 
+    def session_busy(self, session_id: str) -> bool:
+        """Whether a turn is currently running in this session."""
+        session = self._sessions.get(session_id)
+        return session is not None and session.busy
+
+    def inject_into_session(self, session_id: str, content: str, now: bool = False) -> bool:
+        """
+        Queue a message into a session's RUNNING turn.
+
+        The steering counterpart of ``inject_into_worker`` for an ordinary
+        session: a protocol client prompting a busy session is guiding the turn
+        in flight, not starting a new one. Lands at the next round boundary so a
+        tool mid-execution is never cut in half.
+        """
+        session = self._sessions.get(session_id)
+        if session is None or not session.busy:
+            return False
+        session.engine.inject(content, now=now)
+        return True
+
     def inject_into_worker(self, agent_id: str, content: str, now: bool = False) -> bool:
         """
         Voice of god: push *content* straight into a running worker's context,
@@ -2190,6 +2288,10 @@ class AgentRuntime:
             config.autonomy_planner_tools = bool(updates["autonomy_planner_tools"])
         if "autonomy_workers" in updates:
             config.autonomy_workers = str(updates["autonomy_workers"])
+        if "autonomy_wire" in updates:
+            value = str(updates["autonomy_wire"])
+            if value in ("chat", "acp"):
+                config.autonomy_wire = value
         if "autonomy_level" in updates:
             config.autonomy_level = str(updates["autonomy_level"])
         self.store.save_config()
@@ -2218,12 +2320,43 @@ class AgentRuntime:
 
     _SINGLE_LEVELS = ("ask", "yolo")
 
+    @staticmethod
+    def _autonomy_knobs(level: str) -> "tuple[str, str]":
+        """The (autonomy, workers) a level implies."""
+        return ("ask" if level == "ask" else "auto",
+                "swarm" if level == "swarm" else "in_process")
+
+    def autonomy_for(self, session_id: str) -> "tuple[str, str, str]":
+        """
+        The effective ``(level, autonomy, workers)`` for one session.
+
+        A session that has set its own level uses it; otherwise the stored
+        config applies, which is the deployment's default for new sessions.
+        Resolved per session rather than read straight off the config because
+        one agent now serves several clients at once (web UI windows and ACP
+        connections), and a level is a property of a conversation, not of the
+        process.
+
+        Falling back to the config VERBATIM rather than re-deriving the knobs
+        matters: ``autonomy_workers`` can be set independently of the level
+        (see ``loader``), and re-deriving would quietly discard that.
+        """
+        config = self.store.config
+        level = self._autonomy_overrides.get(session_id)
+        if level is None:
+            return config.autonomy_level, config.autonomy, config.autonomy_workers
+        autonomy, workers = self._autonomy_knobs(level)
+        return level, autonomy, workers
+
     def set_autonomy_level(self, session_id: str, level: str) -> dict[str, object]:
         """
         Set the autonomy slider. If a turn is in flight, DEFER the switch until
         it completes (or until the user stops) so it never disrupts a running
         turn; otherwise apply immediately. Maps the level onto config knobs and
         re-grounds the agent with a role-change notice + tool catalog.
+
+        With a *session_id* the change is scoped to that conversation. Without
+        one it sets the stored default for sessions that have not chosen.
         """
         if level == "minimal":  # legacy alias
             level = "ask"
@@ -2232,18 +2365,38 @@ class AgentRuntime:
         session = self._sessions.get(session_id) if session_id else None
         if session is not None and session.busy:
             self._pending_autonomy[session_id] = level
-            public = self.store.config.as_public()
+            public = self._public_autonomy(session_id)
             public["pending_autonomy"] = level
             return public
         return self._apply_autonomy_level(session_id, level)
 
+    def _public_autonomy(self, session_id: str) -> dict[str, object]:
+        """
+        Config for the UI, with this session's effective autonomy folded in.
+
+        Carries ``session_id`` so a client can tell whether an echo is about
+        the conversation it is looking at: the config event is broadcast to
+        every subscriber, and a per-session level applied blindly would move
+        another window's slider.
+        """
+        public = self.store.config.as_public()
+        level, autonomy, workers = self.autonomy_for(session_id)
+        public["autonomy_level"] = level
+        public["autonomy"] = autonomy
+        public["autonomy_workers"] = workers
+        public["session_id"] = session_id
+        return public
+
     def _apply_autonomy_level(self, session_id: str, level: str) -> dict[str, object]:
-        config = self.store.config
-        prev = config.autonomy_level
-        config.autonomy_level = level
-        config.autonomy = "ask" if level == "ask" else "auto"
-        config.autonomy_workers = "swarm" if level == "swarm" else "in_process"
-        self.store.save_config()
+        prev = self.autonomy_for(session_id)[0]
+        if session_id:
+            self._autonomy_overrides[session_id] = level
+        else:
+            # No session: this is the stored default for future sessions.
+            config = self.store.config
+            config.autonomy_level = level
+            config.autonomy, config.autonomy_workers = self._autonomy_knobs(level)
+            self.store.save_config()
         # Swarm spawns a worker surface per worker on the host — surface its
         # cross-platform requirements (and any missing ones) up front. The
         # domain swarm_provider knows what those are; a build without one has
@@ -2264,7 +2417,7 @@ class AgentRuntime:
                 "role": "user", "content": notice,
                 "synthetic": True, "autonomy_notice": level,
             })
-        public = config.as_public()
+        public = self._public_autonomy(session_id)
         public["pending_autonomy"] = None
         if level == "swarm":
             public["swarm_preflight"] = {"ready": swarm_ready, "report": swarm_report}

@@ -19,3 +19,9 @@ spec:
       targetPort: mcp-http
       protocol: TCP
     {{- end }}
+    {{- if .Values.agent.acp.enabled }}
+    - name: acp
+      port: {{ .Values.service.acpPort }}
+      targetPort: acp
+      protocol: TCP
+    {{- end }}

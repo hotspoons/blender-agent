@@ -1,0 +1,1 @@
+{"time": "2026-07-23T16:11:20Z", "skill": "weights.bind", "stage": "run", "blend": "/tmp/blrig_snapshot_vjv7jt2a.blend", "report": {"ok": false, "fail": "bind_unweighted", "suggest": "weights('transfer') from a weighted mesh first, or pass {'allow_unweighted': True} if weights come later", "object": "Knight_Mesh", "errors": ["E_NO_DEFORM_GROUPS"]}}

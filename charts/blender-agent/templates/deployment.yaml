@@ -51,6 +51,11 @@ spec:
               containerPort: {{ .Values.service.mcpPort }}
               protocol: TCP
             {{- end }}
+            {{- if .Values.agent.acp.enabled }}
+            - name: acp
+              containerPort: {{ .Values.service.acpPort }}
+              protocol: TCP
+            {{- end }}
           env:
             - name: BLENDER_AGENT_HOST
               value: "0.0.0.0"
@@ -73,6 +78,10 @@ spec:
             {{- if .Values.agent.mcpHttp.enabled }}
             - name: BLENDER_AGENT_MCP_PORT
               value: {{ .Values.service.mcpPort | quote }}
+            {{- end }}
+            {{- if .Values.agent.acp.enabled }}
+            - name: BLENDER_AGENT_ACP_PORT
+              value: {{ .Values.service.acpPort | quote }}
             {{- end }}
             {{- with .Values.agent.title }}
             - name: BLENDER_AGENT_TITLE

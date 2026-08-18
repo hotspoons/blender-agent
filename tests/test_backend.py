@@ -356,15 +356,20 @@ class TestRuntimeBackendWiring(unittest.TestCase):
                 await asyncio.sleep(0.3)
             session.task = asyncio.ensure_future(busywork())
             out["deferred"] = rt.set_autonomy_level(sid, "orchestrator")   # busy -> defer
-            out["mid"] = rt.store.config.autonomy_level
+            out["mid"] = rt.autonomy_for(sid)[0]
             await session.task                                            # turn ends
             await rt._apply_pending_autonomy(sid)
-            out["after"] = rt.store.config.autonomy_level
+            # The level is per SESSION now (one agent serves several clients),
+            # so read the session's effective level, not the process config.
+            out["after"] = rt.autonomy_for(sid)[0]
+            out["stored"] = rt.store.config.autonomy_level
 
         _run(scenario())
         self.assertEqual(out["deferred"].get("pending_autonomy"), "orchestrator")
         self.assertEqual(out["mid"], "yolo")            # not switched mid-turn
         self.assertEqual(out["after"], "orchestrator")  # applied at turn end
+        # ... and the stored default is left alone for everyone else.
+        self.assertEqual(out["stored"], "yolo")
         self.assertNotIn(sid, rt._pending_autonomy)
 
     def test_autonomy_switch_immediate_when_idle_with_role_note(self) -> None:

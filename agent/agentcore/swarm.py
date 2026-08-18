@@ -47,13 +47,9 @@ import urllib.error
 import urllib.request
 from typing import Any, Awaitable, Callable
 
+from agentcore.worker_wire import ChatCompletionsWire, WorkerWire
+
 _log = logging.getLogger("agentcore.swarm")
-
-# Markdown image with an inlined data: URL — chat_api adds these to the
-# assistant text so plain clients still receive tool media. We surface media
-# as its own event, so these (often huge) blobs are stripped from the prose.
-_DATA_URL_MD_RE = re.compile(r"!\[[^\]]*\]\(data:[^)]*\)")
-
 
 def _safe(name: str) -> str:
     return re.sub(r"[^a-z0-9_-]+", "_", name.lower()).strip("_") or "x"
@@ -112,6 +108,7 @@ class WorkerInstance:
             api_key: str = "",
             release_ports: "tuple[int, ...]" = (),
             log_name: str = "worker.log",
+            ready_path: str = "/v1/models",
     ) -> None:
         self.worker_id = worker_id
         self.api_port = api_port
@@ -121,12 +118,31 @@ class WorkerInstance:
         self._env_overrides = dict(env or {})
         self._api_key = api_key
         self._release_ports = tuple(release_ports) or (api_port,)
+        # Which path proves the worker is up. Depends on what it is serving:
+        # the chat API answers /v1/models, but an ACP-only worker need not
+        # enable the chat API at all, and /healthz is always there.
+        self._ready_path = ready_path
         self.proc: "subprocess.Popen[bytes] | None" = None
         self._log_path = os.path.join(data_dir, log_name)
 
     @property
     def base_url(self) -> str:
         return "http://{:s}:{:d}/v1".format(self.host, self.api_port)
+
+    @property
+    def ready_url(self) -> str:
+        return "http://{:s}:{:d}{:s}".format(self.host, self.api_port, self._ready_path)
+
+    def adopt_wire(self, ready_path: str, launch_env: "dict[str, str]") -> None:
+        """
+        Adapt this worker to the wire that will drive it.
+
+        Applied after the domain has built the launch command, so a domain's
+        ``_make_worker`` never has to know which protocol the orchestrator
+        chose -- it describes the surface, the wire describes the conversation.
+        """
+        self._ready_path = ready_path
+        self._env_overrides.update(launch_env)
 
     def start(self, allocator: "PortAllocator | None" = None) -> None:
         """
@@ -149,11 +165,11 @@ class WorkerInstance:
 
     async def wait_ready(self, timeout: float = 150.0, poll: float = 1.0) -> bool:
         """
-        Poll the worker's ``/v1/models`` until it answers (the chat API is up
-        and its compute surface has come online). False if it dies or times out.
+        Poll the worker's readiness path until it answers (its server is up and
+        its compute surface has come online). False if it dies or times out.
         """
         deadline = time.monotonic() + timeout
-        url = self.base_url + "/models"
+        url = self.ready_url
         while time.monotonic() < deadline:
             if self.proc is not None and self.proc.poll() is not None:
                 _log.warning("worker %s exited early (rc=%s); see %s",
@@ -238,10 +254,6 @@ class RemoteWorkerStrategy:
     lifecycle, SSE streaming and gather orchestration are all here.
     """
 
-    # OpenAI tool-call status (chat_api) -> the runtime's tool_status states,
-    # so streamed swarm activity matches what in-process workers emit.
-    _STATUS_TO_STATE = {"running": "running", "done": "ok", "error": "error"}
-
     # Delta fields a worker's chat_api uses for tool calls / media, and the
     # model label sent in the request body. A branded build overrides these.
     _TOOL_CALLS_KEY = "tool_calls"
@@ -270,6 +282,7 @@ class RemoteWorkerStrategy:
             seed: "Callable[[], list[dict[str, Any]]] | None" = None,
             register_stop: "Callable[[str, Callable[[], None]], None] | None" = None,
             unregister_stop: "Callable[[str], None] | None" = None,
+            wire: "WorkerWire | None" = None,
     ) -> None:
         self._endpoint = endpoint
         self._model = model
@@ -295,7 +308,21 @@ class RemoteWorkerStrategy:
         self._session_id = session_id
         self._register_stop = register_stop
         self._unregister_stop = unregister_stop
+        # How to talk to a worker. Defaults to the chat-completions wire built
+        # from this strategy's field-name overrides, so a domain subclass keeps
+        # working unchanged; a caller passes AcpWire to run the same swarm over
+        # the protocol instead.
+        self._wire = wire or ChatCompletionsWire(
+            model=self._CHAT_MODEL,
+            tool_calls_key=self._TOOL_CALLS_KEY,
+            media_key=self._MEDIA_KEY,
+        )
         os.makedirs(exchange_dir, exist_ok=True)
+
+    @property
+    def wire(self) -> "WorkerWire":
+        """The wire this strategy drives its workers over."""
+        return self._wire
 
     # --- domain hooks ------------------------------------------------------
     # A subclass MUST implement _make_worker (how to launch one for its
@@ -308,6 +335,12 @@ class RemoteWorkerStrategy:
     def _make_worker(self, worker_id: str, api_port: int, data_dir: str) -> WorkerInstance:
         """Build (but don't start) a worker subprocess for this surface."""
         raise NotImplementedError("subclass must build the worker launch command")
+
+    def _build_worker(self, worker_id: str, api_port: int, data_dir: str) -> WorkerInstance:
+        """``_make_worker``, then adapted to the active wire."""
+        worker = self._make_worker(worker_id, api_port, data_dir)
+        worker.adopt_wire(self._wire.ready_path, self._wire.launch_env)
+        return worker
 
     def _artifact_name(self, task_id: str) -> str:
         return "component_{:s}".format(_safe(task_id))
@@ -393,92 +426,27 @@ class RemoteWorkerStrategy:
                     cancel: "asyncio.Event | None" = None,
                     seed_messages: "list[dict[str, Any]] | None" = None) -> str:
         """
-        Drive a worker over its OpenAI endpoint and return its final text.
+        Drive one worker conversation and return its final report.
 
-        When *agent_id* is given and an emit sink is configured, stream the
-        response (SSE) and translate each delta into ``token`` / ``tool_status``
-        events tagged for that worker's card — so the user sees the worker's
-        tool calls and prose live, not just the final proof. *cancel* breaks
-        the stream early (the caller also kills the subprocess).
+        The protocol lives in ``self._wire``; this only decides whether to
+        stream. When *agent_id* is given and an emit sink is configured, the
+        wire's activity is tagged for that worker's card, so the user sees the
+        worker's tool calls and prose live rather than just the final proof.
+        *cancel* ends the exchange early (the caller also kills the subprocess).
         """
-        import httpx  # pylint: disable=import-error
+        emit: "Callable[[dict[str, Any]], Awaitable[None]] | None" = None
+        if agent_id is not None and self._emit is not None:
+            async def emit_for_card(event: "dict[str, Any]", _id: str = agent_id) -> None:
+                await self._emit_worker(_id, event)
+            emit = emit_for_card
+        return await self._wire.converse(
+            base_url, prompt,
+            user=user, emit=emit, cancel=cancel, seed_messages=seed_messages,
+            timeout=self._task_timeout, api_key=self._api_key)
 
-        headers = {"Authorization": "Bearer " + self._api_key} if self._api_key else {}
-        stream = agent_id is not None and self._emit is not None
-        body = {
-            "model": self._CHAT_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "user": user,
-            "stream": stream,
-        }
-        if seed_messages:
-            # Fork extension (see blagent.chat_api): the worker seeds its
-            # session with this conversation and pins the mission message.
-            body["seed_messages"] = seed_messages
-            body["pin_user"] = True
-        if not stream:
-            async with httpx.AsyncClient(timeout=self._task_timeout) as client:
-                resp = await client.post(base_url + "/chat/completions", json=body, headers=headers)
-                resp.raise_for_status()
-                data = resp.json()
-            message = (data.get("choices") or [{}])[0].get("message") or {}
-            return str(message.get("content") or "")
-
-        assert agent_id is not None
-        text_parts: list[str] = []
-        async with httpx.AsyncClient(timeout=self._task_timeout) as client:
-            async with client.stream(
-                    "POST", base_url + "/chat/completions",
-                    json=body, headers=headers) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if cancel is not None and cancel.is_set():
-                        break
-                    if not line.startswith("data: "):
-                        continue
-                    payload = line[len("data: "):].strip()
-                    if payload == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(payload)
-                    except ValueError:
-                        continue
-                    delta = (chunk.get("choices") or [{}])[0].get("delta") or {}
-                    await self._stream_delta(agent_id, delta, text_parts)
-        # Strip inlined data-URL images from the proof; media is surfaced
-        # separately and the raw blobs would bloat the report.
-        return _DATA_URL_MD_RE.sub("", "".join(text_parts)).strip()
-
-    async def _stream_delta(self, agent_id: str, delta: dict[str, Any],
-                            text_parts: list[str]) -> None:
-        """Translate one OpenAI delta into worker-card events."""
-        content = delta.get("content")
-        if content:
-            text_parts.append(str(content))
-            # chat_api inlines tool media as a markdown ![](data:...) in the
-            # text for plain clients; we surface media as its own event, so
-            # strip the (huge) data-URL blobs from the streamed prose.
-            shown = _DATA_URL_MD_RE.sub("", str(content))
-            if shown:
-                await self._emit_worker(agent_id, {"type": "token", "text": shown})
-        for call in delta.get(self._TOOL_CALLS_KEY) or ():
-            state = self._STATUS_TO_STATE.get(str(call.get("status")), "error")
-            await self._emit_worker(agent_id, {
-                "type": "tool_status",
-                "call_id": str(call.get("call_id", "")),
-                "name": str(call.get("name", "")),
-                "arguments": call.get("args_json", ""),
-                "state": state,
-                "summary": call.get("summary", ""),
-            })
-        for media in delta.get(self._MEDIA_KEY) or ():
-            data_url = media.get("data_url")
-            if data_url:
-                await self._emit_worker(agent_id, {
-                    "type": "worker_media",
-                    "media_id": str(media.get("id", "")),
-                    "data_url": str(data_url),
-                })
+    def worker_endpoint(self, worker: WorkerInstance) -> str:
+        """Where this strategy's wire reaches *worker*."""
+        return self._wire.endpoint(worker.host, worker.api_port)
 
     # --- run + gather ------------------------------------------------------
 
@@ -500,7 +468,7 @@ class RemoteWorkerStrategy:
             return None
         api_port = self._allocator.allocate()
         worker_dir = os.path.join(self._exchange_dir, "gather")
-        worker = self._make_worker("gather", api_port, worker_dir)
+        worker = self._build_worker("gather", api_port, worker_dir)
         worker.start(allocator=self._allocator)
         try:
             if not await worker.wait_ready(self._ready_timeout):
@@ -514,7 +482,7 @@ class RemoteWorkerStrategy:
                     "agent_id": gather_id, "role": "gather",
                     "task": "merge {:d} components".format(len(components))})
             try:
-                proof = await self._chat(worker.base_url, prompt, user="gather",
+                proof = await self._chat(self.worker_endpoint(worker), prompt, user="gather",
                                          agent_id=gather_id)
             except Exception as ex:  # pylint: disable=broad-except
                 _log.warning("gather chat failed: %s", ex)
@@ -537,7 +505,7 @@ class RemoteWorkerStrategy:
         component = self._artifact_name(task.id)
         api_port = self._allocator.allocate()
         worker_dir = os.path.join(self._exchange_dir, "worker_{:s}".format(_safe(task.id)))
-        worker = self._make_worker(task.id, api_port, worker_dir)
+        worker = self._build_worker(task.id, api_port, worker_dir)
         # Stop hook: cancel the live stream + kill the subprocess (with its
         # compute surface). Registered before start so a "lala land" worker
         # can be stopped even while it is still coming up.
@@ -566,7 +534,7 @@ class RemoteWorkerStrategy:
                     _log.warning("swarm fork failed for %s (%s); running unseeded",
                                  task.id, ex)
             try:
-                proof = await self._chat(worker.base_url, prompt, user=task.id,
+                proof = await self._chat(self.worker_endpoint(worker), prompt, user=task.id,
                                          agent_id=agent_id, cancel=cancel,
                                          seed_messages=seed_messages)
             except Exception as ex:  # pylint: disable=broad-except

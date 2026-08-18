@@ -55,6 +55,8 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from agentcore.acp.bridge import RuntimeBridge
+from agentcore.acp.transport import acp_routes
 from agentcore.runtime import AgentRuntime
 
 # The generic shell shipped with agentcore. A domain build overlays its
@@ -246,6 +248,12 @@ def create_app(
         Mount("/static", app=LayeredStaticFiles(roots), name="static"),
     ]
 
+    # ACP (v2 draft + v1) on the main port, so any ACP-capable client or
+    # orchestrator can drive this agent without a second listener. A pod that
+    # wants ACP isolated from the UI binds it a port of its own as well; see
+    # the agent's --acp-port.
+    routes.extend(acp_routes(lambda: RuntimeBridge(runtime)))
+
     # A domain build injects its own endpoints here (e.g. blagent's
     # OpenAI-compatible chat facade), prepended so they take precedence.
     if extra_routes:
@@ -344,6 +352,9 @@ async def _handle_control(runtime: AgentRuntime, ws: WebSocket, data: dict[str, 
                 })
         elif msg_type == "set_autonomy_level":
             # The composer's autonomy slider: minimal | yolo | orchestrator | swarm.
+            # Scoped to the sender's session, so a second window (or an ACP
+            # client) on this agent keeps its own level. The echo carries
+            # session_id for that reason - see store.js.
             public = runtime.set_autonomy_level(
                 str(data.get("session_id", "")), str(data.get("level", "")))
             await runtime.emit({"type": "config", "config": public})

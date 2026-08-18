@@ -284,16 +284,24 @@ class Store extends EventTarget {
         }
         break;
       case "config": {
+        // Autonomy is per-session, and this event is broadcast to every
+        // window/client on the agent. Adopt the level only when the echo is
+        // about OUR session (or carries no session at all, i.e. the stored
+        // default) - otherwise another window's switch moves our slider.
+        const echoed = msg.config?.session_id;
+        const mine = !echoed || echoed === this.state.sessionId;
         const patch = {
           config: msg.config,
-          autonomyLevel: msg.config?.autonomy_level || this.state.autonomyLevel,
+          autonomyLevel: mine
+            ? (msg.config?.autonomy_level || this.state.autonomyLevel)
+            : this.state.autonomyLevel,
           // A switch requested mid-turn is deferred until the turn ends; show it.
-          pendingAutonomy: msg.config?.pending_autonomy || null,
+          pendingAutonomy: mine ? (msg.config?.pending_autonomy || null) : this.state.pendingAutonomy,
         };
         // Swarm readiness report (Blender present? off-screen GL? per-OS) —
         // surfaced when the user switches to swarm so missing requirements
         // are visible before a run, not mid-failure.
-        if (msg.config?.swarm_preflight) patch.swarmPreflight = msg.config.swarm_preflight;
+        if (mine && msg.config?.swarm_preflight) patch.swarmPreflight = msg.config.swarm_preflight;
         this._set(patch);
         break;
       }

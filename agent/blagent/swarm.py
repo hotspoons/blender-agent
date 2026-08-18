@@ -43,8 +43,11 @@ from agentcore.swarm import (
     PortAllocator,
     RemoteWorkerStrategy,
     WorkerInstance,
-    _DATA_URL_MD_RE,  # noqa: F401  (re-exported for tests / callers)
 )
+# Re-exported for tests / callers. Lives with the chat-completions wire now:
+# stripping inlined data-URL images is a property of that wire's delta format,
+# not of the worker lifecycle.
+from agentcore.worker_wire import _DATA_URL_MD_RE  # noqa: F401
 
 
 def _is_blend(path: str) -> bool:

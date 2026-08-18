@@ -27,6 +27,13 @@ if [ -n "${BLENDER_AGENT_MCP_PORT:-}" ]; then
     args+=(--mcp-port "${BLENDER_AGENT_MCP_PORT}")
 fi
 
+# ACP (v2 draft + v1) on a dedicated port. It is always reachable at /acp on
+# the UI port; a separate port lets a Service expose ACP to an orchestrator
+# without exposing the UI at all.
+if [ -n "${BLENDER_AGENT_ACP_PORT:-}" ]; then
+    args+=(--acp-port "${BLENDER_AGENT_ACP_PORT}")
+fi
+
 # Explicit data dir override (otherwise $XDG_DATA_HOME/blender-agent).
 if [ -n "${BLENDER_AGENT_DATA_DIR:-}" ]; then
     args+=(--data-dir "${BLENDER_AGENT_DATA_DIR}")

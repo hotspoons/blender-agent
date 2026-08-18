@@ -40,6 +40,8 @@ service:
   port: 10102
   # Optional MCP-over-HTTP listener. Enabled only when agent.mcpHttp.enabled.
   mcpPort: 10101
+  # Optional dedicated ACP listener. Enabled only when agent.acp.enabled.
+  acpPort: 10103
 
 ingress:
   enabled: false
@@ -83,6 +85,18 @@ agent:
 
   # Co-host the tools over streamable-HTTP MCP on service.mcpPort.
   mcpHttp:
+    enabled: false
+
+  # Agent Client Protocol (v2 draft, v1 compatible). ACP is ALWAYS served at
+  # /acp on service.port; enabling this additionally binds it on
+  # service.acpPort, so an ACP orchestrator can be given its own Service
+  # without the web UI being reachable.
+  #
+  # Use the WebSocket endpoint (ws://<host>:<acpPort>/). The Streamable HTTP
+  # binding is single-shot here: spec-compliant duplex over HTTP needs HTTP/2,
+  # which uvicorn does not serve - terminate HTTP/2 at the ingress if a client
+  # requires it.
+  acp:
     enabled: false
 
   # Title shown in the browser tab of the web UI.

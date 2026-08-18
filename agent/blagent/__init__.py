@@ -69,6 +69,7 @@ async def run_server(
         host: str = _DEFAULT_HOST,
         port: int | None = _DEFAULT_PORT,
         mcp_port: int | None = None,
+        acp_port: int | None = None,
         data_dir: str | None = None,
         open_browser: bool = False,
         port_auto: bool = True,
@@ -82,6 +83,11 @@ async def run_server(
     Run the agent server until cancelled. When *mcp_port* is given, the
     same tool registry is also exposed as a streamable-HTTP MCP server
     on that port (stateless, served at ``/``).
+
+    ACP (v2 draft + v1) is always mounted at ``/acp`` on the UI port.
+    *acp_port* additionally binds it on a port of its own, which is what a
+    stand-alone pod wants: an orchestrator reaches ACP without the UI port
+    being exposed at all.
 
     With *port_auto* (the default), ports already taken - e.g. by the
     agent of another Blender instance - are resolved by walking up to
@@ -110,18 +116,23 @@ async def run_server(
     from agentcore.runtime import AgentRuntime
     from agentcore.store import AgentStore
 
-    if port is None and mcp_port is None:
+    if port is None and mcp_port is None and acp_port is None:
         raise ValueError(
-            "nothing to serve: pass a UI port, an mcp_port, or both")
+            "nothing to serve: pass a UI port, an mcp_port, an acp_port, or a mix")
 
     if port_auto:
+        taken: "set[int]" = set()
         if port is not None:
             port = pick_free_port(host, port)
+            taken.add(port)
         if mcp_port is not None:
-            # Exclude the UI port just chosen - it is not bound yet, so
-            # the scan would otherwise consider it free.
-            mcp_port = pick_free_port(
-                host, mcp_port, exclude={port} if port is not None else None)
+            # Exclude the ports just chosen - they are not bound yet, so
+            # the scan would otherwise consider them free.
+            mcp_port = pick_free_port(host, mcp_port, exclude=taken)
+            taken.add(mcp_port)
+        if acp_port is not None:
+            acp_port = pick_free_port(host, acp_port, exclude=taken)
+            taken.add(acp_port)
 
     # Resolve / provision the Blender compute surface before building
     # the tool registry (which reads BLENDER_MCP_HOST/PORT lazily).
@@ -193,6 +204,19 @@ async def run_server(
             mcp.streamable_http_app(), host=host, port=mcp_port, log_level="warning",
         )))
 
+    if acp_port is not None:
+        from agentcore.acp.bridge import RuntimeBridge
+        from agentcore.acp.transport import acp_routes
+        from starlette.applications import Starlette
+
+        # ACP alone on its own listener, serving the SAME runtime as the UI:
+        # one agent, two doors. Served at "/" so a pod's ACP endpoint is just
+        # the host and port, with no path to agree on.
+        acp_app = Starlette(routes=acp_routes(lambda: RuntimeBridge(runtime), prefix="/"))
+        servers.append(uvicorn.Server(uvicorn.Config(
+            acp_app, host=host, port=acp_port, log_level="warning",
+            ws_ping_interval=None, ws_ping_timeout=None)))
+
     if open_browser and port is not None:
         import webbrowser
 
@@ -203,6 +227,10 @@ async def run_server(
     print("blender-agent: log file at {:s}".format(log_path), flush=True)
     if mcp_port is not None:
         print("blender-agent: MCP (streamable HTTP) at http://{:s}:{:d}/".format(host, mcp_port), flush=True)
+    if acp_port is not None:
+        print("blender-agent: ACP (v2 draft + v1) at ws://{:s}:{:d}/".format(host, acp_port), flush=True)
+    elif port is not None:
+        print("blender-agent: ACP (v2 draft + v1) at ws://{:s}:{:d}/acp".format(host, port), flush=True)
 
     try:
         await asyncio.gather(*(server.serve() for server in servers))
@@ -292,9 +320,19 @@ def main() -> int:
              "(use {:d} to match the documented .mcp.json).".format(_DEFAULT_MCP_PORT),
     )
     parser.add_argument(
+        "--acp-port",
+        type=int,
+        default=None,
+        metavar="PORT",
+        help="Also serve the Agent Client Protocol (v2 draft, v1 compatible) on this "
+             "port, at '/'. ACP is always available at /acp on the UI port; a "
+             "dedicated port lets a pod expose ACP without exposing the UI.",
+    )
+    parser.add_argument(
         "--no-ui",
         action="store_true",
-        help="Do not serve the web UI; serve only MCP over HTTP. Requires --mcp-port.",
+        help="Do not serve the web UI; serve only MCP and/or ACP over HTTP. "
+             "Requires --mcp-port or --acp-port.",
     )
     parser.add_argument(
         "--data-dir",
@@ -364,14 +402,16 @@ def main() -> int:
     # which inherit the environment) pick it up uniformly.
     if args.offscreen_gl:
         os.environ["BLENDER_AGENT_OFFSCREEN_GL"] = "1"
-    if args.no_ui and args.mcp_port is None:
-        parser.error("--no-ui requires --mcp-port (there would be nothing to serve)")
+    if args.no_ui and args.mcp_port is None and args.acp_port is None:
+        parser.error(
+            "--no-ui requires --mcp-port or --acp-port (there would be nothing to serve)")
 
     try:
         asyncio.run(run_server(
             host=args.host,
             port=None if args.no_ui else args.port,
             mcp_port=args.mcp_port,
+            acp_port=args.acp_port,
             data_dir=args.data_dir,
             open_browser=args.open,
             port_auto=not args.no_port_auto,

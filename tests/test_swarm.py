@@ -173,7 +173,51 @@ class TestSwarmStreaming(unittest.TestCase):
         strat = self._strategy(None)
         self.assertEqual(strat._agent_id("task-0-0"), "s1:w:task-0-0")
 
+    def _wire(self):
+        """
+        The chat-completions wire as this strategy configures it.
+
+        Delta translation moved to ``agentcore.worker_wire`` when the protocol
+        was factored out of the worker lifecycle; the strategy still owns
+        tagging those events for the right worker card (tested separately).
+        """
+        from agentcore.worker_wire import ChatCompletionsWire
+        return ChatCompletionsWire(
+            model="blender-agent",
+            tool_calls_key="blender_tool_calls",
+            media_key="blender_media")
+
     def test_stream_delta_emits_token_toolcall_media(self) -> None:
+        events = []
+
+        async def emit(ev):
+            events.append(ev)
+
+        wire = self._wire()
+        loop = asyncio.new_event_loop()
+        parts: list = []
+        # content token
+        loop.run_until_complete(wire._stream_delta({"content": "hello "}, parts, emit))
+        # tool call (status maps done->ok)
+        loop.run_until_complete(wire._stream_delta({"blender_tool_calls": [
+            {"call_id": "c1", "name": "media_io", "args_json": "{}",
+             "status": "done", "summary": "ok"}]}, parts, emit))
+        # media (inline data url)
+        loop.run_until_complete(wire._stream_delta({"blender_media": [
+            {"id": "i1", "data_url": "data:image/png;base64,AAAA"}]}, parts, emit))
+
+        kinds = [e["type"] for e in events]
+        self.assertEqual(kinds, ["token", "tool_status", "worker_media"])
+        self.assertEqual(events[1]["state"], "ok")  # done -> ok
+        self.assertEqual(events[2]["data_url"], "data:image/png;base64,AAAA")
+        self.assertEqual("".join(parts), "hello ")
+
+    def test_worker_events_are_tagged_for_the_card(self) -> None:
+        """
+        Whatever the wire emits, the strategy files it under the worker's card
+        so the UI shows it against the right agent. This is what keeps a swarm
+        run looking identical whichever wire produced it.
+        """
         events = []
 
         async def emit(ev):
@@ -181,26 +225,10 @@ class TestSwarmStreaming(unittest.TestCase):
 
         strat = self._strategy(emit)
         loop = asyncio.new_event_loop()
-        parts: list = []
-        # content token
-        loop.run_until_complete(strat._stream_delta("s1:w:t", {"content": "hello "}, parts))
-        # tool call (status maps done->ok)
-        loop.run_until_complete(strat._stream_delta("s1:w:t", {"blender_tool_calls": [
-            {"call_id": "c1", "name": "media_io", "args_json": "{}", "status": "done", "summary": "ok"}]}, parts))
-        # media (inline data url)
-        loop.run_until_complete(strat._stream_delta("s1:w:t", {"blender_media": [
-            {"id": "i1", "data_url": "data:image/png;base64,AAAA"}]}, parts))
-
-        kinds = [e["type"] for e in events]
-        self.assertEqual(kinds, ["token", "tool_status", "worker_media"])
-        # every event is tagged for the worker card
-        for e in events:
-            self.assertEqual(e["session_id"], "s1:w:t")
-            self.assertEqual(e["parent_session_id"], "s1")
-            self.assertEqual(e["role"], "worker")
-        self.assertEqual(events[1]["state"], "ok")  # done -> ok
-        self.assertEqual(events[2]["data_url"], "data:image/png;base64,AAAA")
-        self.assertEqual("".join(parts), "hello ")
+        loop.run_until_complete(strat._emit_worker("s1:w:t", {"type": "token", "text": "hi"}))
+        self.assertEqual(events[0]["session_id"], "s1:w:t")
+        self.assertEqual(events[0]["parent_session_id"], "s1")
+        self.assertEqual(events[0]["role"], "worker")
 
     def test_stream_delta_strips_data_url_markdown_from_text(self) -> None:
         events = []
@@ -208,11 +236,11 @@ class TestSwarmStreaming(unittest.TestCase):
         async def emit(ev):
             events.append(ev)
 
-        strat = self._strategy(emit)
+        wire = self._wire()
         loop = asyncio.new_event_loop()
         parts: list = []
         blob = "Rendered:\n![scene](data:image/png;base64,QUJDQUJD)\nDone."
-        loop.run_until_complete(strat._stream_delta("s1:w:t", {"content": blob}, parts))
+        loop.run_until_complete(wire._stream_delta({"content": blob}, parts, emit))
         token = [e for e in events if e["type"] == "token"][0]
         self.assertNotIn("data:image", token["text"])
         self.assertIn("Rendered:", token["text"])
@@ -485,8 +513,13 @@ class TestAutonomyLevel(unittest.TestCase):
 
         res = asyncio.new_event_loop().run_until_complete(tool.call(ctx, {"level": "swarm"}))
         self.assertIn("swarm", res.summary)
-        self.assertEqual(rt.store.config.autonomy_level, "swarm")
-        self.assertEqual(rt.store.config.autonomy_workers, "swarm")
+        # Scoped to the calling session, not the process: one agent serves
+        # several conversations at once (web UI windows, ACP clients), so the
+        # stored config is only the default for sessions that have not chosen.
+        level, _autonomy, workers = rt.autonomy_for(sid)
+        self.assertEqual(level, "swarm")
+        self.assertEqual(workers, "swarm")
+        self.assertEqual(rt.autonomy_for("some-other-session")[0], "yolo")
 
         with self.assertRaises(ToolError):
             asyncio.new_event_loop().run_until_complete(tool.call(ctx, {"level": "bogus"}))
