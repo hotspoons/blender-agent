@@ -82,16 +82,30 @@ def fit_metarig(meta: bpy.types.Object, target_min, target_max,
     # center sits at (hi-lo)*0.5*scale, which is what recentering must
     # subtract.
     span = (hi - lo) * scale
+
+    def placed(v):
+        v = (np.asarray(v, dtype=np.float64) - lo) * scale
+        v[0] += center_x - span[0] * 0.5
+        v[1] += (target_min[1] + target_max[1]) * 0.5 - span[1] * 0.5
+        v[2] += target_min[2]
+        return v.tolist()
+
     from .. import _armature
     with _armature.edit_bones(meta) as ebones:
+        # Read EVERY head and tail before writing any of them. A connected bone's head is the same
+        # point as its parent's tail, so `eb.head = ...` on a child also moves the parent's tail;
+        # reading and writing in one pass then re-transforms that already-transformed value when
+        # the loop reaches the parent, and the bone lands at f(f(x)) instead of f(x).
+        #
+        # It is not a small error. On a 1.98m metarig fitted to a 1.697m mesh it left the armature
+        # spanning 2.41m — feet at -1.56 against a target floor of -0.85 — which reads as "Rigify
+        # placed the joints badly" rather than as a bug, because the rig still generates and still
+        # weights. Snapshot first, then write.
+        original = {eb.name: (eb.head[:], eb.tail[:]) for eb in ebones}
         for eb in ebones:
-            for attr in ("head", "tail"):
-                v = np.asarray(getattr(eb, attr)[:], dtype=np.float64)
-                v = (v - lo) * scale
-                v[0] += center_x - span[0] * 0.5
-                v[1] += (target_min[1] + target_max[1]) * 0.5 - span[1] * 0.5
-                v[2] += target_min[2]
-                setattr(eb, attr, v.tolist())
+            head, tail = original[eb.name]
+            eb.head = placed(head)
+            eb.tail = placed(tail)
     return {"scale": scale}
 
 
